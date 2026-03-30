@@ -10,7 +10,7 @@ from dotenv import find_dotenv, load_dotenv
 # Locked profile: set to a profile name (e.g., "astronomer") to lock the app
 # to that profile and disable all profile switching. Leave as None for normal behavior.
 LOCKED_PROFILE: str | None = None
-PROJECT_ROOT = Path(__file__).parents[2].resolve()
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _is_source_checkout_root(root: Path) -> bool:
@@ -44,7 +44,7 @@ DEFAULT_PROFILES_DIRECTORY = _resolve_default_profiles_directory()
 # Full list of voices supported by the OpenAI Realtime / TTS API.
 # Source: https://developers.openai.com/api/docs/guides/text-to-speech/#voice-options
 # "marin" and "cedar" are recommended for gpt-realtime.
-AVAILABLE_VOICES: list[str] = [
+OPENAI_AVAILABLE_VOICES: list[str] = [
     "alloy",
     "ash",
     "ballad",
@@ -56,6 +56,20 @@ AVAILABLE_VOICES: list[str] = [
     "shimmer",
     "verse",
 ]
+OPENAI_DEFAULT_VOICE = "cedar"
+# Qwen3-TTS CustomVoice speaker catalog from faster-qwen3-tts demo/index.html.
+S2S_AVAILABLE_VOICES: list[str] = [
+    "Aiden",
+    "Ryan",
+    "Dylan",
+    "Eric",
+    "Ono_Anna",
+    "Serena",
+    "Sohee",
+    "Uncle_Fu",
+    "Vivian",
+]
+S2S_DEFAULT_VOICE = "Aiden"
 
 logger = logging.getLogger(__name__)
 
@@ -155,13 +169,14 @@ class Config:
 
     # Optional
     MODEL_NAME = os.getenv("MODEL_NAME", "gpt-realtime")
+    BACKEND_PROVIDER = os.getenv("BACKEND_PROVIDER", "speech-to-speech").strip().lower()
+    S2S_REALTIME_SESSION_URL = os.getenv("S2S_REALTIME_SESSION_URL")
     HF_HOME = os.getenv("HF_HOME", "./cache")
     LOCAL_VISION_MODEL = os.getenv("LOCAL_VISION_MODEL", "HuggingFaceTB/SmolVLM2-2.2B-Instruct")
     HF_TOKEN = os.getenv("HF_TOKEN")  # Optional, falls back to hf auth login if not set
 
     logger.debug(f"Model: {MODEL_NAME}, HF_HOME: {HF_HOME}, Vision Model: {LOCAL_VISION_MODEL}")
 
-    # Filesystem root containing profile directories, not a Python import path.
     _profiles_directory_env = os.getenv("REACHY_MINI_EXTERNAL_PROFILES_DIRECTORY")
     PROFILES_DIRECTORY = Path(_profiles_directory_env) if _profiles_directory_env else DEFAULT_PROFILES_DIRECTORY
     _tools_directory_env = os.getenv("REACHY_MINI_EXTERNAL_TOOLS_DIRECTORY")
@@ -236,6 +251,10 @@ class Config:
 
 
 config = Config()
+AVAILABLE_VOICES: list[str] = list(
+    S2S_AVAILABLE_VOICES if config.BACKEND_PROVIDER == "speech-to-speech" else OPENAI_AVAILABLE_VOICES,
+)
+DEFAULT_VOICE = S2S_DEFAULT_VOICE if config.BACKEND_PROVIDER == "speech-to-speech" else OPENAI_DEFAULT_VOICE
 
 
 def set_custom_profile(profile: str | None) -> None:

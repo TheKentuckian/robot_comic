@@ -312,6 +312,7 @@ class LocalStream:
         Reachy Mini settings server to collect it before starting streams.
         """
         self._stop_event.clear()
+        needs_openai_key = config.BACKEND_PROVIDER == "openai"
 
         # Try to load an existing instance .env first (covers subsequent runs)
         if self._instance_path:
@@ -341,11 +342,10 @@ class LocalStream:
                 pass  # Instance .env loading is optional; continue with defaults
 
         # If key is still missing, try to download one from HuggingFace
-        if not (config.OPENAI_API_KEY and str(config.OPENAI_API_KEY).strip()):
+        if needs_openai_key and not (config.OPENAI_API_KEY and str(config.OPENAI_API_KEY).strip()):
             logger.info("OPENAI_API_KEY not set, attempting to download from HuggingFace...")
             try:
                 from gradio_client import Client
-
                 client = Client("HuggingFaceM4/gradium_setup", verbose=False)
                 key, status = client.predict(api_name="/claim_b_key")
                 if key and key.strip():
@@ -360,7 +360,7 @@ class LocalStream:
         self._init_settings_ui_if_needed()
 
         # If key is still missing -> wait until provided via the settings UI
-        if not (config.OPENAI_API_KEY and str(config.OPENAI_API_KEY).strip()):
+        if needs_openai_key and not (config.OPENAI_API_KEY and str(config.OPENAI_API_KEY).strip()):
             logger.warning("OPENAI_API_KEY not found. Open the app settings page to enter it.")
             # Poll until the key becomes available (set via the settings UI)
             try:
@@ -439,21 +439,11 @@ class LocalStream:
     def clear_audio_queue(self) -> None:
         """Flush the player's appsrc to drop any queued audio immediately."""
         logger.info("User intervention: flushing player queue")
-        backend = getattr(self._robot.media, "backend", None)
-        audio = getattr(self._robot.media, "audio", None)
-        if audio is not None:
-            if backend == MediaBackend.LOCAL and hasattr(audio, "clear_player") and callable(audio.clear_player):
-                audio.clear_player()
-            elif (
-                backend == MediaBackend.WEBRTC
-                and hasattr(audio, "clear_output_buffer")
-                and callable(audio.clear_output_buffer)
-            ):
-                audio.clear_output_buffer()
-            elif hasattr(audio, "clear_output_buffer") and callable(audio.clear_output_buffer):
-                audio.clear_output_buffer()
-            elif hasattr(audio, "clear_player") and callable(audio.clear_player):
-                audio.clear_player()
+        if self._robot.media.backend == MediaBackend.GSTREAMER:
+            # Directly flush gstreamer audio pipe
+            self._robot.media.audio.clear_player()
+        elif self._robot.media.backend == MediaBackend.DEFAULT or self._robot.media.backend == MediaBackend.DEFAULT_NO_VIDEO:
+            self._robot.media.audio.clear_output_buffer()
         self.handler.output_queue = asyncio.Queue()
 
     async def record_loop(self) -> None:

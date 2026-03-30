@@ -9,7 +9,10 @@ import pytest
 
 import reachy_mini_conversation_app.openai_realtime as rt_mod
 import reachy_mini_conversation_app.tools.background_tool_manager as btm_mod
-from reachy_mini_conversation_app.openai_realtime import OpenaiRealtimeHandler, _compute_response_cost
+from reachy_mini_conversation_app.openai_realtime import (
+    OpenaiRealtimeHandler,
+    _compute_response_cost,
+)
 from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
 from reachy_mini_conversation_app.tools.background_tool_manager import ToolCallRoutine
 
@@ -24,7 +27,7 @@ def _build_handler(loop: asyncio.AbstractEventLoop) -> OpenaiRealtimeHandler:
 async def test_tool_completion_does_not_reset_head_wobbler(monkeypatch: Any) -> None:
     """Tool completion should not interrupt ongoing speech wobble."""
     monkeypatch.setattr(rt_mod, "get_session_instructions", lambda: "test")
-    monkeypatch.setattr(rt_mod, "get_session_voice", lambda: "alloy")
+    monkeypatch.setattr(rt_mod, "get_session_voice", lambda default=rt_mod.DEFAULT_VOICE: "alloy")
     monkeypatch.setattr(rt_mod, "get_tool_specs", lambda: [])
 
     async def _fake_dispatch(
@@ -132,7 +135,7 @@ async def test_tool_completion_does_not_reset_head_wobbler(monkeypatch: Any) -> 
 async def test_non_idle_tool_call_does_not_queue_progress_response(monkeypatch: Any) -> None:
     """Tool-call startup should not enqueue a second speech response."""
     monkeypatch.setattr(rt_mod, "get_session_instructions", lambda: "test")
-    monkeypatch.setattr(rt_mod, "get_session_voice", lambda: "alloy")
+    monkeypatch.setattr(rt_mod, "get_session_voice", lambda default=rt_mod.DEFAULT_VOICE: "alloy")
     monkeypatch.setattr(rt_mod, "get_tool_specs", lambda: [])
 
     class FakeEvent:
@@ -310,6 +313,7 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
 
     # Patch the OpenAI client used by the handler
     monkeypatch.setattr(rt_mod, "AsyncOpenAI", FakeClient)
+    monkeypatch.setattr(rt_mod.config, "BACKEND_PROVIDER", "openai")
 
     # Build handler with minimal deps
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
@@ -325,6 +329,133 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
     # Optional: confirm we logged the unexpected close once
     warnings = [r for r in caplog.records if r.levelname == "WARNING" and "closed unexpectedly" in r.msg]
     assert len(warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_start_up_s2s_gradio_does_not_wait_for_api_key(monkeypatch: Any) -> None:
+    """Speech-to-speech backend should not wait for gradio key input."""
+    monkeypatch.setattr(rt_mod.config, "BACKEND_PROVIDER", "speech-to-speech")
+    monkeypatch.setattr(rt_mod.config, "OPENAI_API_KEY", None)
+
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = rt_mod.OpenaiRealtimeHandler(deps, gradio_mode=True)
+
+    build_client = AsyncMock(return_value=MagicMock())
+    run_realtime_session = AsyncMock(return_value=None)
+    wait_for_args = AsyncMock(side_effect=AssertionError("wait_for_args should not be called"))
+
+    object.__setattr__(handler, "_build_realtime_client", build_client)
+    object.__setattr__(handler, "_run_realtime_session", run_realtime_session)
+    object.__setattr__(handler, "wait_for_args", wait_for_args)
+
+    await handler.start_up()
+
+    wait_for_args.assert_not_awaited()
+    build_client.assert_awaited_once_with(api_key=None)
+    run_realtime_session.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_realtime_session_uses_default_voice_for_lb_allocated_sessions(monkeypatch: Any) -> None:
+    """Use the backend default speaker when no profile voice is selected for the s2s LB."""
+    monkeypatch.setattr(rt_mod, "get_session_instructions", lambda: "test")
+    monkeypatch.setattr(rt_mod, "get_session_voice", lambda default=rt_mod.DEFAULT_VOICE: default)
+    monkeypatch.setattr(rt_mod, "get_tool_specs", lambda: [])
+    monkeypatch.setattr(rt_mod.config, "BACKEND_PROVIDER", "speech-to-speech")
+    monkeypatch.setattr(rt_mod.config, "S2S_REALTIME_SESSION_URL", "https://lb.example.test/session")
+
+    captured_update: dict[str, Any] = {}
+
+    class FakeSession:
+        async def update(self, **kwargs: Any) -> None:
+            captured_update.update(kwargs)
+
+    class FakeInputAudioBuffer:
+        async def append(self, **_kw: Any) -> None:
+            pass
+
+    class FakeItem:
+        async def create(self, **_kw: Any) -> None:
+            pass
+
+    class FakeConversation:
+        item = FakeItem()
+
+    class FakeResponse:
+        async def create(self, **_kw: Any) -> None:
+            pass
+
+        async def cancel(self, **_kw: Any) -> None:
+            pass
+
+    class FakeConn:
+        session = FakeSession()
+        input_audio_buffer = FakeInputAudioBuffer()
+        conversation = FakeConversation()
+        response = FakeResponse()
+
+        async def __aenter__(self) -> "FakeConn":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> bool:
+            return False
+
+        async def close(self) -> None:
+            pass
+
+        def __aiter__(self) -> "FakeConn":
+            return self
+
+        async def __anext__(self) -> Any:
+            raise StopAsyncIteration
+
+    class FakeRealtime:
+        def connect(self, **_kw: Any) -> FakeConn:
+            return FakeConn()
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.realtime = FakeRealtime()
+
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = OpenaiRealtimeHandler(deps)
+    handler.client = FakeClient()
+
+    await handler._run_realtime_session()
+
+    session = captured_update["session"]
+    output = session["audio"]["output"]
+    assert output["format"]["rate"] == 24000
+    assert output["voice"] == rt_mod.DEFAULT_VOICE
+
+
+@pytest.mark.asyncio
+async def test_apply_personality_uses_selected_voice_for_lb_allocated_sessions(monkeypatch: Any) -> None:
+    """Live personality updates should honor the selected Qwen CustomVoice speaker."""
+    monkeypatch.setattr(rt_mod, "get_session_instructions", lambda: "new instructions")
+    monkeypatch.setattr(rt_mod, "get_session_voice", lambda default=rt_mod.DEFAULT_VOICE: "Serena")
+    monkeypatch.setattr(rt_mod.config, "BACKEND_PROVIDER", "speech-to-speech")
+    monkeypatch.setattr(rt_mod.config, "S2S_REALTIME_SESSION_URL", "https://lb.example.test/session")
+
+    captured_update: dict[str, Any] = {}
+
+    class FakeSession:
+        async def update(self, **kwargs: Any) -> None:
+            captured_update.update(kwargs)
+
+    class FakeConnection:
+        session = FakeSession()
+
+    handler = OpenaiRealtimeHandler(ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()))
+    handler.connection = FakeConnection()  # type: ignore[assignment]
+    monkeypatch.setattr(handler, "_restart_session", AsyncMock(return_value=None))
+
+    result = await handler.apply_personality("example")
+
+    assert "restarted realtime session" in result.lower()
+    session = captured_update["session"]
+    assert session["instructions"] == "new instructions"
+    assert session["audio"]["output"]["voice"] == "Serena"
 
 # ---- Cost calculation tests ----
 
@@ -403,7 +534,7 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
     FakeCCE = type("FakeCCE", (Exception,), {})
     monkeypatch.setattr(rt_mod, "ConnectionClosedError", FakeCCE)
     monkeypatch.setattr(rt_mod, "get_session_instructions", lambda: "test")
-    monkeypatch.setattr(rt_mod, "get_session_voice", lambda: "alloy")
+    monkeypatch.setattr(rt_mod, "get_session_voice", lambda default=rt_mod.DEFAULT_VOICE: "alloy")
     monkeypatch.setattr(rt_mod, "get_tool_specs", lambda: [])
 
     N_TOOL_RESULTS = 400
@@ -557,6 +688,7 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
             self.realtime = FakeRealtime()
 
     monkeypatch.setattr(rt_mod, "AsyncOpenAI", FakeClient)
+    monkeypatch.setattr(rt_mod.config, "BACKEND_PROVIDER", "openai")
 
     # Patch dispatch_tool_call so tools complete with a result.
     async def _fake_dispatch(

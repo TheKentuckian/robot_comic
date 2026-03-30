@@ -7,8 +7,10 @@ import logging
 from typing import Any, Final, Tuple, Literal, Optional
 from pathlib import Path
 from datetime import datetime
+from urllib.parse import urlsplit, parse_qsl, urlunsplit
 
 import cv2
+import httpx
 import numpy as np
 import gradio as gr
 from openai import AsyncOpenAI
@@ -29,12 +31,9 @@ from openai.resources.realtime.realtime import AsyncRealtimeConnection
 from openai.types.realtime.realtime_audio_formats_param import AudioPCM
 from openai.types.realtime.realtime_audio_input_turn_detection_param import ServerVad
 
-from reachy_mini_conversation_app.config import AVAILABLE_VOICES, config
+from reachy_mini_conversation_app.config import DEFAULT_VOICE, AVAILABLE_VOICES, config
 from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
-from reachy_mini_conversation_app.tools.core_tools import (
-    ToolDependencies,
-    get_tool_specs,
-)
+from reachy_mini_conversation_app.tools.core_tools import ToolDependencies, get_tool_specs
 from reachy_mini_conversation_app.tools.background_tool_manager import (
     ToolCallRoutine,
     ToolNotification,
@@ -55,7 +54,6 @@ TEXT_OUTPUT_COST_PER_1M = 16.0
 IMAGE_INPUT_COST_PER_1M = 5.0
 
 _RESPONSE_DONE_TIMEOUT: Final[float] = 30.0
-
 
 
 class InputTranscriptChunksByItem(BaseModel):
@@ -101,6 +99,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         self.output_sample_rate = OPEN_AI_OUTPUT_SAMPLE_RATE
         self.input_sample_rate = OPEN_AI_INPUT_SAMPLE_RATE
 
+        self.client: AsyncOpenAI
         self.connection: AsyncRealtimeConnection | None = None
         self.output_queue: "asyncio.Queue[Tuple[int, NDArray[np.int16]] | AdditionalOutputs]" = asyncio.Queue()
 
@@ -160,7 +159,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
             try:
                 instructions = get_session_instructions()
-                voice = get_session_voice()
+                voice = get_session_voice(default=DEFAULT_VOICE)
             except BaseException as e:  # catch SystemExit from prompt loader without crashing
                 logger.error("Failed to resolve personality content: %s", e)
                 return f"Failed to apply personality: {e}"
@@ -216,7 +215,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
     async def start_up(self) -> None:
         """Start the handler with minimal retries on unexpected websocket closure."""
         openai_api_key = config.OPENAI_API_KEY
-        if self.gradio_mode and not openai_api_key:
+        if self.gradio_mode and config.BACKEND_PROVIDER == "openai" and not openai_api_key:
             # api key was not found in .env or in the environment variables
             await self.wait_for_args()  # type: ignore[no-untyped-call]
             args = list(self.latest_args)
@@ -227,15 +226,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 self._provided_api_key = textbox_api_key
             else:
                 openai_api_key = config.OPENAI_API_KEY
-        else:
-            if not openai_api_key or not openai_api_key.strip():
-                # In headless console mode, LocalStream now blocks startup until the key is provided.
-                # However, unit tests may invoke this handler directly with a stubbed client.
-                # To keep tests hermetic without requiring a real key, fall back to a placeholder.
-                logger.warning("OPENAI_API_KEY missing. Proceeding with a placeholder (tests/offline).")
-                openai_api_key = "DUMMY"
-
-        self.client = AsyncOpenAI(api_key=openai_api_key)
+        self.client = await self._build_realtime_client(api_key=openai_api_key)
 
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
@@ -247,6 +238,8 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 # Abrupt close (e.g., "no close frame received or sent") → retry
                 logger.warning("Realtime websocket closed unexpectedly (attempt %d/%d): %s", attempt, max_attempts, e)
                 if attempt < max_attempts:
+                    if config.BACKEND_PROVIDER == "speech-to-speech":
+                        self.client = await self._build_realtime_client()
                     # exponential backoff with jitter
                     base_delay = 2 ** (attempt - 1)  # 1s, 2s, 4s, 8s, etc.
                     jitter = random.uniform(0, 0.5)
@@ -287,6 +280,8 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 self._connected_event.clear()
             except Exception:
                 pass
+            if config.BACKEND_PROVIDER == "speech-to-speech":
+                self.client = await self._build_realtime_client()
             asyncio.create_task(self._run_realtime_session(), name="openai-realtime-restart")
             try:
                 await asyncio.wait_for(self._connected_event.wait(), timeout=5.0)
@@ -473,7 +468,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         ),
                         output=RealtimeAudioConfigOutputParam(
                             format=AudioPCM(type="audio/pcm", rate=self.output_sample_rate),
-                            voice=get_session_voice(),
+                            voice=get_session_voice(default=DEFAULT_VOICE),
                         ),
                     ),
                     tools=get_tool_specs(), # type: ignore[typeddict-item]
@@ -483,7 +478,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 logger.info(
                     "Realtime session initialized with profile=%r voice=%r",
                     getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None),
-                    get_session_voice(),
+                    get_session_voice(default=DEFAULT_VOICE),
                 )
                 # If we reached here, the session update succeeded which implies the API key worked.
                 # Persist the key to a newly created .env (copied from .env.example) if needed.
@@ -837,11 +832,50 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 _collect(raw)
             # Ensure default present and stable order
             voices = sorted(candidates) if candidates else fallback
-            if "cedar" not in voices:
-                voices = ["cedar", *[v for v in voices if v != "cedar"]]
+            if DEFAULT_VOICE not in voices:
+                voices = [DEFAULT_VOICE, *[v for v in voices if v != DEFAULT_VOICE]]
             return voices
         except Exception:
             return fallback
+
+    async def _build_realtime_client(self, api_key: str | None = None) -> AsyncOpenAI:
+        """Build the realtime SDK client, optionally via the s2s session allocator."""
+        resolved_api_key = (api_key or self._provided_api_key or config.OPENAI_API_KEY or "").strip()
+        if config.BACKEND_PROVIDER == "openai":
+            if not resolved_api_key:
+                # In headless console mode, LocalStream now blocks startup until the key is provided.
+                # However, unit tests may invoke this handler directly with a stubbed client.
+                # To keep tests hermetic without requiring a real key, fall back to a placeholder.
+                logger.warning("OPENAI_API_KEY missing. Proceeding with a placeholder (tests/offline).")
+                resolved_api_key = "DUMMY"
+            return AsyncOpenAI(api_key=resolved_api_key)
+
+        session_url = getattr(config, "S2S_REALTIME_SESSION_URL", None)
+        if not session_url:
+            raise RuntimeError("S2S_REALTIME_SESSION_URL must be set when BACKEND_PROVIDER=speech-to-speech")
+
+        async with httpx.AsyncClient(timeout=10.0) as http_client:
+            response = await http_client.post(session_url)
+            response.raise_for_status()
+            payload = response.json()
+
+        connect_url = payload.get("connect_url")
+        if not isinstance(connect_url, str) or not connect_url:
+            raise RuntimeError(f"Session allocator response did not contain a valid connect_url: {payload!r}")
+
+        parsed = urlsplit(connect_url)
+        path = parsed.path.rstrip("/")
+        if not path.endswith("/realtime"):
+            raise ValueError(f"Expected realtime connect URL ending with /realtime, got: {connect_url}")
+
+        base_path = path[: -len("/realtime")]
+        logger.info("Allocated realtime session %s", payload.get("session_id") or "<unknown>")
+        return AsyncOpenAI(
+            api_key=resolved_api_key or "DUMMY",
+            base_url=urlunsplit(("https" if parsed.scheme == "wss" else "http", parsed.netloc, base_path, "", "")),
+            websocket_base_url=urlunsplit((parsed.scheme, parsed.netloc, base_path, "", "")),
+            default_query=dict(parse_qsl(parsed.query, keep_blank_values=True)),
+        )
 
     async def send_idle_signal(self, idle_duration: float) -> None:
         """Send an idle signal to the openai server."""
