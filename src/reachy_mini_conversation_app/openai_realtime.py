@@ -574,11 +574,6 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                             input_transcript.deltas = [delta]
 
                         current_partial = "".join(input_transcript.deltas)
-                        logger.info(
-                            "Live partial transcript: %s",
-                            current_partial if len(current_partial) < 200 else current_partial[:200] + "…",
-                        )
-
                         sequence_counter = len(input_transcript.deltas) - 1
 
                         # Cancel previous debounce task if it exists
