@@ -1,6 +1,6 @@
 from __future__ import annotations
 import logging
-from typing import Any, Tuple
+from typing import Any, Tuple, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -16,7 +16,7 @@ except ImportError as e:
 from huggingface_hub import hf_hub_download
 
 
-YOLO: Any = getattr(ultralytics, "YOLO")
+YOLO = cast(Any, ultralytics).YOLO
 
 
 logger = logging.getLogger(__name__)
