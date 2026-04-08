@@ -176,27 +176,6 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         )
         return input_rate, output_rate # type: ignore[return-value]
 
-    def _build_session_audio_input_config(self) -> RealtimeAudioConfigInputParam:
-        """Build input audio config accepted by the current realtime backend."""
-        input_rate, _ = self._get_openai_session_audio_rates()
-        kwargs: dict[str, Any] = {
-            "transcription": AudioTranscriptionParam(model="gpt-4o-transcribe", language="en"),
-            "turn_detection": ServerVad(type="server_vad", interrupt_response=True),
-        }
-        if input_rate is not None:
-            kwargs["format"] = AudioPCM(type="audio/pcm", rate=input_rate) # type: ignore[typeddict-item]
-        return RealtimeAudioConfigInputParam(**kwargs)
-
-    def _build_session_audio_output_config(self) -> RealtimeAudioConfigOutputParam:
-        """Build output audio config accepted by the current realtime backend."""
-        _, output_rate = self._get_openai_session_audio_rates()
-        kwargs: dict[str, Any] = {
-            "voice": get_session_voice(default=DEFAULT_VOICE),
-        }
-        if output_rate is not None:
-            kwargs["format"] = AudioPCM(type="audio/pcm", rate=output_rate) # type: ignore[typeddict-item]
-        return RealtimeAudioConfigOutputParam(**kwargs)
-
     def _mark_activity(self, reason: str) -> None:
         """Record non-idle conversation activity for the idle timer."""
         self.last_activity_time = asyncio.get_event_loop().time()
@@ -575,6 +554,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
     async def _run_realtime_session(self) -> None:
         """Establish and manage a single realtime session."""
+        input_rate, output_rate = self._get_openai_session_audio_rates()
         async with self.client.realtime.connect(
             model=config.OPENAI_MODEL_NAME,
             extra_query=self._realtime_connect_query,
@@ -584,8 +564,15 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     type="realtime",
                     instructions=get_session_instructions(),
                     audio=RealtimeAudioConfigParam(
-                        input=self._build_session_audio_input_config(),
-                        output=self._build_session_audio_output_config(),
+                        input=RealtimeAudioConfigInputParam(
+                            format=AudioPCM(type="audio/pcm", rate=input_rate), # type: ignore[typeddict-item]
+                            transcription=AudioTranscriptionParam(model="gpt-4o-transcribe", language="en"),
+                            turn_detection=ServerVad(type="server_vad", interrupt_response=True),
+                        ),
+                        output=RealtimeAudioConfigOutputParam(
+                            format=AudioPCM(type="audio/pcm", rate=output_rate), # type: ignore[typeddict-item]
+                            voice=get_session_voice(default=DEFAULT_VOICE),
+                        ),
                     ),
                     tools=get_tool_specs(), # type: ignore[typeddict-item]
                     tool_choice="auto",
