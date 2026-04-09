@@ -130,12 +130,23 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         self._pending_responses: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._response_done_event: asyncio.Event = asyncio.Event()
         self._response_done_event.set()
+        self._response_started_or_rejected_event: asyncio.Event = asyncio.Event()
         self._last_response_rejected: bool = False
         self._assistant_audio_dump_enabled = logging.getLogger().isEnabledFor(logging.DEBUG)
         self._assistant_audio_dump_dir = self._resolve_assistant_audio_dump_dir(instance_path)
         self._assistant_audio_dump_stream_index = 0
         self._assistant_audio_dump_current_index: int | None = None
         self._assistant_audio_dump_chunks: list[bytes] = []
+
+    @staticmethod
+    def _sanitize_tool_result_for_model(tool_name: str, tool_result: dict[str, Any]) -> dict[str, Any]:
+        """Remove bulky transport-only fields before echoing tool output back to the model."""
+        if tool_name == "camera" and "b64_im" in tool_result:
+            sanitized = dict(tool_result)
+            sanitized.pop("b64_im", None)
+            sanitized["image_attached"] = True
+            return sanitized
+        return tool_result
 
     @staticmethod
     def _get_realtime_sample_rate() -> int:
@@ -428,6 +439,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     break
 
                 self._last_response_rejected = False
+                self._response_started_or_rejected_event.clear()
                 try:
                     await self.connection.response.create(**kwargs)
                 except Exception as e:
@@ -436,11 +448,12 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     break
 
                 try:
-                    await asyncio.wait_for(self._response_done_event.wait(), timeout=_RESPONSE_DONE_TIMEOUT)
+                    await asyncio.wait_for(
+                        self._response_started_or_rejected_event.wait(),
+                        timeout=5.0,
+                    )
                 except asyncio.TimeoutError:
-                    logger.debug("Timed out waiting for response.done; assuming response completed")
-                    self._response_done_event.set()
-                    break
+                    logger.debug("Timed out waiting for response.created/error after response.create")
 
                 # Check if we were rejected
                 if self._last_response_rejected:
@@ -451,6 +464,13 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     logger.debug("response.create was rejected; retrying (%d/%d)", attempts, max_retries)
                     continue
 
+                try:
+                    await asyncio.wait_for(self._response_done_event.wait(), timeout=_RESPONSE_DONE_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.debug("Timed out waiting for response.done; assuming response completed")
+                    self._response_done_event.set()
+                    break
+
                 sent = True
 
     async def _handle_tool_result(self, bg_tool: ToolNotification) -> None:
@@ -458,16 +478,23 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         if bg_tool.error is not None:
             logger.error("Tool '%s' (id=%s) failed with error: %s", bg_tool.tool_name, bg_tool.id, bg_tool.error)
             tool_result = {"error": bg_tool.error}
+            tool_result_for_model = tool_result
         elif bg_tool.result is not None:
             tool_result = bg_tool.result
+            tool_result_for_model = (
+                self._sanitize_tool_result_for_model(bg_tool.tool_name, tool_result)
+                if isinstance(tool_result, dict)
+                else tool_result
+            )
             logger.info(
                 "Tool '%s' (id=%s) executed successfully.",
                 bg_tool.tool_name, bg_tool.id,
             )
-            logger.debug("Tool '%s' full result: %s", bg_tool.tool_name, tool_result)
+            logger.debug("Tool '%s' model-visible result: %s", bg_tool.tool_name, tool_result_for_model)
         else:
             logger.warning("Tool '%s' (id=%s) returned no result and no error", bg_tool.tool_name, bg_tool.id)
             tool_result = {"error": "No result returned from tool execution"}
+            tool_result_for_model = tool_result
 
         # Connection may have closed while tool was running
         if not self.connection:
@@ -482,7 +509,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     item={
                         "type": "function_call_output",
                         "call_id": bg_tool.id,
-                        "output": json.dumps(tool_result),
+                        "output": json.dumps(tool_result_for_model),
                     },
                 )
 
@@ -490,7 +517,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 AdditionalOutputs(
                     {
                         "role": "assistant",
-                        "content": json.dumps(tool_result),
+                        "content": json.dumps(tool_result_for_model),
                         # Gradio UI metadata.status accept only "pending" and "done". Do not accept bg.tool.status values.
                         "metadata": {
                             "title": f"🛠️ Used tool {bg_tool.tool_name}",
@@ -653,6 +680,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         self._flush_assistant_audio_dump("orphaned")
                         self._mark_activity("response_created")
                         self._response_done_event.clear()
+                        self._response_started_or_rejected_event.set()
                         logger.debug("Response created (active)")
 
                     if event.type == "response.done":
@@ -793,8 +821,10 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                             # is waiting on _response_done_event; when the active
                             # response finishes it will wake up and see this flag.
                             self._last_response_rejected = True
+                            self._response_started_or_rejected_event.set()
                             logger.debug("response.create rejected; worker will retry after active response finishes")
                         else:
+                            self._response_started_or_rejected_event.set()
                             logger.error("Realtime error [%s]: %s (raw=%s)", code, msg, err)
 
                         # Only show user-facing errors, not internal state errors
