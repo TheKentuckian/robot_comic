@@ -464,6 +464,7 @@ class LocalStream:
         if audio is not None:
             if backend == MediaBackend.LOCAL and hasattr(audio, "clear_player") and callable(audio.clear_player):
                 audio.clear_player()
+                self._warm_up_audio_playback()
             elif (
                 backend == MediaBackend.WEBRTC
                 and hasattr(audio, "clear_output_buffer")
