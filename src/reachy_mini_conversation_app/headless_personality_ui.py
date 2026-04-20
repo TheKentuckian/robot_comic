@@ -11,9 +11,14 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from fastapi import FastAPI
+from fastapi import Query, FastAPI, Request
 
-from .config import LOCKED_PROFILE, AVAILABLE_VOICES, config
+from .config import (
+    LOCKED_PROFILE,
+    config,
+    get_default_voice_for_backend,
+    get_available_voices_for_backend,
+)
 from .openai_realtime import OpenaiRealtimeHandler
 
 
@@ -30,6 +35,9 @@ from .headless_personality import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 def mount_personality_routes(
     app: FastAPI,
     handler: OpenaiRealtimeHandler | GeminiLiveHandler,
@@ -40,17 +48,10 @@ def mount_personality_routes(
 ) -> None:
     """Register personality management endpoints on a FastAPI app."""
     try:
-        from fastapi import Request
         from pydantic import BaseModel
         from fastapi.responses import JSONResponse
     except Exception:  # pragma: no cover - only when settings app not available
         return
-
-    class SavePayload(BaseModel):
-        name: str
-        instructions: str
-        tools_text: str
-        voice: Optional[str] = "cedar"
 
     class ApplyPayload(BaseModel):
         name: str
@@ -92,7 +93,8 @@ def mount_personality_routes(
     def _load(name: str) -> dict:  # type: ignore
         instr = read_instructions_for(name)
         tools_txt = ""
-        voice = "cedar"
+        voice = get_default_voice_for_backend()
+        uses_default_voice = True
         if name != DEFAULT_OPTION:
             pdir = resolve_profile_dir(name)
             tp = pdir / "tools.txt"
@@ -101,13 +103,15 @@ def mount_personality_routes(
             vf = pdir / "voice.txt"
             if vf.exists():
                 v = vf.read_text(encoding="utf-8").strip()
-                voice = v or "cedar"
+                voice = v or get_default_voice_for_backend()
+                uses_default_voice = not bool(v)
         avail = available_tools_for(name)
         enabled = [ln.strip() for ln in tools_txt.splitlines() if ln.strip() and not ln.strip().startswith("#")]
         return {
             "instructions": instr,
             "tools_text": tools_txt,
             "voice": voice,
+            "uses_default_voice": uses_default_voice,
             "available_tools": avail,
             "enabled_tools": enabled,
         }
@@ -122,7 +126,11 @@ def mount_personality_routes(
         name = str(raw.get("name", ""))
         instructions = str(raw.get("instructions", ""))
         tools_text = str(raw.get("tools_text", ""))
-        voice = str(raw.get("voice", "cedar")) if raw.get("voice") is not None else "cedar"
+        voice = (
+            str(raw.get("voice", get_default_voice_for_backend()))
+            if raw.get("voice") is not None
+            else get_default_voice_for_backend()
+        )
 
         name_s = _sanitize_name(name)
         if not name_s:
@@ -135,7 +143,7 @@ def mount_personality_routes(
                 len(instructions),
                 len(tools_text),
             )
-            _write_profile(name_s, instructions, tools_text, voice or "cedar")
+            _write_profile(name_s, instructions, tools_text, voice or get_default_voice_for_backend())
             value = f"user_personalities/{name_s}"
             choices = [DEFAULT_OPTION, *list_personalities()]
             return {"ok": True, "value": value, "choices": choices}
@@ -175,7 +183,7 @@ def mount_personality_routes(
             return JSONResponse({"ok": False, "error": "invalid_name"}, status_code=400)  # type: ignore
         instr = str(data.get("instructions") or "")
         tools = str(data.get("tools_text") or "")
-        v = str(data.get("voice") or "cedar")
+        v = str(data.get("voice") or get_default_voice_for_backend())
         try:
             logger.info(
                 "Headless save_raw: name=%r voice=%r instr_len=%d tools_len=%d", name_s, v, len(instr), len(tools)
@@ -188,33 +196,32 @@ def mount_personality_routes(
             return JSONResponse({"ok": False, "error": str(e)}, status_code=500)  # type: ignore
 
     @app.get("/personalities/save_raw")
-    async def _save_raw_get(name: str, instructions: str = "", tools_text: str = "", voice: str = "cedar") -> dict:  # type: ignore
+    async def _save_raw_get(name: str, instructions: str = "", tools_text: str = "", voice: str | None = None) -> dict:  # type: ignore
         name_s = _sanitize_name(name)
         if not name_s:
             return JSONResponse({"ok": False, "error": "invalid_name"}, status_code=400)  # type: ignore
         try:
+            normalized_voice = voice or get_default_voice_for_backend()
             logger.info(
                 "Headless save_raw(GET): name=%r voice=%r instr_len=%d tools_len=%d",
                 name_s,
-                voice,
+                normalized_voice,
                 len(instructions),
                 len(tools_text),
             )
-            _write_profile(name_s, instructions, tools_text, voice or "cedar")
+            _write_profile(name_s, instructions, tools_text, normalized_voice)
             value = f"user_personalities/{name_s}"
             choices = [DEFAULT_OPTION, *list_personalities()]
             return {"ok": True, "value": value, "choices": choices}
         except Exception as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=500)  # type: ignore
 
-    logger = logging.getLogger(__name__)
-
     @app.post("/personalities/apply")
     async def _apply(
+        request: Request,
         payload: ApplyPayload | None = None,
         name: str | None = None,
         persist: Optional[bool] = None,
-        request: Optional[Request] = None,
     ) -> dict:  # type: ignore
         if LOCKED_PROFILE is not None:
             return JSONResponse(
@@ -233,7 +240,7 @@ def mount_personality_routes(
             persist_flag = bool(getattr(payload, "persist", False))
         elif name:
             sel_name = name
-        elif request is not None:
+        else:
             try:
                 body = await request.json()
                 if isinstance(body, dict) and body.get("name"):
@@ -242,13 +249,12 @@ def mount_personality_routes(
                     persist_flag = bool(body.get("persist"))
             except Exception:
                 sel_name = None
-        if request is not None:
-            try:
-                q_persist = request.query_params.get("persist")
-                if q_persist is not None:
-                    persist_flag = str(q_persist).lower() in {"1", "true", "yes", "on"}
-            except Exception:
-                pass
+        try:
+            q_persist = request.query_params.get("persist")
+            if q_persist is not None:
+                persist_flag = str(q_persist).lower() in {"1", "true", "yes", "on"}
+        except Exception:
+            pass
         if not sel_name:
             sel_name = DEFAULT_OPTION
 
@@ -276,16 +282,60 @@ def mount_personality_routes(
     async def _voices() -> list[str]:
         loop = get_loop()
         if loop is None:
-            return list(AVAILABLE_VOICES)
+            return get_available_voices_for_backend()
 
         async def _get_v() -> list[str]:
             try:
                 return await handler.get_available_voices()
             except Exception:
-                return list(AVAILABLE_VOICES)
+                return get_available_voices_for_backend()
 
         try:
             fut = asyncio.run_coroutine_threadsafe(_get_v(), loop)
             return fut.result(timeout=10)
         except Exception:
-            return list(AVAILABLE_VOICES)
+            return get_available_voices_for_backend()
+
+    @app.get("/voices/current")
+    async def _current_voice() -> dict[str, str]:
+        loop = get_loop()
+        fallback_voice = get_default_voice_for_backend()
+        if loop is None:
+            return {"voice": fallback_voice}
+
+        def _get_current() -> str:
+            try:
+                return handler.get_current_voice()
+            except Exception:
+                return fallback_voice
+
+        try:
+            fut = asyncio.run_coroutine_threadsafe(asyncio.to_thread(_get_current), loop)
+            return {"voice": fut.result(timeout=10)}
+        except Exception:
+            return {"voice": fallback_voice}
+
+    @app.post("/voices/apply")
+    async def _apply_voice(request: Request, voice: str | None = Query(None)) -> dict:  # type: ignore
+        voice = str(voice or "")
+        if not voice:
+            try:
+                raw = await request.json()
+            except Exception:
+                raw = {}
+            voice = str(raw.get("voice", "") or "")
+        if not voice:
+            return JSONResponse({"ok": False, "error": "missing_voice"}, status_code=400)  # type: ignore
+        loop = get_loop()
+        if loop is None:
+            return JSONResponse({"ok": False, "error": "loop_unavailable"}, status_code=503)  # type: ignore
+
+        async def _do() -> str:
+            return await handler.change_voice(voice)
+
+        try:
+            fut = asyncio.run_coroutine_threadsafe(_do(), loop)
+            status = fut.result(timeout=10)
+            return {"ok": True, "status": status}
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)  # type: ignore

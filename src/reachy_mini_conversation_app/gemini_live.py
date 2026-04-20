@@ -10,13 +10,13 @@ Audio formats (per Gemini Live API spec):
 
 import json
 import uuid
+import base64
 import random
 import asyncio
 import logging
 from typing import Any, Dict, List, Final, Tuple, Literal, Optional
 from datetime import datetime
 
-import cv2
 import numpy as np
 import gradio as gr
 from google import genai
@@ -25,12 +25,18 @@ from google.genai import types
 from numpy.typing import NDArray
 from scipy.signal import resample
 
-from reachy_mini_conversation_app.config import config
+from reachy_mini_conversation_app.config import (
+    GEMINI_BACKEND,
+    GEMINI_AVAILABLE_VOICES,
+    DEFAULT_VOICE_BY_BACKEND,
+    config,
+)
 from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
 from reachy_mini_conversation_app.tools.core_tools import (
     ToolDependencies,
     get_tool_specs,
 )
+from reachy_mini_conversation_app.camera_frame_encoding import encode_bgr_frame_as_jpeg
 from reachy_mini_conversation_app.tools.background_tool_manager import (
     ToolCallRoutine,
     ToolNotification,
@@ -42,20 +48,6 @@ logger = logging.getLogger(__name__)
 
 GEMINI_INPUT_SAMPLE_RATE: Final[int] = 16000
 GEMINI_OUTPUT_SAMPLE_RATE: Final[int] = 24000
-
-# Voices supported by Gemini Live API
-GEMINI_AVAILABLE_VOICES: List[str] = [
-    "Aoede",
-    "Charon",
-    "Fenrir",
-    "Kore",
-    "Leda",
-    "Orus",
-    "Puck",
-    "Zephyr",
-]
-
-DEFAULT_GEMINI_VOICE = "Kore"
 
 
 def _openai_tool_specs_to_gemini(specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -126,7 +118,7 @@ def _resolve_gemini_voice(profile_voice: str) -> str:
     Otherwise fall back to the default.
     """
     voice_map = {v.lower(): v for v in GEMINI_AVAILABLE_VOICES}
-    return voice_map.get(profile_voice.lower(), DEFAULT_GEMINI_VOICE)
+    return voice_map.get(profile_voice.lower(), DEFAULT_VOICE_BY_BACKEND[GEMINI_BACKEND])
 
 
 class GeminiLiveHandler(AsyncStreamHandler):
@@ -143,6 +135,7 @@ class GeminiLiveHandler(AsyncStreamHandler):
         self.deps = deps
         self.gradio_mode = gradio_mode
         self.instance_path = instance_path
+        self._voice_override: str | None = None
 
         self.session: Any = None  # google.genai live session
         self.output_queue: "asyncio.Queue[Tuple[int, NDArray[np.int16]] | AdditionalOutputs]" = asyncio.Queue()
@@ -163,10 +156,56 @@ class GeminiLiveHandler(AsyncStreamHandler):
 
         # Stop event for the receive loop
         self._stop_event: asyncio.Event = asyncio.Event()
+        self._pending_user_transcript_chunks: list[str] = []
+        self._pending_assistant_transcript_chunks: list[str] = []
+        self._listening_state = False
 
     def copy(self) -> "GeminiLiveHandler":
         """Create a copy of the handler."""
         return GeminiLiveHandler(self.deps, self.gradio_mode, self.instance_path)
+
+    def _set_listening_state(self, listening: bool) -> None:
+        """Avoid queueing redundant listening-state updates."""
+        if self._listening_state == listening:
+            return
+        self._listening_state = listening
+        self.deps.movement_manager.set_listening(listening)
+
+    async def _flush_transcript_chunks(self, role: str, chunks: list[str]) -> None:
+        """Emit one finalized transcript message for the current turn."""
+        if not chunks:
+            return
+
+        transcript = "".join(chunks).strip()
+        chunks.clear()
+        if not transcript:
+            return
+
+        await self.output_queue.put(AdditionalOutputs({"role": role, "content": transcript}))
+
+    async def _mark_model_response_started(self) -> None:
+        """Switch out of user-listening mode when the model begins responding."""
+        await self._flush_transcript_chunks("user", self._pending_user_transcript_chunks)
+        self._set_listening_state(False)
+
+    async def _handle_interruption(self) -> None:
+        """Stop current playback and preserve any transcript already spoken."""
+        logger.debug("Gemini: user interrupted")
+        await self._flush_transcript_chunks("assistant", self._pending_assistant_transcript_chunks)
+        if hasattr(self, "_clear_queue") and callable(self._clear_queue):
+            self._clear_queue()
+        if self.deps.head_wobbler is not None:
+            self.deps.head_wobbler.reset()
+        self._set_listening_state(True)
+
+    async def _handle_turn_complete(self) -> None:
+        """Finalize the current turn and restore post-speech motion state."""
+        logger.debug("Gemini turn complete")
+        await self._flush_transcript_chunks("user", self._pending_user_transcript_chunks)
+        await self._flush_transcript_chunks("assistant", self._pending_assistant_transcript_chunks)
+        self._set_listening_state(False)
+        if self.deps.head_wobbler is not None:
+            self.deps.head_wobbler.request_reset_after_current_audio()
 
     async def apply_personality(self, profile: str | None) -> str:
         """Apply a new personality (profile) at runtime.
@@ -178,6 +217,7 @@ class GeminiLiveHandler(AsyncStreamHandler):
             from reachy_mini_conversation_app.config import set_custom_profile
 
             set_custom_profile(profile)
+            self._voice_override = None
             logger.info("Set custom profile to %r", profile)
 
             try:
@@ -200,6 +240,22 @@ class GeminiLiveHandler(AsyncStreamHandler):
         except Exception as e:
             logger.error("Error applying personality '%s': %s", profile, e)
             return f"Failed to apply personality: {e}"
+
+    async def change_voice(self, voice: str) -> str:
+        """Change only the voice and restart the session."""
+        self._voice_override = voice
+        if getattr(self, "client", None) is not None:
+            try:
+                await self._restart_session()
+                return f"Voice changed to {voice}."
+            except Exception as e:
+                logger.warning("Failed to restart session for voice change: %s", e)
+                return "Voice change failed. Will take effect on next connection."
+        return "Voice changed. Will take effect on next connection."
+
+    def get_current_voice(self) -> str:
+        """Return the resolved Gemini voice currently selected for this handler."""
+        return _resolve_gemini_voice(self._voice_override or get_session_voice())
 
     async def start_up(self) -> None:
         """Start the handler with retries on unexpected closure."""
@@ -270,7 +326,7 @@ class GeminiLiveHandler(AsyncStreamHandler):
             self._stop_event.set()  # Signal the old receive loop to stop
             await asyncio.sleep(0.1)
             self._stop_event.clear()
-            asyncio.create_task(self._run_live_session(), name="gemini-live-restart")
+            asyncio.create_task(self.start_up(), name="gemini-live-restart")
             try:
                 await asyncio.wait_for(self._connected_event.wait(), timeout=5.0)
                 logger.info("Gemini Live session restarted and connected.")
@@ -282,7 +338,7 @@ class GeminiLiveHandler(AsyncStreamHandler):
     def _build_live_config(self) -> types.LiveConnectConfig:
         """Build the LiveConnectConfig for a Gemini Live session."""
         instructions = get_session_instructions()
-        voice = _resolve_gemini_voice(get_session_voice())
+        voice = _resolve_gemini_voice(self._voice_override or get_session_voice())
 
         # Convert OpenAI-style tool specs to Gemini function declarations
         tool_specs = get_tool_specs()
@@ -375,7 +431,25 @@ class GeminiLiveHandler(AsyncStreamHandler):
             return
 
         try:
-            # Send tool response back to Gemini
+            if bg_tool.tool_name == "camera" and isinstance(tool_result, dict) and "b64_im" in tool_result:
+                b64_im = tool_result.pop("b64_im")
+                if not tool_result:
+                    tool_result = {"status": "image_captured"}
+
+                try:
+                    if isinstance(b64_im, str):
+                        image_bytes = base64.b64decode(b64_im)
+                    else:
+                        image_bytes = bytes(b64_im)
+                    await self.session.send_realtime_input(
+                        video=types.Blob(data=image_bytes, mime_type="image/jpeg")
+                    )
+                    logger.info("Pushed camera snapshot to Gemini via realtime video input")
+                except Exception as ve:
+                    logger.warning("Failed to push camera snapshot to Gemini: %s", ve)
+
+            console_content = json.dumps(tool_result)
+
             function_response = types.FunctionResponse(
                 id=bg_tool.id if isinstance(bg_tool.id, str) else str(bg_tool.id),
                 name=bg_tool.tool_name,
@@ -387,7 +461,7 @@ class GeminiLiveHandler(AsyncStreamHandler):
                 AdditionalOutputs(
                     {
                         "role": "assistant",
-                        "content": json.dumps(tool_result),
+                        "content": console_content,
                         "metadata": {
                             "title": f"🛠️ Used tool {bg_tool.tool_name}",
                             "status": "done",
@@ -396,29 +470,16 @@ class GeminiLiveHandler(AsyncStreamHandler):
                 ),
             )
 
-            # Handle camera images
-            if bg_tool.tool_name == "camera" and bg_tool.result and "b64_im" in bg_tool.result:
-                b64_im = bg_tool.result["b64_im"]
-                if not isinstance(b64_im, str):
-                    b64_im = str(b64_im)
-
-                # Send image via realtime input as video frame
-                import base64
-
-                image_bytes = base64.b64decode(b64_im)
-                await self.session.send_realtime_input(video=types.Blob(data=image_bytes, mime_type="image/jpeg"))
-                logger.info("Sent camera image to Gemini via video input")
-
-                if self.deps.camera_worker is not None:
-                    np_img = self.deps.camera_worker.get_latest_frame()
-                    if np_img is not None:
-                        rgb_frame = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
-                    else:
-                        rgb_frame = None
-                    img = gr.Image(value=rgb_frame)
-                    await self.output_queue.put(
-                        AdditionalOutputs({"role": "assistant", "content": img}),
-                    )
+            if bg_tool.tool_name == "camera" and self.deps.camera_worker is not None:
+                np_img = self.deps.camera_worker.get_latest_frame()
+                if np_img is not None:
+                    rgb_frame = np.ascontiguousarray(np_img[..., ::-1])
+                else:
+                    rgb_frame = None
+                img = gr.Image(value=rgb_frame)
+                await self.output_queue.put(
+                    AdditionalOutputs({"role": "assistant", "content": img}),
+                )
 
         except Exception as e:
             logger.warning("Error sending tool result to Gemini: %s", e)
@@ -435,12 +496,10 @@ class GeminiLiveHandler(AsyncStreamHandler):
                 if self.session and self.deps.camera_worker is not None:
                     frame = self.deps.camera_worker.get_latest_frame()
                     if frame is not None:
-                        success, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                        if success:
-                            jpeg_bytes = buffer.tobytes()
-                            await self.session.send_realtime_input(
-                                video=types.Blob(data=jpeg_bytes, mime_type="image/jpeg")
-                            )
+                        jpeg_bytes = encode_bgr_frame_as_jpeg(frame)
+                        await self.session.send_realtime_input(
+                            video=types.Blob(data=jpeg_bytes, mime_type="image/jpeg")
+                        )
             except Exception as e:
                 if self._stop_event.is_set():
                     break
@@ -490,20 +549,20 @@ class GeminiLiveHandler(AsyncStreamHandler):
 
                                 # Handle interruption / barge-in
                                 if content.interrupted is True:
-                                    logger.debug("Gemini: user interrupted")
-                                    if hasattr(self, "_clear_queue") and callable(self._clear_queue):
-                                        self._clear_queue()
-                                    if self.deps.head_wobbler is not None:
-                                        self.deps.head_wobbler.reset()
+                                    await self._handle_interruption()
 
                                 # Handle audio output from model
                                 if content.model_turn and content.model_turn.parts:
+                                    has_audio_part = any(
+                                        part.inline_data and part.inline_data.data for part in content.model_turn.parts
+                                    )
+                                    if has_audio_part:
+                                        await self._mark_model_response_started()
+
                                     for part in content.model_turn.parts:
                                         if part.inline_data and part.inline_data.data:
                                             audio_bytes = part.inline_data.data
                                             if isinstance(audio_bytes, str):
-                                                import base64
-
                                                 audio_bytes = base64.b64decode(audio_bytes)
 
                                             if len(audio_bytes) == 0:
@@ -514,11 +573,9 @@ class GeminiLiveHandler(AsyncStreamHandler):
                                             if len(audio_array) == 0:
                                                 continue
 
-                                            if self.deps.head_wobbler is not None:
-                                                import base64 as b64mod
-
+                                            if self.gradio_mode and self.deps.head_wobbler is not None:
                                                 self.deps.head_wobbler.feed(
-                                                    b64mod.b64encode(audio_bytes).decode("utf-8")
+                                                    base64.b64encode(audio_bytes).decode("utf-8")
                                                 )
 
                                             self.last_activity_time = asyncio.get_event_loop().time()
@@ -530,23 +587,20 @@ class GeminiLiveHandler(AsyncStreamHandler):
                                 # Handle input transcription (user speech)
                                 if content.input_transcription and content.input_transcription.text:
                                     transcript = content.input_transcription.text
-                                    logger.debug("User transcript: %s", transcript)
-                                    await self.output_queue.put(
-                                        AdditionalOutputs({"role": "user", "content": transcript})
-                                    )
+                                    logger.debug("User transcript chunk: %s", transcript)
+                                    self._pending_user_transcript_chunks.append(transcript)
+                                    self._set_listening_state(True)
 
                                 # Handle output transcription (model speech)
                                 if content.output_transcription and content.output_transcription.text:
                                     transcript = content.output_transcription.text
-                                    logger.debug("Assistant transcript: %s", transcript)
-                                    await self.output_queue.put(
-                                        AdditionalOutputs({"role": "assistant", "content": transcript})
-                                    )
+                                    logger.debug("Assistant transcript chunk: %s", transcript)
+                                    await self._mark_model_response_started()
+                                    self._pending_assistant_transcript_chunks.append(transcript)
 
                                 # Turn complete
                                 if content.turn_complete:
-                                    logger.debug("Gemini turn complete")
-                                    self.deps.movement_manager.set_listening(True)
+                                    await self._handle_turn_complete()
 
                             # Handle tool calls
                             if response.tool_call:
@@ -555,8 +609,8 @@ class GeminiLiveHandler(AsyncStreamHandler):
                     except Exception as e:
                         if self._stop_event.is_set():
                             break
-                        logger.warning("Receive loop error (will continue): %s", e)
-                        await asyncio.sleep(0.1)
+                        logger.warning("Receive loop error, restarting Gemini session: %s", e)
+                        raise
 
             finally:
                 if video_task is not None:
