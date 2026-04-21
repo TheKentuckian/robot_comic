@@ -3,11 +3,14 @@
 import asyncio
 import threading
 from types import SimpleNamespace
+from typing import Any, cast
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
 from fastapi import FastAPI
+from numpy.typing import NDArray
 from fastapi.testclient import TestClient
 
 from reachy_mini.media.media_manager import MediaBackend
@@ -75,10 +78,10 @@ async def test_play_loop_feeds_head_wobbler_with_local_playback_delay() -> None:
     class Handler:
         def __init__(self) -> None:
             self.deps = SimpleNamespace(head_wobbler=head_wobbler)
-            self.output_queue = asyncio.Queue()
+            self.output_queue: asyncio.Queue[Any] = asyncio.Queue()
             self._emitted = False
 
-        async def emit(self):
+        async def emit(self) -> tuple[int, NDArray[np.int16]] | None:
             if not self._emitted:
                 self._emitted = True
                 return (24000, chunk.copy())
@@ -96,7 +99,7 @@ async def test_play_loop_feeds_head_wobbler_with_local_playback_delay() -> None:
     )
     robot = SimpleNamespace(media=media)
     handler = Handler()
-    stream = LocalStream(handler, robot)
+    stream = LocalStream(cast(Any, handler), robot)
 
     async def stop_soon() -> None:
         await asyncio.sleep(0.01)
@@ -117,8 +120,8 @@ async def test_play_loop_feeds_head_wobbler_with_local_playback_delay() -> None:
 
 
 def test_backend_config_persists_gemini_selection_and_status(
-    tmp_path,
-    monkeypatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Settings API should persist Gemini backend choice and token."""
     monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
@@ -171,8 +174,8 @@ def test_backend_config_persists_gemini_selection_and_status(
 
 
 def test_backend_config_preserves_explicit_model_override_when_saving_key(
-    tmp_path,
-    monkeypatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Saving credentials should not reset a custom model override."""
     custom_model = "gpt-4o-realtime-preview-2025-06-03"
@@ -211,7 +214,9 @@ def test_backend_config_preserves_explicit_model_override_when_saving_key(
     assert "OPENAI_API_KEY=openai-test-key" in env_text
 
 
-def test_headless_personality_routes_return_gemini_voices_when_backend_selected(monkeypatch) -> None:
+def test_headless_personality_routes_return_gemini_voices_when_backend_selected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Headless personality UI should expose Gemini voices when Gemini is selected."""
     monkeypatch.setattr(config, "BACKEND_PROVIDER", "gemini")
     monkeypatch.setattr(config, "MODEL_NAME", "gemini-3.1-flash-live-preview")

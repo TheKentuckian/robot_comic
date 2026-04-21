@@ -12,7 +12,7 @@ TARGET_PACKAGE = "reachy_talk_data"
 TARGET_SUBDIR = "profiles"
 
 
-class BuildPyWithProfiles(build_py):
+class BuildPyWithProfiles(build_py):  # type: ignore[misc]
     """Copy built-in profiles into the wheel data package at build time."""
 
     def run(self) -> None:

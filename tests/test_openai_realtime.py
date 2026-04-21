@@ -3,7 +3,7 @@ import base64
 import random
 import asyncio
 import logging
-from typing import Any
+from typing import Any, cast
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -503,7 +503,7 @@ async def test_output_audio_delta_passes_output_sample_rate_to_head_wobbler(monk
         head_wobbler=head_wobbler,
     )
     handler = OpenaiRealtimeHandler(deps, gradio_mode=True)
-    handler.client = FakeClient()
+    handler.client = cast(Any, FakeClient())
 
     start_up = MagicMock()
     shutdown = AsyncMock()
@@ -598,7 +598,7 @@ async def test_debug_mode_writes_assistant_audio_dump_wav(monkeypatch: Any, tmp_
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
     handler = OpenaiRealtimeHandler(deps)
-    handler.client = FakeClient()
+    handler.client = cast(Any, FakeClient())
     handler._assistant_audio_dump_enabled = True
     handler._assistant_audio_dump_dir = tmp_path
 
@@ -942,7 +942,7 @@ async def test_apply_personality_uses_selected_voice_for_lb_allocated_sessions(m
         session = FakeSession()
 
     handler = OpenaiRealtimeHandler(ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()))
-    handler.connection = FakeConnection()
+    handler.connection = cast(Any, FakeConnection())
     monkeypatch.setattr(handler, "_restart_session", AsyncMock(return_value=None))
 
     result = await handler.apply_personality("example")

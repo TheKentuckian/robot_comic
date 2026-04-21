@@ -153,13 +153,13 @@ def add_model_query_param(ws_url: str) -> str:
     """Mirror the conversation app's realtime connect query.
 
     The session allocator returns a `connect_url` with the session token, while
-    the app also adds `model=<OPENAI_MODEL_NAME>` when opening the realtime
+    the app also adds `model=<MODEL_NAME>` when opening the realtime
     websocket. Some deployed backends require that query parameter for
     `session.update` to be accepted.
     """
     parsed = urlsplit(ws_url)
     query_items = dict(parse_qsl(parsed.query, keep_blank_values=True))
-    query_items.setdefault("model", config.OPENAI_MODEL_NAME)
+    query_items.setdefault("model", config.MODEL_NAME)
     return urlunsplit(
         (
             parsed.scheme,
@@ -547,7 +547,7 @@ async def listen_and_play_ws(args: ProbeArguments) -> None:
 
     install_signal_handlers()
     print(f"provider: {config.BACKEND_PROVIDER}")
-    print(f"model: {config.OPENAI_MODEL_NAME}")
+    print(f"model: {config.MODEL_NAME}")
     print(f"voice: {voice}")
     print(f"prompt_chars: {len(instructions)}")
     print(f"tool_count: {len(get_tool_specs())}")

@@ -47,7 +47,7 @@ def add_model_query_param(ws_url: str) -> str:
     """Mirror the conversation app's realtime connect query."""
     parsed = urlsplit(ws_url)
     query_items = dict(parse_qsl(parsed.query, keep_blank_values=True))
-    query_items.setdefault("model", config.OPENAI_MODEL_NAME)
+    query_items.setdefault("model", config.MODEL_NAME)
     return urlunsplit(
         (
             parsed.scheme,
@@ -180,7 +180,7 @@ async def main() -> None:
 
     print(f"allocated session: {session_id or '<unknown>'}")
     print(f"allocation_time_ms: {(t1 - t0) * 1000:.0f}")
-    print(f"model: {config.OPENAI_MODEL_NAME}")
+    print(f"model: {config.MODEL_NAME}")
 
     async with websockets.connect(
         connect_url,
