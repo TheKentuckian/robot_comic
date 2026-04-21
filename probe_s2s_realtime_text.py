@@ -114,9 +114,7 @@ async def main() -> None:
     args = parse_args()
 
     if not args.session_url:
-        raise SystemExit(
-            "Missing session URL. Set S2S_REALTIME_SESSION_URL or pass --session-url."
-        )
+        raise SystemExit("Missing session URL. Set S2S_REALTIME_SESSION_URL or pass --session-url.")
 
     instructions = get_session_instructions()
     voice = get_session_voice(default=DEFAULT_VOICE)

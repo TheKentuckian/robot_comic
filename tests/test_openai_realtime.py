@@ -33,9 +33,7 @@ async def test_tool_completion_does_not_reset_head_wobbler(monkeypatch: Any) -> 
     monkeypatch.setattr(rt_mod, "get_session_voice", lambda default=DEFAULT_VOICE: "alloy")
     monkeypatch.setattr(rt_mod, "get_tool_specs", lambda: [])
 
-    async def _fake_dispatch(
-        tool_name: str, args_json: str, deps: Any, **_kw: Any
-    ) -> dict[str, Any]:
+    async def _fake_dispatch(tool_name: str, args_json: str, deps: Any, **_kw: Any) -> dict[str, Any]:
         return {"image_description": "A person in front of a door.", "tool": tool_name}
 
     monkeypatch.setattr(btm_mod, "dispatch_tool_call", _fake_dispatch)
@@ -371,7 +369,11 @@ async def test_partial_transcription_uses_latest_snapshot(monkeypatch: Any) -> N
             self._events = iter(
                 [
                     FakeEvent("conversation.item.input_audio_transcription.delta", item_id="item-1", delta="Hey"),
-                    FakeEvent("conversation.item.input_audio_transcription.delta", item_id="item-1", delta="Hey, how are you?"),
+                    FakeEvent(
+                        "conversation.item.input_audio_transcription.delta",
+                        item_id="item-1",
+                        delta="Hey, how are you?",
+                    ),
                 ]
             )
 
@@ -655,6 +657,7 @@ def test_format_timestamp_uses_wall_clock() -> None:
     year = int(formatted[1:5])
     assert year == datetime.now(timezone.utc).year
 
+
 @pytest.mark.asyncio
 async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -> None:
     """First connection dies with ConnectionClosedError during iteration -> retried.
@@ -670,7 +673,10 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
 
     # Make asyncio.sleep return immediately (for backoff)
     _real_sleep = asyncio.sleep
-    async def _mock_sleep(*_a: Any, **_kw: Any) -> None: await _real_sleep(0)
+
+    async def _mock_sleep(*_a: Any, **_kw: Any) -> None:
+        await _real_sleep(0)
+
     monkeypatch.setattr(asyncio, "sleep", _mock_sleep, raising=False)
 
     attempt_counter = {"n": 0}
@@ -682,31 +688,48 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
             self._mode = mode
 
             class _Session:
-                async def update(self, **_kw: Any) -> None: return None
+                async def update(self, **_kw: Any) -> None:
+                    return None
+
             self.session = _Session()
 
             class _InputAudioBuffer:
-                async def append(self, **_kw: Any) -> None: return None
+                async def append(self, **_kw: Any) -> None:
+                    return None
+
             self.input_audio_buffer = _InputAudioBuffer()
 
             class _Item:
-                async def create(self, **_kw: Any) -> None: return None
+                async def create(self, **_kw: Any) -> None:
+                    return None
 
             class _Conversation:
                 item = _Item()
+
             self.conversation = _Conversation()
 
             class _Response:
-                async def create(self, **_kw: Any) -> None: return None
-                async def cancel(self, **_kw: Any) -> None: return None
+                async def create(self, **_kw: Any) -> None:
+                    return None
+
+                async def cancel(self, **_kw: Any) -> None:
+                    return None
+
             self.response = _Response()
 
-        async def __aenter__(self) -> "FakeConn": return self
-        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool: return False
-        async def close(self) -> None: return None
+        async def __aenter__(self) -> "FakeConn":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+            return False
+
+        async def close(self) -> None:
+            return None
 
         # Async iterator protocol
-        def __aiter__(self) -> "FakeConn": return self
+        def __aiter__(self) -> "FakeConn":
+            return self
+
         async def __anext__(self) -> None:
             if self._mode == "raise_on_iter":
                 raise FakeCCE("abrupt close (simulated)")
@@ -719,7 +742,8 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
             return FakeConn(mode)
 
     class FakeClient:
-        def __init__(self, **_kw: Any) -> None: self.realtime = FakeRealtime()
+        def __init__(self, **_kw: Any) -> None:
+            self.realtime = FakeRealtime()
 
     # Patch the OpenAI client used by the handler
     monkeypatch.setattr(rt_mod, "AsyncOpenAI", FakeClient)
@@ -952,6 +976,7 @@ async def test_apply_personality_uses_selected_voice_for_lb_allocated_sessions(m
     assert session["instructions"] == "new instructions"
     assert session["audio"]["output"]["voice"] == "Serena"
 
+
 # ---- Cost calculation tests ----
 
 
@@ -1013,7 +1038,8 @@ def test_compute_response_cost(usage_kwargs: dict[str, Any], expect_positive: bo
 
 @pytest.mark.asyncio
 async def test_response_sender_retries_when_active_response_error_uses_type_only(
-    monkeypatch: Any, caplog: Any,
+    monkeypatch: Any,
+    caplog: Any,
 ) -> None:
     """Retry active-response rejections even when the server omits ``error.code``.
 
@@ -1036,10 +1062,7 @@ async def test_response_sender_retries_when_active_response_error_uses_type_only
             self.param = None
 
         def __repr__(self) -> str:
-            return (
-                f"RealtimeError(message='{self.message}', type='{self.type}', "
-                "code=None, event_id=None, param=None)"
-            )
+            return f"RealtimeError(message='{self.message}', type='{self.type}', code=None, event_id=None, param=None)"
 
     class FakeEvent:
         def __init__(self, etype: str, **kwargs: Any) -> None:
@@ -1130,13 +1153,9 @@ async def test_response_sender_retries_when_active_response_error_uses_type_only
 
     assert fake_response_api.call_count == 2
     assert not any(
-        record.levelname == "ERROR" and "Realtime error" in record.getMessage()
-        for record in caplog.records
+        record.levelname == "ERROR" and "Realtime error" in record.getMessage() for record in caplog.records
     )
-    assert any(
-        "worker will retry after active response finishes" in record.getMessage()
-        for record in caplog.records
-    )
+    assert any("worker will retry after active response finishes" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -1228,9 +1247,7 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
                     )
                 )
                 await asyncio.sleep(0)
-                await event_queue.put(
-                    FakeEvent("response.done", response=MagicMock())
-                )
+                await event_queue.put(FakeEvent("response.done", response=MagicMock()))
                 return
 
             # Intentional rejections (simulating a race where another
@@ -1253,10 +1270,7 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
             else:
                 await event_queue.put(FakeEvent("response.created"))
 
-            await event_queue.put(
-                FakeEvent("response.done", response=MagicMock())
-            )
-
+            await event_queue.put(FakeEvent("response.done", response=MagicMock()))
 
         async def cancel(self, **_kw: Any) -> None:
             pass
@@ -1314,9 +1328,7 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
     monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
 
     # Patch dispatch_tool_call so tools complete with a result.
-    async def _fake_dispatch(
-        tool_name: str, args_json: str, deps: Any, **_kw: Any
-    ) -> dict[str, Any]:
+    async def _fake_dispatch(tool_name: str, args_json: str, deps: Any, **_kw: Any) -> dict[str, Any]:
         await asyncio.sleep(random.uniform(0.3, 0.5))
         return {"ok": True, "tool": tool_name}
 
@@ -1355,7 +1367,6 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
 
     await handler.shutdown()
 
-
     # ---- Assertions ----
 
     # Serialization: every response.create() must have been called only when
@@ -1375,23 +1386,15 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
 
     # The error event handler must have set _last_response_rejected for each
     # rejection (the log message comes from the event handler code path).
-    rejection_logs = [
-        r for r in caplog.records
-        if "worker will retry" in getattr(r, "msg", "")
-    ]
+    rejection_logs = [r for r in caplog.records if "worker will retry" in getattr(r, "msg", "")]
     assert len(rejection_logs) == len(REJECT_CALL_NUMBERS), (
-        f"Expected {len(REJECT_CALL_NUMBERS)} rejection entries from error handler, "
-        f"got {len(rejection_logs)}"
+        f"Expected {len(REJECT_CALL_NUMBERS)} rejection entries from error handler, got {len(rejection_logs)}"
     )
 
     # The sender loop must have retried after each rejection.
-    retry_logs = [
-        r for r in caplog.records
-        if "response.create was rejected; retrying" in getattr(r, "msg", "")
-    ]
+    retry_logs = [r for r in caplog.records if "response.create was rejected; retrying" in getattr(r, "msg", "")]
     assert len(retry_logs) == len(REJECT_CALL_NUMBERS), (
-        f"Expected {len(REJECT_CALL_NUMBERS)} retry entries from sender loop, "
-        f"got {len(retry_logs)}"
+        f"Expected {len(REJECT_CALL_NUMBERS)} retry entries from sender loop, got {len(retry_logs)}"
     )
 
 
@@ -1400,7 +1403,8 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
 
 @pytest.mark.asyncio
 async def test_response_sender_loop_times_out_waiting_for_response_done(
-    monkeypatch: Any, caplog: Any,
+    monkeypatch: Any,
+    caplog: Any,
 ) -> None:
     """If response.done is never received the sender loop should time out.
 
@@ -1445,18 +1449,14 @@ async def test_response_sender_loop_times_out_waiting_for_response_done(
 
     assert create_count == 2, f"Expected 2 response.create calls, got {create_count}"
 
-    timeout_logs = [
-        r for r in caplog.records
-        if "Timed out waiting for response.done" in r.getMessage()
-    ]
-    assert len(timeout_logs) == 2, (
-        f"Expected 2 timeout warnings, got {len(timeout_logs)}"
-    )
+    timeout_logs = [r for r in caplog.records if "Timed out waiting for response.done" in r.getMessage()]
+    assert len(timeout_logs) == 2, f"Expected 2 timeout warnings, got {len(timeout_logs)}"
 
 
 @pytest.mark.asyncio
 async def test_response_sender_loop_times_out_waiting_for_previous_response(
-    monkeypatch: Any, caplog: Any,
+    monkeypatch: Any,
+    caplog: Any,
 ) -> None:
     """If a previous response never completes, the pre-condition wait times out.
 
@@ -1498,10 +1498,5 @@ async def test_response_sender_loop_times_out_waiting_for_previous_response(
     handler._response_done_event.set()
     await asyncio.wait_for(sender_task, timeout=2.0)
 
-    timeout_logs = [
-        r for r in caplog.records
-        if "Timed out waiting for previous response" in r.getMessage()
-    ]
-    assert len(timeout_logs) == 1, (
-        f"Expected 1 pre-condition timeout warning, got {len(timeout_logs)}"
-    )
+    timeout_logs = [r for r in caplog.records if "Timed out waiting for previous response" in r.getMessage()]
+    assert len(timeout_logs) == 1, f"Expected 1 pre-condition timeout warning, got {len(timeout_logs)}"

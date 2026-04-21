@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+from typing import Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -8,13 +9,16 @@ from reachy_mini_conversation_app.vision.head_tracking import HeadTrackerResult
 
 
 try:
+    import ultralytics
     from supervision import Detections
-    from ultralytics import YOLO
 except ImportError as e:
     raise ImportError(
         "To use YOLO head tracker, please install the extra dependencies: pip install '.[yolo_vision]'",
     ) from e
 from huggingface_hub import hf_hub_download
+
+
+YOLO = cast(Any, getattr(ultralytics, "YOLO"))
 
 
 logger = logging.getLogger(__name__)

@@ -173,13 +173,10 @@ def add_model_query_param(ws_url: str) -> str:
 
 def require_runtime_dependencies() -> None:
     if websockets is None:
-        raise SystemExit(
-            "websockets is required. Install it with `pip install websockets`."
-        )
+        raise SystemExit("websockets is required. Install it with `pip install websockets`.")
     if sd is None:
         raise SystemExit(
-            "sounddevice is required for microphone/speaker probing. "
-            "Install it with `pip install sounddevice`."
+            "sounddevice is required for microphone/speaker probing. Install it with `pip install sounddevice`."
         )
 
 
@@ -563,20 +560,23 @@ async def listen_and_play_ws(args: ProbeArguments) -> None:
             print(f"Connected to {ws_url}")
             await ws.send(build_session_update_event(args, instructions, voice))
 
-            with sd.RawInputStream(
-                samplerate=args.send_rate,
-                channels=args.channels,
-                dtype="int16",
-                blocksize=args.chunk_size,
-                device=args.input_device,
-                callback=input_callback,
-            ), sd.RawOutputStream(
-                samplerate=args.recv_rate,
-                channels=args.channels,
-                dtype="int16",
-                blocksize=args.chunk_size,
-                device=args.output_device,
-                callback=output_callback,
+            with (
+                sd.RawInputStream(
+                    samplerate=args.send_rate,
+                    channels=args.channels,
+                    dtype="int16",
+                    blocksize=args.chunk_size,
+                    device=args.input_device,
+                    callback=input_callback,
+                ),
+                sd.RawOutputStream(
+                    samplerate=args.recv_rate,
+                    channels=args.channels,
+                    dtype="int16",
+                    blocksize=args.chunk_size,
+                    device=args.output_device,
+                    callback=output_callback,
+                ),
             ):
                 tasks = [
                     asyncio.create_task(send_audio(ws)),

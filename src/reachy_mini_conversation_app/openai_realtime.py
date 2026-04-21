@@ -196,7 +196,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             f"OpenAI realtime session requires 24 kHz or None, "
             f"got input_rate={input_rate!r}, output_rate={output_rate!r}.{s2s_hint}"
         )
-        return input_rate, output_rate # type: ignore[return-value]
+        return input_rate, output_rate  # type: ignore[return-value]
 
     def _mark_activity(self, reason: str) -> None:
         """Record non-idle conversation activity for the idle timer."""
@@ -507,7 +507,8 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             )
             logger.info(
                 "Tool '%s' (id=%s) executed successfully.",
-                bg_tool.tool_name, bg_tool.id,
+                bg_tool.tool_name,
+                bg_tool.id,
             )
             logger.debug("Tool '%s' model-visible result: %s", bg_tool.tool_name, tool_result_for_model)
         else:
@@ -517,7 +518,11 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
         # Connection may have closed while tool was running
         if not self.connection:
-            logger.warning("Connection closed during tool '%s' (id=%s) execution; cannot send result back", bg_tool.tool_name, bg_tool.id)
+            logger.warning(
+                "Connection closed during tool '%s' (id=%s) execution; cannot send result back",
+                bg_tool.tool_name,
+                bg_tool.id,
+            )
             return
 
         try:
@@ -663,16 +668,13 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             except Exception:
                 pass
 
-
             response_sender_task: asyncio.Task[None] | None = None
             try:
                 # Start the background tool manager
                 self.tool_manager.start_up(tool_callbacks=[self._handle_tool_result])
 
                 # Start the response sender worker
-                response_sender_task = asyncio.create_task(
-                    self._response_sender_loop(), name="response-sender"
-                )
+                response_sender_task = asyncio.create_task(self._response_sender_loop(), name="response-sender")
 
                 async for event in self.connection:
                     logger.debug(f"OpenAI event: {event.type}")
@@ -778,7 +780,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     if event.type == "response.output_audio_transcript.done":
                         self._mark_activity("assistant_transcript_done")
                         logger.debug(f"Assistant transcript: {event.transcript}")
-                        await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": event.transcript}))
+                        await self.output_queue.put(
+                            AdditionalOutputs({"role": "assistant", "content": event.transcript})
+                        )
 
                     # Handle audio delta
                     if event.type == "response.output_audio.delta":
@@ -810,14 +814,19 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
                         logger.info(
                             "Tool call received — tool_name=%r, call_id=%s, is_idle=%s, args=%s",
-                            tool_name, call_id, self.is_idle_tool_call, args_json_str,
+                            tool_name,
+                            call_id,
+                            self.is_idle_tool_call,
+                            args_json_str,
                         )
 
                         if not isinstance(tool_name, str) or not isinstance(args_json_str, str):
                             logger.error(
                                 "Invalid tool call: tool_name=%s (type=%s), args=%s (type=%s), call_id=%s",
-                                tool_name, type(tool_name).__name__,
-                                args_json_str, type(args_json_str).__name__,
+                                tool_name,
+                                type(tool_name).__name__,
+                                args_json_str,
+                                type(args_json_str).__name__,
                                 call_id,
                             )
                             continue
@@ -842,7 +851,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         )
                         logger.info(f"{tool_name} is_idle_tool_call: {self.is_idle_tool_call}")
 
-                        logger.info("Started background tool: %s (id=%s, call_id=%s)", tool_name, bg_tool.tool_id, call_id)
+                        logger.info(
+                            "Started background tool: %s (id=%s, call_id=%s)", tool_name, bg_tool.tool_id, call_id
+                        )
 
                     # server error
                     if event.type == "error":

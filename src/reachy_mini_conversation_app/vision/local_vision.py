@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+from typing import Any, cast
 from dataclasses import dataclass
 
 import numpy as np
@@ -62,7 +63,7 @@ class VisionProcessor:
     def initialize(self) -> None:
         """Load model and processor onto the selected device."""
         logger.info("Loading SmolVLM2 model on %s (HF_HOME=%s)", self.device, config.HF_HOME)
-        processor: ProcessorMixin = AutoProcessor.from_pretrained(self.vision_config.model_path)  # type: ignore[no-untyped-call]
+        processor = cast(ProcessorMixin, AutoProcessor.from_pretrained(self.vision_config.model_path))
 
         model_kwargs: dict[str, object] = {
             "dtype": torch.bfloat16 if self.device == "cuda" else torch.float32,
@@ -93,7 +94,9 @@ class VisionProcessor:
             return "Vision model not initialized"
 
         processor = self.processor
+        processor_any = cast(Any, processor)
         model = self.model
+        model_any = cast(Any, model)
         rgb_image = Image.fromarray(np.ascontiguousarray(frame[..., ::-1]))
         request_parts = [LOCAL_VISION_RESPONSE_INSTRUCTIONS]
         request_parts.insert(0, prompt_text)
@@ -111,14 +114,17 @@ class VisionProcessor:
 
         for attempt in range(self.vision_config.max_retries):
             try:
-                inputs = processor.apply_chat_template(
-                    messages,  # type: ignore[arg-type]
-                    add_generation_prompt=True,
-                    tokenize=True,
-                    return_dict=True,
-                    return_tensors="pt",
+                inputs = cast(
+                    Any,
+                    processor_any.apply_chat_template(
+                        cast(Any, messages),
+                        add_generation_prompt=True,
+                        tokenize=True,
+                        return_dict=True,
+                        return_tensors="pt",
+                    ),
                 )
-                inputs = inputs.to(self.device)  # type: ignore[attr-defined]
+                inputs = cast(Any, inputs.to(self.device))
                 prompt_len = None
                 input_ids = inputs.get("input_ids")
                 input_shape = getattr(input_ids, "shape", None)
@@ -126,11 +132,11 @@ class VisionProcessor:
                     prompt_len = int(input_shape[-1])
 
                 with torch.inference_mode():
-                    generated_ids = model.generate(  # type: ignore[operator]
+                    generated_ids = model_any.generate(
                         **inputs,
                         do_sample=False,
                         max_new_tokens=self.vision_config.max_new_tokens,
-                        pad_token_id=processor.tokenizer.eos_token_id,  # type: ignore[attr-defined]
+                        pad_token_id=cast(Any, processor_any.tokenizer).eos_token_id,
                     )
 
                 # Decode only the newly generated tokens, skipping the prompt
@@ -140,7 +146,7 @@ class VisionProcessor:
                     new_token_ids = generated_ids[:, prompt_len:]
                 else:
                     new_token_ids = [token_ids[prompt_len:] for token_ids in generated_ids]
-                response = processor.batch_decode(  # type: ignore[no-untyped-call]
+                response = processor_any.batch_decode(
                     new_token_ids,
                     skip_special_tokens=True,
                 )[0]
