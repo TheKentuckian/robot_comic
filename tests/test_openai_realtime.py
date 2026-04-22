@@ -3,6 +3,7 @@ import base64
 import random
 import asyncio
 import logging
+from types import SimpleNamespace
 from typing import Any, cast
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
