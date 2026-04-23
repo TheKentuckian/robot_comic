@@ -70,18 +70,6 @@ LEGACY_STARTUP_ENV_NAMES = (
     "REACHY_MINI_VOICE_OVERRIDE",
 )
 
-_LOCAL_PLAYER_BACKENDS = tuple(
-    backend
-    for backend in (
-        getattr(MediaBackend, "LOCAL", None),
-        getattr(MediaBackend, "GSTREAMER", None),
-        getattr(MediaBackend, "GSTREAMER_NO_VIDEO", None),
-        getattr(MediaBackend, "DEFAULT", None),
-        getattr(MediaBackend, "DEFAULT_NO_VIDEO", None),
-    )
-    if backend is not None
-)
-
 
 def _estimate_pending_playback_seconds(robot: ReachyMini) -> float:
     """Best-effort estimate of audio still queued in the local player."""
@@ -101,12 +89,6 @@ def _estimate_pending_playback_seconds(robot: ReachyMini) -> float:
         return 0.0
 
     return max(0.0, pending_ns / 1e9)
-
-
-def _uses_local_player_backend(backend: object) -> bool:
-    """Return whether the media backend uses a local player implementation."""
-    return backend in _LOCAL_PLAYER_BACKENDS
-
 
 def _parse_direct_s2s_target(ws_url: str | None) -> tuple[str | None, int | None]:
     """Extract host and port from a direct speech-to-speech websocket URL."""
@@ -650,7 +632,7 @@ class LocalStream:
         backend = getattr(self._robot.media, "backend", None)
         audio = getattr(self._robot.media, "audio", None)
         if audio is not None:
-            if _uses_local_player_backend(backend) and hasattr(audio, "clear_player") and callable(audio.clear_player):
+            if backend == MediaBackend.LOCAL and hasattr(audio, "clear_player") and callable(audio.clear_player):
                 audio.clear_player()
             elif (
                 backend == MediaBackend.WEBRTC
