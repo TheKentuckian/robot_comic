@@ -83,12 +83,19 @@ def run(
         except Exception as e:
             logger.warning("Failed to load startup settings: %s", e)
 
-    logger.info(
-        "Configured backend provider: %s (%s), model: %s",
-        config.BACKEND_PROVIDER,
-        get_backend_label(config.BACKEND_PROVIDER),
-        config.MODEL_NAME,
-    )
+    if config.BACKEND_PROVIDER == S2S_BACKEND:
+        logger.info(
+            "Configured backend provider: %s (%s)",
+            config.BACKEND_PROVIDER,
+            get_backend_label(config.BACKEND_PROVIDER),
+        )
+    else:
+        logger.info(
+            "Configured backend provider: %s (%s), model: %s",
+            config.BACKEND_PROVIDER,
+            get_backend_label(config.BACKEND_PROVIDER),
+            config.MODEL_NAME,
+        )
 
     from reachy_mini_conversation_app.console import LocalStream
     from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
