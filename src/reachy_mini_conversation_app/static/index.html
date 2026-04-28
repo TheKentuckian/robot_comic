@@ -22,7 +22,7 @@
       <aside class="privacy-notice" role="note" aria-label="Privacy notice">
         <p>
           <strong>Privacy notice:</strong>
-          Speech and camera data are sent to your selected realtime backend for inference. See OpenAI's
+          Speech and camera data are sent to your selected realtime backend for inference. Hugging Face won't store any speech or images sent to our server. See OpenAI's
           <a href="https://platform.openai.com/docs/guides/your-data" target="_blank" rel="noopener">
             data usage policy
           </a>
@@ -37,11 +37,13 @@
           <summary>Learn more</summary>
 
           <p>
-            In privacy-sensitive environments, use <code>--local-vision</code> to process images on-device. See the
+            In privacy-sensitive environments, use your own local version of
+            <a href="https://github.com/huggingface/speech-to-speech" target="_blank" rel="noopener">speech-to-speech</a>,
+            or combine any backend with <code>--local-vision</code> to process images on-device. See the
             <a href="https://github.com/pollen-robotics/reachy_mini_conversation_app/blob/main/README.md" target="_blank" rel="noopener">
               project README
             </a>
-            for full setup instructions. An open-source approach is in the works – stay tuned for its release.
+            for full setup instructions.
           </p>
         </details>
       </aside>
