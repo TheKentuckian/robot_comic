@@ -40,9 +40,9 @@ const BACKEND_META = {
     changeButton: "Edit connection",
     readyTitle: "Speech-to-speech ready",
     readyCopy: "Speech-to-speech is configured. You can jump straight to personalities.",
-    formCopy: "Choose whether Reachy should use the Hugging Face deployment or connect to your own local speech-to-speech instance.",
+    formCopy: "Choose whether Reachy should use the Hugging Face server or connect to your own local speech-to-speech instance.",
     requiredCredentialsCopy: "Set up the speech-to-speech connection details before switching.",
-    note: "Speech-to-speech can use the Hugging Face deployment or your own local realtime websocket.",
+    note: "Speech-to-speech can use the Hugging Face server or your own local realtime websocket.",
   },
 };
 
@@ -284,9 +284,9 @@ function describeS2SConfiguration(status) {
     return `Speech-to-speech will connect directly to ${host}:${port}.`;
   }
   if (status.has_s2s_session_url) {
-    return "Speech-to-speech will use the Hugging Face deployment saved in the app environment.";
+    return "Speech-to-speech will use the Hugging Face server.";
   }
-  return "Choose the Hugging Face deployment or a local realtime endpoint.";
+  return "Choose the Hugging Face server or a local realtime endpoint.";
 }
 
 function isLocalS2SHost(host) {
@@ -357,10 +357,10 @@ async function init() {
     show(s2sDirectFields, localMode);
     show(s2sHostCustomWrap, localMode && customHost);
     show(s2sModeCopy, !localMode);
-    s2sModeCopy.textContent = localMode ? "" : "Use the built-in Hugging Face deployment.";
+    s2sModeCopy.textContent = localMode ? "" : "Use the built-in Hugging Face server.";
 
     if (!localMode) {
-      setStatusMessage(s2sPreview, "Speech-to-speech will use the configured Hugging Face deployment.");
+      setStatusMessage(s2sPreview, "Speech-to-speech will use the Hugging Face server.");
       return;
     }
 
@@ -576,7 +576,7 @@ async function init() {
         if (e.message === "missing_s2s_session_url") {
           setStatusMessage(
             statusEl,
-            "The built-in Hugging Face deployment URL is unavailable. Restart the app and try again.",
+            "The built-in Hugging Face server URL is unavailable. Restart the app and try again.",
             "error",
           );
         } else if (e.message === "empty_s2s_host" || e.message === "invalid_s2s_host") {

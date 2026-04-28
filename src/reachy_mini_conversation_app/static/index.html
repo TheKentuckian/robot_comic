@@ -55,7 +55,7 @@
           <span id="backend-chip" class="chip">Required</span>
         </div>
         <p id="backend-note" class="muted backend-note">
-          OpenAI Realtime needs your own <code>OPENAI_API_KEY</code>. Gemini Live needs your own <code>GEMINI_API_KEY</code>. Speech-to-speech uses either the built-in Hugging Face deployment or a direct realtime websocket endpoint.
+          OpenAI Realtime needs your own <code>OPENAI_API_KEY</code>. Gemini Live needs your own <code>GEMINI_API_KEY</code>. Speech-to-speech uses either the built-in Hugging Face server or a direct realtime websocket endpoint.
         </p>
         <p class="muted backend-note">
           Backend changes are saved here, then applied after you restart Reachy Mini Conversation from the dashboard or desktop app.
@@ -65,7 +65,7 @@
             <input type="radio" name="backend" value="speech-to-speech" />
             <span class="backend-choice-body">
               <span class="backend-choice-title">Speech-to-speech</span>
-              <span class="backend-choice-copy">Use the Hugging Face deployment or a local realtime endpoint without entering an API key.</span>
+              <span class="backend-choice-copy">Use the Hugging Face speech-to-speech server or your own local endpoint.</span>
             </span>
           </label>
           <label class="backend-choice is-selected" data-backend-card="openai">
@@ -118,7 +118,7 @@
           <label for="s2s-mode">Connection mode</label>
           <select id="s2s-mode">
             <option value="local">Local</option>
-            <option value="deployed">Hugging Face deployment</option>
+            <option value="deployed">Hugging Face server</option>
           </select>
           <p id="s2s-mode-copy" class="muted s2s-help"></p>
 
