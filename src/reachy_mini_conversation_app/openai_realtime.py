@@ -10,7 +10,6 @@ from reachy_mini_conversation_app.config import OPENAI_BACKEND, config, get_defa
 from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
 from reachy_mini_conversation_app.base_realtime import (
     _RESPONSE_DONE_TIMEOUT,
-    OPENAI_REALTIME_SAMPLE_RATE,
     BaseRealtimeHandler,
     _normalize_startup_voice,
 )
@@ -24,37 +23,19 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["OpenaiRealtimeHandler", "_compute_response_cost", "_normalize_startup_voice"]
 
-OPENAI_AUDIO_INPUT_COST_PER_1M = 32.0
-OPENAI_AUDIO_OUTPUT_COST_PER_1M = 64.0
-OPENAI_TEXT_INPUT_COST_PER_1M = 4.0
-OPENAI_TEXT_OUTPUT_COST_PER_1M = 16.0
-OPENAI_IMAGE_INPUT_COST_PER_1M = 5.0
-
-
-def _compute_response_cost(usage: Any) -> float:
-    """Compute OpenAI realtime dollar cost from a response usage object."""
-    return _compute_response_cost_with_rates(
-        usage,
-        audio_input_cost_per_1m=OPENAI_AUDIO_INPUT_COST_PER_1M,
-        audio_output_cost_per_1m=OPENAI_AUDIO_OUTPUT_COST_PER_1M,
-        text_input_cost_per_1m=OPENAI_TEXT_INPUT_COST_PER_1M,
-        text_output_cost_per_1m=OPENAI_TEXT_OUTPUT_COST_PER_1M,
-        image_input_cost_per_1m=OPENAI_IMAGE_INPUT_COST_PER_1M,
-    )
-
 
 class OpenaiRealtimeHandler(BaseRealtimeHandler):
     """Realtime handler for the direct OpenAI Realtime API."""
 
-    backend_provider = OPENAI_BACKEND
-    realtime_sample_rate = OPENAI_REALTIME_SAMPLE_RATE
-    requires_api_key = True
-    refresh_client_on_reconnect = False
-    audio_input_cost_per_1m = OPENAI_AUDIO_INPUT_COST_PER_1M
-    audio_output_cost_per_1m = OPENAI_AUDIO_OUTPUT_COST_PER_1M
-    text_input_cost_per_1m = OPENAI_TEXT_INPUT_COST_PER_1M
-    text_output_cost_per_1m = OPENAI_TEXT_OUTPUT_COST_PER_1M
-    image_input_cost_per_1m = OPENAI_IMAGE_INPUT_COST_PER_1M
+    BACKEND_PROVIDER = OPENAI_BACKEND
+    SAMPLE_RATE = 24000
+    REQUIRES_API_KEY = True
+    REFRESH_CLIENT_ON_RECONNECT = False
+    AUDIO_INPUT_COST_PER_1M = 32.0
+    AUDIO_OUTPUT_COST_PER_1M = 64.0
+    TEXT_INPUT_COST_PER_1M = 4.0
+    TEXT_OUTPUT_COST_PER_1M = 16.0
+    IMAGE_INPUT_COST_PER_1M = 5.0
 
     def _response_done_timeout(self) -> float:
         """Return the response completion timeout."""
@@ -134,7 +115,7 @@ class OpenaiRealtimeHandler(BaseRealtimeHandler):
                 _collect(raw)
 
             voices = sorted(candidates) if candidates else fallback
-            default_voice = get_default_voice_for_backend(self.backend_provider)
+            default_voice = get_default_voice_for_backend(self.BACKEND_PROVIDER)
             if default_voice not in voices:
                 voices = [default_voice, *[voice for voice in voices if voice != default_voice]]
             return voices
@@ -151,3 +132,15 @@ class OpenaiRealtimeHandler(BaseRealtimeHandler):
             logger.warning("OPENAI_API_KEY missing. Proceeding with a placeholder (tests/offline).")
             resolved_api_key = "DUMMY"
         return AsyncOpenAI(api_key=resolved_api_key)
+
+
+def _compute_response_cost(usage: Any) -> float:
+    """Compute OpenAI realtime dollar cost from a response usage object."""
+    return _compute_response_cost_with_rates(
+        usage,
+        audio_input_cost_per_1m=OpenaiRealtimeHandler.AUDIO_INPUT_COST_PER_1M,
+        audio_output_cost_per_1m=OpenaiRealtimeHandler.AUDIO_OUTPUT_COST_PER_1M,
+        text_input_cost_per_1m=OpenaiRealtimeHandler.TEXT_INPUT_COST_PER_1M,
+        text_output_cost_per_1m=OpenaiRealtimeHandler.TEXT_OUTPUT_COST_PER_1M,
+        image_input_cost_per_1m=OpenaiRealtimeHandler.IMAGE_INPUT_COST_PER_1M,
+    )

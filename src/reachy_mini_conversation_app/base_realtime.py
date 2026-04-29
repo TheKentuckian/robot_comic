@@ -5,7 +5,8 @@ import base64
 import random
 import asyncio
 import logging
-from typing import Any, Final, Tuple, Literal, Optional
+from abc import ABC, abstractmethod
+from typing import Any, Final, Tuple, Literal, ClassVar, Optional
 from pathlib import Path
 from datetime import datetime
 
@@ -44,17 +45,6 @@ from reachy_mini_conversation_app.tools.background_tool_manager import (
 
 logger = logging.getLogger(__name__)
 
-OPENAI_REALTIME_SAMPLE_RATE: Final[int] = 24000
-S2S_REALTIME_SAMPLE_RATE: Final[int] = 16000
-
-# Backend-neutral cost defaults. Providers with known pricing override these
-# rates in their concrete handler.
-AUDIO_INPUT_COST_PER_1M = 0.0
-AUDIO_OUTPUT_COST_PER_1M = 0.0
-TEXT_INPUT_COST_PER_1M = 0.0
-TEXT_OUTPUT_COST_PER_1M = 0.0
-IMAGE_INPUT_COST_PER_1M = 0.0
-
 _RESPONSE_DONE_TIMEOUT: Final[float] = 30.0
 
 
@@ -68,11 +58,11 @@ class InputTranscriptChunksByItem(BaseModel):
 def _compute_response_cost(
     usage: Any,
     *,
-    audio_input_cost_per_1m: float = AUDIO_INPUT_COST_PER_1M,
-    audio_output_cost_per_1m: float = AUDIO_OUTPUT_COST_PER_1M,
-    text_input_cost_per_1m: float = TEXT_INPUT_COST_PER_1M,
-    text_output_cost_per_1m: float = TEXT_OUTPUT_COST_PER_1M,
-    image_input_cost_per_1m: float = IMAGE_INPUT_COST_PER_1M,
+    audio_input_cost_per_1m: float,
+    audio_output_cost_per_1m: float,
+    text_input_cost_per_1m: float,
+    text_output_cost_per_1m: float,
+    image_input_cost_per_1m: float,
 ) -> float:
     """Compute dollar cost from a response usage object."""
     inp = getattr(usage, "input_token_details", None)
@@ -103,18 +93,39 @@ def _normalize_startup_voice(voice: str | None) -> str | None:
     return None
 
 
-class BaseRealtimeHandler(AsyncStreamHandler):
+class BaseRealtimeHandler(AsyncStreamHandler, ABC):
     """Shared OpenAI-compatible realtime stream handler."""
 
-    backend_provider: str = ""
-    realtime_sample_rate: int = OPENAI_REALTIME_SAMPLE_RATE
-    requires_api_key: bool = False
-    refresh_client_on_reconnect: bool = False
-    audio_input_cost_per_1m: float = AUDIO_INPUT_COST_PER_1M
-    audio_output_cost_per_1m: float = AUDIO_OUTPUT_COST_PER_1M
-    text_input_cost_per_1m: float = TEXT_INPUT_COST_PER_1M
-    text_output_cost_per_1m: float = TEXT_OUTPUT_COST_PER_1M
-    image_input_cost_per_1m: float = IMAGE_INPUT_COST_PER_1M
+    BACKEND_PROVIDER: ClassVar[str]
+    SAMPLE_RATE: ClassVar[int]
+    REQUIRES_API_KEY: ClassVar[bool]
+    REFRESH_CLIENT_ON_RECONNECT: ClassVar[bool]
+    AUDIO_INPUT_COST_PER_1M: ClassVar[float]
+    AUDIO_OUTPUT_COST_PER_1M: ClassVar[float]
+    TEXT_INPUT_COST_PER_1M: ClassVar[float]
+    TEXT_OUTPUT_COST_PER_1M: ClassVar[float]
+    IMAGE_INPUT_COST_PER_1M: ClassVar[float]
+
+    _REQUIRED_PROVIDER_CONFIG: ClassVar[tuple[str, ...]] = (
+        "BACKEND_PROVIDER",
+        "SAMPLE_RATE",
+        "REQUIRES_API_KEY",
+        "REFRESH_CLIENT_ON_RECONNECT",
+        "AUDIO_INPUT_COST_PER_1M",
+        "AUDIO_OUTPUT_COST_PER_1M",
+        "TEXT_INPUT_COST_PER_1M",
+        "TEXT_OUTPUT_COST_PER_1M",
+        "IMAGE_INPUT_COST_PER_1M",
+    )
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Require concrete providers to declare their provider configuration."""
+        super().__init_subclass__(**kwargs)
+        missing = [name for name in cls._REQUIRED_PROVIDER_CONFIG if name not in cls.__dict__]
+        if missing:
+            raise TypeError(
+                f"{cls.__name__} must define provider config class variable(s): {', '.join(missing)}"
+            )
 
     def __init__(
         self,
@@ -124,7 +135,7 @@ class BaseRealtimeHandler(AsyncStreamHandler):
         startup_voice: Optional[str] = None,
     ):
         """Initialize the handler."""
-        sample_rate = self.realtime_sample_rate
+        sample_rate = self.SAMPLE_RATE
         super().__init__(
             expected_layout="mono",
             output_sample_rate=sample_rate,
@@ -189,14 +200,14 @@ class BaseRealtimeHandler(AsyncStreamHandler):
 
     def _normalize_startup_voice(self, voice: str | None) -> str | None:
         """Return a valid persisted startup voice for this backend, or None."""
-        available_voices = get_available_voices_for_backend(self.backend_provider)
+        available_voices = get_available_voices_for_backend(self.BACKEND_PROVIDER)
         if voice in available_voices:
             return voice
         if voice:
             logger.warning(
                 "Ignoring persisted startup voice %r for backend=%r; expected one of %s",
                 voice,
-                self.backend_provider,
+                self.BACKEND_PROVIDER,
                 available_voices,
             )
         return None
@@ -209,21 +220,21 @@ class BaseRealtimeHandler(AsyncStreamHandler):
         """Return websocket closure exceptions handled as reconnectable/ignorable."""
         return (ConnectionClosedError,)
 
+    @abstractmethod
     def _get_session_audio_rates(self) -> tuple[Literal[24000] | None, Literal[24000] | None]:
         """Return ``(input_rate, output_rate)`` for the realtime session config."""
-        raise NotImplementedError
 
+    @abstractmethod
     def _get_session_instructions(self) -> str:
         """Return session instructions for this backend."""
-        raise NotImplementedError
 
+    @abstractmethod
     def _get_session_voice(self, default: str | None = None) -> str:
         """Return the configured session voice for this backend."""
-        raise NotImplementedError
 
+    @abstractmethod
     def _get_active_tool_specs(self) -> list[dict[str, Any]]:
         """Return active tool specs for the current session dependencies."""
-        raise NotImplementedError
 
     async def _wait_for_output_item(self) -> Tuple[int, NDArray[np.int16]] | AdditionalOutputs | None:
         """Wait for the next output item."""
@@ -257,7 +268,7 @@ class BaseRealtimeHandler(AsyncStreamHandler):
 
     def get_current_voice(self) -> str:
         """Return the voice currently selected for this handler."""
-        default_voice = get_default_voice_for_backend(self.backend_provider)
+        default_voice = get_default_voice_for_backend(self.BACKEND_PROVIDER)
         return self._voice_override or self._get_session_voice(default=default_voice)
 
     async def apply_personality(self, profile: str | None) -> str:
@@ -351,17 +362,17 @@ class BaseRealtimeHandler(AsyncStreamHandler):
         """Compute response cost using this backend's pricing."""
         return _compute_response_cost(
             usage,
-            audio_input_cost_per_1m=self.audio_input_cost_per_1m,
-            audio_output_cost_per_1m=self.audio_output_cost_per_1m,
-            text_input_cost_per_1m=self.text_input_cost_per_1m,
-            text_output_cost_per_1m=self.text_output_cost_per_1m,
-            image_input_cost_per_1m=self.image_input_cost_per_1m,
+            audio_input_cost_per_1m=self.AUDIO_INPUT_COST_PER_1M,
+            audio_output_cost_per_1m=self.AUDIO_OUTPUT_COST_PER_1M,
+            text_input_cost_per_1m=self.TEXT_INPUT_COST_PER_1M,
+            text_output_cost_per_1m=self.TEXT_OUTPUT_COST_PER_1M,
+            image_input_cost_per_1m=self.IMAGE_INPUT_COST_PER_1M,
         )
 
     async def start_up(self) -> None:
         """Start the handler with minimal retries on unexpected websocket closure."""
         openai_api_key = config.OPENAI_API_KEY
-        if self.gradio_mode and self.requires_api_key and not openai_api_key:
+        if self.gradio_mode and self.REQUIRES_API_KEY and not openai_api_key:
             # api key was not found in .env or in the environment variables
             await self.wait_for_args()  # type: ignore[no-untyped-call]
             args = list(self.latest_args)
@@ -384,7 +395,7 @@ class BaseRealtimeHandler(AsyncStreamHandler):
                 # Abrupt close (e.g., "no close frame received or sent") → retry
                 logger.warning("Realtime websocket closed unexpectedly (attempt %d/%d): %s", attempt, max_attempts, e)
                 if attempt < max_attempts:
-                    if self.refresh_client_on_reconnect:
+                    if self.REFRESH_CLIENT_ON_RECONNECT:
                         self.client = await self._build_realtime_client()
                     # exponential backoff with jitter
                     base_delay = 2 ** (attempt - 1)  # 1s, 2s, 4s, 8s, etc.
@@ -426,7 +437,7 @@ class BaseRealtimeHandler(AsyncStreamHandler):
                 self._connected_event.clear()
             except Exception:
                 pass
-            if self.refresh_client_on_reconnect:
+            if self.REFRESH_CLIENT_ON_RECONNECT:
                 self.client = await self._build_realtime_client()
             asyncio.create_task(self._run_realtime_session(), name="openai-realtime-restart")
             try:
@@ -997,11 +1008,11 @@ class BaseRealtimeHandler(AsyncStreamHandler):
 
     async def get_available_voices(self) -> list[str]:
         """Return available voices for this backend."""
-        return get_available_voices_for_backend(self.backend_provider)
+        return get_available_voices_for_backend(self.BACKEND_PROVIDER)
 
+    @abstractmethod
     async def _build_realtime_client(self, api_key: str | None = None) -> AsyncOpenAI:
         """Build the realtime SDK client for this backend."""
-        raise NotImplementedError
 
     async def send_idle_signal(self, idle_duration: float) -> None:
         """Send an idle signal to the openai server."""

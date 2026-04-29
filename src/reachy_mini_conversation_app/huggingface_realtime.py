@@ -19,8 +19,6 @@ from reachy_mini_conversation_app.config import (
 from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
 from reachy_mini_conversation_app.base_realtime import (
     _RESPONSE_DONE_TIMEOUT,
-    S2S_REALTIME_SAMPLE_RATE,
-    OPENAI_REALTIME_SAMPLE_RATE,
     BaseRealtimeHandler,
     InputTranscriptChunksByItem,
 )
@@ -65,10 +63,15 @@ def _build_openai_compatible_client_from_realtime_url(
 class HuggingFaceRealtimeHandler(BaseRealtimeHandler):
     """Realtime handler for Hugging Face speech-to-speech endpoints."""
 
-    backend_provider = S2S_BACKEND
-    realtime_sample_rate = S2S_REALTIME_SAMPLE_RATE
-    requires_api_key = False
-    refresh_client_on_reconnect = True
+    BACKEND_PROVIDER = S2S_BACKEND
+    SAMPLE_RATE = 16000
+    REQUIRES_API_KEY = False
+    REFRESH_CLIENT_ON_RECONNECT = True
+    AUDIO_INPUT_COST_PER_1M = 0.0
+    AUDIO_OUTPUT_COST_PER_1M = 0.0
+    TEXT_INPUT_COST_PER_1M = 0.0
+    TEXT_OUTPUT_COST_PER_1M = 0.0
+    IMAGE_INPUT_COST_PER_1M = 0.0
 
     def _response_done_timeout(self) -> float:
         """Return the response completion timeout."""
@@ -87,16 +90,16 @@ class HuggingFaceRealtimeHandler(BaseRealtimeHandler):
         input_rate: Literal[24000] | None
         output_rate: Literal[24000] | None
 
-        if self.input_sample_rate == S2S_REALTIME_SAMPLE_RATE:
+        if self.input_sample_rate == self.SAMPLE_RATE:
             input_rate = None
-        elif self.input_sample_rate == OPENAI_REALTIME_SAMPLE_RATE:
+        elif self.input_sample_rate == 24000:
             input_rate = 24000
         else:
             raise AssertionError(f"Unsupported S2S input sample rate: {self.input_sample_rate}")
 
-        if self.output_sample_rate == S2S_REALTIME_SAMPLE_RATE:
+        if self.output_sample_rate == self.SAMPLE_RATE:
             output_rate = None
-        elif self.output_sample_rate == OPENAI_REALTIME_SAMPLE_RATE:
+        elif self.output_sample_rate == 24000:
             output_rate = 24000
         else:
             raise AssertionError(f"Unsupported S2S output sample rate: {self.output_sample_rate}")
