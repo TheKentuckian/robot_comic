@@ -55,29 +55,6 @@ class InputTranscriptChunksByItem(BaseModel):
     deltas: list[str] = Field(default_factory=list)
 
 
-def _compute_response_cost(
-    usage: Any,
-    *,
-    audio_input_cost_per_1m: float,
-    audio_output_cost_per_1m: float,
-    text_input_cost_per_1m: float,
-    text_output_cost_per_1m: float,
-    image_input_cost_per_1m: float,
-) -> float:
-    """Compute dollar cost from a response usage object."""
-    inp = getattr(usage, "input_token_details", None)
-    out = getattr(usage, "output_token_details", None)
-    cost = 0.0
-    if inp:
-        cost += (getattr(inp, "audio_tokens", 0) or 0) * audio_input_cost_per_1m / 1e6
-        cost += (getattr(inp, "text_tokens", 0) or 0) * text_input_cost_per_1m / 1e6
-        cost += (getattr(inp, "image_tokens", 0) or 0) * image_input_cost_per_1m / 1e6
-    if out:
-        cost += (getattr(out, "audio_tokens", 0) or 0) * audio_output_cost_per_1m / 1e6
-        cost += (getattr(out, "text_tokens", 0) or 0) * text_output_cost_per_1m / 1e6
-    return cost
-
-
 def _normalize_startup_voice(voice: str | None) -> str | None:
     """Return a valid persisted startup voice for the active backend, or None."""
     available_voices = get_available_voices_for_backend()
@@ -221,8 +198,8 @@ class BaseRealtimeHandler(AsyncStreamHandler, ABC):
         return (ConnectionClosedError,)
 
     @abstractmethod
-    def _get_session_audio_rates(self) -> tuple[Literal[24000] | None, Literal[24000] | None]:
-        """Return ``(input_rate, output_rate)`` for the realtime session config."""
+    def _get_openai_compatible_session_audio_rates(self) -> tuple[Literal[24000] | None, Literal[24000] | None]:
+        """Return ``(input_rate, output_rate)`` for the OpenAI-compatible session payload."""
 
     @abstractmethod
     def _get_session_instructions(self) -> str:
@@ -360,14 +337,17 @@ class BaseRealtimeHandler(AsyncStreamHandler, ABC):
 
     def _compute_response_cost(self, usage: Any) -> float:
         """Compute response cost using this backend's pricing."""
-        return _compute_response_cost(
-            usage,
-            audio_input_cost_per_1m=self.AUDIO_INPUT_COST_PER_1M,
-            audio_output_cost_per_1m=self.AUDIO_OUTPUT_COST_PER_1M,
-            text_input_cost_per_1m=self.TEXT_INPUT_COST_PER_1M,
-            text_output_cost_per_1m=self.TEXT_OUTPUT_COST_PER_1M,
-            image_input_cost_per_1m=self.IMAGE_INPUT_COST_PER_1M,
-        )
+        inp = getattr(usage, "input_token_details", None)
+        out = getattr(usage, "output_token_details", None)
+        cost = 0.0
+        if inp:
+            cost += (getattr(inp, "audio_tokens", 0) or 0) * self.AUDIO_INPUT_COST_PER_1M / 1e6
+            cost += (getattr(inp, "text_tokens", 0) or 0) * self.TEXT_INPUT_COST_PER_1M / 1e6
+            cost += (getattr(inp, "image_tokens", 0) or 0) * self.IMAGE_INPUT_COST_PER_1M / 1e6
+        if out:
+            cost += (getattr(out, "audio_tokens", 0) or 0) * self.AUDIO_OUTPUT_COST_PER_1M / 1e6
+            cost += (getattr(out, "text_tokens", 0) or 0) * self.TEXT_OUTPUT_COST_PER_1M / 1e6
+        return cost
 
     async def start_up(self) -> None:
         """Start the handler with minimal retries on unexpected websocket closure."""
@@ -646,7 +626,7 @@ class BaseRealtimeHandler(AsyncStreamHandler, ABC):
 
     async def _run_realtime_session(self) -> None:
         """Establish and manage a single realtime session."""
-        input_rate, output_rate = self._get_session_audio_rates()
+        input_rate, output_rate = self._get_openai_compatible_session_audio_rates()
         tool_specs = self._get_active_tool_specs()
         logger.info(
             "Tools to be used in conversation: %s",

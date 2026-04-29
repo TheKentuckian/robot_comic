@@ -14,10 +14,7 @@ import reachy_mini_conversation_app.tools.core_tools as ct_mod
 import reachy_mini_conversation_app.huggingface_realtime as hf_mod
 import reachy_mini_conversation_app.tools.background_tool_manager as btm_mod
 from reachy_mini_conversation_app.config import DEFAULT_VOICE, config
-from reachy_mini_conversation_app.openai_realtime import (
-    OpenaiRealtimeHandler,
-    _compute_response_cost,
-)
+from reachy_mini_conversation_app.openai_realtime import OpenaiRealtimeHandler
 from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
 from reachy_mini_conversation_app.huggingface_realtime import HuggingFaceRealtimeHandler
 from reachy_mini_conversation_app.tools.background_tool_manager import ToolCallRoutine
@@ -1079,9 +1076,10 @@ def _make_usage(
     ids=["normal", "all_none", "mixed", "missing_details"],
 )
 def test_compute_response_cost(usage_kwargs: dict[str, Any], expect_positive: bool) -> None:
-    """Verify _compute_response_cost handles various token combinations without crashing."""
+    """Verify handler cost computation handles various token combinations without crashing."""
     usage = _make_usage(**usage_kwargs)
-    cost = _compute_response_cost(usage)
+    handler = OpenaiRealtimeHandler(ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()))
+    cost = handler._compute_response_cost(usage)
     if expect_positive:
         assert cost > 0
     else:

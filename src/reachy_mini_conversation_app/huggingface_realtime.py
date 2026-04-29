@@ -81,8 +81,8 @@ class HuggingFaceRealtimeHandler(BaseRealtimeHandler):
         """Return websocket closure exceptions handled as reconnectable/ignorable."""
         return (ConnectionClosedError,)
 
-    def _get_session_audio_rates(self) -> tuple[Literal[24000] | None, Literal[24000] | None]:
-        """Return S2S audio rates for the OpenAI-compatible session config.
+    def _get_openai_compatible_session_audio_rates(self) -> tuple[Literal[24000] | None, Literal[24000] | None]:
+        """Return S2S audio rates for the OpenAI-compatible session payload.
 
         The OpenAI SDK type accepts only 24 kHz or None. The Hugging Face
         speech-to-speech server interprets None as its native 16 kHz default.

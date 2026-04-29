@@ -13,15 +13,12 @@ from reachy_mini_conversation_app.base_realtime import (
     BaseRealtimeHandler,
     _normalize_startup_voice,
 )
-from reachy_mini_conversation_app.base_realtime import (
-    _compute_response_cost as _compute_response_cost_with_rates,
-)
 from reachy_mini_conversation_app.tools.core_tools import get_active_tool_specs
 
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["OpenaiRealtimeHandler", "_compute_response_cost", "_normalize_startup_voice"]
+__all__ = ["OpenaiRealtimeHandler", "_normalize_startup_voice"]
 
 
 class OpenaiRealtimeHandler(BaseRealtimeHandler):
@@ -45,7 +42,7 @@ class OpenaiRealtimeHandler(BaseRealtimeHandler):
         """Return websocket closure exceptions handled as reconnectable/ignorable."""
         return (ConnectionClosedError,)
 
-    def _get_session_audio_rates(self) -> tuple[Literal[24000], Literal[24000]]:
+    def _get_openai_compatible_session_audio_rates(self) -> tuple[Literal[24000], Literal[24000]]:
         """OpenAI Realtime requires an explicit 24 kHz audio session config."""
         return 24000, 24000
 
@@ -132,15 +129,3 @@ class OpenaiRealtimeHandler(BaseRealtimeHandler):
             logger.warning("OPENAI_API_KEY missing. Proceeding with a placeholder (tests/offline).")
             resolved_api_key = "DUMMY"
         return AsyncOpenAI(api_key=resolved_api_key)
-
-
-def _compute_response_cost(usage: Any) -> float:
-    """Compute OpenAI realtime dollar cost from a response usage object."""
-    return _compute_response_cost_with_rates(
-        usage,
-        audio_input_cost_per_1m=OpenaiRealtimeHandler.AUDIO_INPUT_COST_PER_1M,
-        audio_output_cost_per_1m=OpenaiRealtimeHandler.AUDIO_OUTPUT_COST_PER_1M,
-        text_input_cost_per_1m=OpenaiRealtimeHandler.TEXT_INPUT_COST_PER_1M,
-        text_output_cost_per_1m=OpenaiRealtimeHandler.TEXT_OUTPUT_COST_PER_1M,
-        image_input_cost_per_1m=OpenaiRealtimeHandler.IMAGE_INPUT_COST_PER_1M,
-    )
