@@ -9,7 +9,7 @@ callable to avoid cross-thread issues.
 from __future__ import annotations
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import Any, Callable, Optional, Protocol
 
 from fastapi import Query, FastAPI, Request
 
@@ -19,12 +19,6 @@ from .config import (
     get_default_voice_for_backend,
     get_available_voices_for_backend,
 )
-from .openai_realtime import OpenaiRealtimeHandler
-from .huggingface_realtime import HuggingFaceRealtimeHandler
-
-
-if TYPE_CHECKING:
-    from .gemini_live import GeminiLiveHandler
 from .headless_personality import (
     DEFAULT_OPTION,
     _sanitize_name,
@@ -40,9 +34,29 @@ from .headless_personality import (
 logger = logging.getLogger(__name__)
 
 
+class PersonalityHandler(Protocol):
+    """Handler surface used by the headless personality routes."""
+
+    async def apply_personality(self, profile: str | None) -> str:
+        """Apply a personality profile."""
+        ...
+
+    async def get_available_voices(self) -> list[str]:
+        """Return voices available for the active backend."""
+        ...
+
+    def get_current_voice(self) -> str:
+        """Return the current voice."""
+        ...
+
+    async def change_voice(self, voice: str) -> str:
+        """Change the current voice."""
+        ...
+
+
 def mount_personality_routes(
     app: FastAPI,
-    handler: OpenaiRealtimeHandler | HuggingFaceRealtimeHandler | GeminiLiveHandler,
+    handler: PersonalityHandler,
     get_loop: Callable[[], asyncio.AbstractEventLoop | None],
     *,
     persist_personality: Callable[[Optional[str], Optional[str]], None] | None = None,

@@ -2,7 +2,7 @@ import random
 import asyncio
 import logging
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -112,7 +112,7 @@ async def test_tool_completion_does_not_reset_head_wobbler(monkeypatch: Any) -> 
         head_wobbler=head_wobbler,
     )
     handler = OpenaiRealtimeHandler(deps)
-    fake_client: Any = FakeClient()
+    fake_client = FakeClient()
     handler.client = fake_client
 
     session_task = asyncio.create_task(handler._run_realtime_session())
@@ -217,16 +217,16 @@ async def test_non_idle_tool_call_does_not_queue_progress_response(monkeypatch: 
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
     handler = OpenaiRealtimeHandler(deps)
-    fake_client: Any = FakeClient()
+    fake_client = FakeClient()
     handler.client = fake_client
     safe_response_create = AsyncMock()
-    object.__setattr__(handler, "_safe_response_create", safe_response_create)
+    monkeypatch.setattr(handler, "_safe_response_create", safe_response_create)
     start_up = MagicMock()
     shutdown = AsyncMock()
     start_tool = AsyncMock(return_value=MagicMock(tool_id="camera-call_camera_1-0"))
-    object.__setattr__(handler.tool_manager, "start_up", start_up)
-    object.__setattr__(handler.tool_manager, "shutdown", shutdown)
-    object.__setattr__(handler.tool_manager, "start_tool", start_tool)
+    monkeypatch.setattr(type(handler.tool_manager), "start_up", start_up)
+    monkeypatch.setattr(type(handler.tool_manager), "shutdown", shutdown)
+    monkeypatch.setattr(type(handler.tool_manager), "start_tool", start_tool)
 
     await handler._run_realtime_session()
 
@@ -312,14 +312,14 @@ async def test_user_speech_events_reset_idle_timer(monkeypatch: Any) -> None:
     movement_manager = MagicMock()
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=movement_manager)
     handler = OpenaiRealtimeHandler(deps)
-    fake_client: Any = FakeClient()
+    fake_client = FakeClient()
     handler.client = fake_client
     handler.last_activity_time = asyncio.get_running_loop().time() - 60.0
 
     start_up = MagicMock()
     shutdown = AsyncMock()
-    object.__setattr__(handler.tool_manager, "start_up", start_up)
-    object.__setattr__(handler.tool_manager, "shutdown", shutdown)
+    monkeypatch.setattr(type(handler.tool_manager), "start_up", start_up)
+    monkeypatch.setattr(type(handler.tool_manager), "shutdown", shutdown)
 
     previous_activity_time = handler.last_activity_time
     await handler._run_realtime_session()
@@ -409,13 +409,13 @@ async def test_partial_transcription_uses_latest_snapshot(monkeypatch: Any) -> N
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
     handler = HuggingFaceRealtimeHandler(deps)
-    fake_client: Any = FakeClient()
+    fake_client = FakeClient()
     handler.client = fake_client
 
     start_up = MagicMock()
     shutdown = AsyncMock()
-    object.__setattr__(handler.tool_manager, "start_up", start_up)
-    object.__setattr__(handler.tool_manager, "shutdown", shutdown)
+    monkeypatch.setattr(type(handler.tool_manager), "start_up", start_up)
+    monkeypatch.setattr(type(handler.tool_manager), "shutdown", shutdown)
 
     await handler._run_realtime_session()
 
@@ -509,12 +509,12 @@ async def test_output_audio_delta_passes_output_sample_rate_to_head_wobbler(monk
         head_wobbler=head_wobbler,
     )
     handler = OpenaiRealtimeHandler(deps, gradio_mode=True)
-    handler.client = cast(Any, FakeClient())
+    handler.client = FakeClient()
 
     start_up = MagicMock()
     shutdown = AsyncMock()
-    object.__setattr__(handler.tool_manager, "start_up", start_up)
-    object.__setattr__(handler.tool_manager, "shutdown", shutdown)
+    monkeypatch.setattr(type(handler.tool_manager), "start_up", start_up)
+    monkeypatch.setattr(type(handler.tool_manager), "shutdown", shutdown)
 
     await handler._run_realtime_session()
 
@@ -534,7 +534,7 @@ async def test_emit_skips_idle_signal_while_response_active(monkeypatch: Any) ->
     handler._response_done_event.clear()
 
     send_idle_signal = AsyncMock()
-    object.__setattr__(handler, "send_idle_signal", send_idle_signal)
+    monkeypatch.setattr(handler, "send_idle_signal", send_idle_signal)
     monkeypatch.setattr(rt_mod, "wait_for_item", AsyncMock(return_value=None))
 
     result = await handler.emit()
@@ -746,9 +746,9 @@ async def test_start_up_hf_gradio_does_not_wait_for_api_key(monkeypatch: Any) ->
     run_realtime_session = AsyncMock(return_value=None)
     wait_for_args = AsyncMock(side_effect=AssertionError("wait_for_args should not be called"))
 
-    object.__setattr__(handler, "_build_realtime_client", build_client)
-    object.__setattr__(handler, "_run_realtime_session", run_realtime_session)
-    object.__setattr__(handler, "wait_for_args", wait_for_args)
+    monkeypatch.setattr(handler, "_build_realtime_client", build_client)
+    monkeypatch.setattr(handler, "_run_realtime_session", run_realtime_session)
+    monkeypatch.setattr(handler, "wait_for_args", wait_for_args)
 
     await handler.start_up()
 
@@ -821,7 +821,7 @@ async def test_run_realtime_session_uses_default_voice_for_lb_allocated_sessions
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
     handler = HuggingFaceRealtimeHandler(deps)
-    fake_client: Any = FakeClient()
+    fake_client = FakeClient()
     handler.client = fake_client
 
     await handler._run_realtime_session()
@@ -896,7 +896,7 @@ async def test_run_realtime_session_passes_allocated_session_query(monkeypatch: 
             self.realtime = FakeRealtime()
 
     handler = HuggingFaceRealtimeHandler(ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()))
-    fake_client: Any = FakeClient()
+    fake_client = FakeClient()
     handler.client = fake_client
     handler._realtime_connect_query = {"session_token": "abc123"}
 
@@ -1023,7 +1023,7 @@ async def test_apply_personality_uses_selected_voice_for_lb_allocated_sessions(m
         session = FakeSession()
 
     handler = HuggingFaceRealtimeHandler(ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()))
-    handler.connection = cast(Any, FakeConnection())
+    handler.connection = FakeConnection()
     monkeypatch.setattr(handler, "_restart_session", AsyncMock(return_value=None))
 
     result = await handler.apply_personality("example")
@@ -1117,8 +1117,6 @@ async def test_response_sender_retries_when_active_response_error_uses_type_only
     monkeypatch.setattr(rt_mod, "get_session_voice", lambda default=OPENAI_DEFAULT_VOICE: "alloy")
     monkeypatch.setattr(rt_mod, "get_active_tool_specs", lambda _: [])
 
-    event_queue: asyncio.Queue[Any] = asyncio.Queue()
-
     class FakeError:
         def __init__(self, message: str) -> None:
             self.message = message
@@ -1135,6 +1133,8 @@ async def test_response_sender_retries_when_active_response_error_uses_type_only
             self.type = etype
             for key, value in kwargs.items():
                 setattr(self, key, value)
+
+    event_queue: asyncio.Queue[FakeEvent | None] = asyncio.Queue()
 
     class FakeSession:
         async def update(self, **_kw: Any) -> None:
@@ -1191,7 +1191,7 @@ async def test_response_sender_retries_when_active_response_error_uses_type_only
         def __aiter__(self) -> "FakeConn":
             return self
 
-        async def __anext__(self) -> Any:
+        async def __anext__(self) -> FakeEvent:
             event = await event_queue.get()
             if event is None:
                 raise StopAsyncIteration
@@ -1206,8 +1206,7 @@ async def test_response_sender_retries_when_active_response_error_uses_type_only
             self.realtime = FakeRealtime()
 
     handler = rt_mod.OpenaiRealtimeHandler(ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()))
-    fake_client: Any = FakeClient()
-    handler.client = fake_client
+    handler.client = FakeClient()
 
     session_task = asyncio.create_task(handler._run_realtime_session())
     await asyncio.sleep(0)
@@ -1259,9 +1258,8 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
     REJECT_CALL_NUMBERS = {1, 3, 5, 10, 25, 50, 75, 100, 150, 200, 300, 399}
     EXPECTED_TOTAL_CALLS = N_TOOL_RESULTS + len(REJECT_CALL_NUMBERS)
 
-    event_queue: asyncio.Queue[Any] = asyncio.Queue()
     response_create_log: list[tuple[int, dict[str, Any]]] = []
-    handler_ref: list[Any] = []
+    handler_ref: list[rt_mod.OpenaiRealtimeHandler] = []
 
     # ---- Fake event / error objects mirroring the OpenAI SDK shapes ----
 
@@ -1284,6 +1282,8 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
             self.type = etype
             for k, v in kwargs.items():
                 setattr(self, k, v)
+
+    event_queue: asyncio.Queue[FakeEvent | None] = asyncio.Queue()
 
     # ---- Fake connection components ----
 
@@ -1387,7 +1387,7 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
             return self
 
         async def __anext__(self) -> FakeEvent:
-            event: FakeEvent = await event_queue.get()
+            event = await event_queue.get()
             if event is None:  # sentinel → end iteration
                 raise StopAsyncIteration
             return event
@@ -1651,8 +1651,8 @@ async def test_openai_excludes_head_tracking_when_no_head_tracker(monkeypatch: A
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock(), camera_worker=None)
     handler = OpenaiRealtimeHandler(deps)
     handler.client = FakeClient()
-    object.__setattr__(handler.tool_manager, "start_up", MagicMock())
-    object.__setattr__(handler.tool_manager, "shutdown", AsyncMock())
+    monkeypatch.setattr(type(handler.tool_manager), "start_up", MagicMock())
+    monkeypatch.setattr(type(handler.tool_manager), "shutdown", AsyncMock())
 
     await handler._run_realtime_session()
 
@@ -1668,8 +1668,8 @@ async def test_openai_excludes_head_tracking_when_no_head_tracker(monkeypatch: A
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock(), camera_worker=camera_worker)
     handler = OpenaiRealtimeHandler(deps)
     handler.client = FakeClient()
-    object.__setattr__(handler.tool_manager, "start_up", MagicMock())
-    object.__setattr__(handler.tool_manager, "shutdown", AsyncMock())
+    monkeypatch.setattr(type(handler.tool_manager), "start_up", MagicMock())
+    monkeypatch.setattr(type(handler.tool_manager), "shutdown", AsyncMock())
 
     await handler._run_realtime_session()
 

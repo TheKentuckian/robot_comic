@@ -4,7 +4,7 @@ import sys
 import asyncio
 import threading
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -16,19 +16,12 @@ from fastapi.testclient import TestClient
 
 from reachy_mini.media.media_manager import MediaBackend
 from reachy_mini_conversation_app.config import GEMINI_AVAILABLE_VOICES, config
-from reachy_mini_conversation_app.console import LocalStream
+from reachy_mini_conversation_app.console import LOCAL_PLAYER_BACKEND, LocalStream
 from reachy_mini_conversation_app.startup_settings import (
     StartupSettings,
     load_startup_settings_into_runtime,
 )
 from reachy_mini_conversation_app.headless_personality_ui import mount_personality_routes
-
-
-LOCAL_PLAYER_BACKEND = (
-    getattr(MediaBackend, "LOCAL", None)
-    or getattr(MediaBackend, "GSTREAMER", None)
-    or getattr(MediaBackend, "DEFAULT", None)
-)
 
 
 def test_clear_audio_queue_prefers_clear_player_when_available() -> None:
@@ -111,7 +104,7 @@ async def test_play_loop_feeds_head_wobbler_with_local_playback_delay() -> None:
     )
     robot = SimpleNamespace(media=media)
     handler = Handler()
-    stream = LocalStream(cast(Any, handler), robot)
+    stream = LocalStream(handler, robot)
 
     async def stop_soon() -> None:
         await asyncio.sleep(0.01)

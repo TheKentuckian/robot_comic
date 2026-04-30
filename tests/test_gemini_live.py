@@ -3,7 +3,7 @@
 import base64
 import asyncio
 from types import SimpleNamespace
-from typing import Any, Callable, AsyncIterator, cast
+from typing import Any, Callable, AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, call
 
 import numpy as np
@@ -112,8 +112,8 @@ async def test_gemini_turn_buffers_transcripts_and_schedules_motion_reset(
         head_wobbler=head_wobbler,
     )
     handler = GeminiLiveHandler(deps)
-    object.__setattr__(handler.tool_manager, "start_up", MagicMock())
-    object.__setattr__(handler.tool_manager, "shutdown", AsyncMock())
+    monkeypatch.setattr(type(handler.tool_manager), "start_up", MagicMock())
+    monkeypatch.setattr(type(handler.tool_manager), "shutdown", AsyncMock())
 
     audio_bytes = b"\x00\x00\x10\x00" * 256
     session = _FakeSession(
@@ -150,7 +150,7 @@ async def test_gemini_turn_buffers_transcripts_and_schedules_motion_reset(
         ],
         stop_event=handler._stop_event,
     )
-    handler.client = cast(Any, _FakeLiveClient(session))
+    handler.client = _FakeLiveClient(session)
 
     task = asyncio.create_task(handler._run_live_session())
     await _wait_for(
