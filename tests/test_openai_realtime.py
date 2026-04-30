@@ -1463,10 +1463,13 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
             is_idle_tool_call=False,
         )
 
-    # Yield so spawned tool tasks, the listener, and the sender can drain.
-    # This stress test queues hundreds of serialized response.create calls, so
-    # slower CI runners need a wider drain window before teardown.
-    await asyncio.sleep(10)
+    # Wait until spawned tool tasks, the listener, and the sender have drained.
+    # This stress test queues hundreds of serialized response.create calls; a
+    # condition-based wait avoids racing slower CI runners while still failing
+    # promptly if the sender stops making progress.
+    deadline = asyncio.get_event_loop().time() + 25.0
+    while fake_response_api._call_count < EXPECTED_TOTAL_CALLS and asyncio.get_event_loop().time() < deadline:
+        await asyncio.sleep(0.05)
 
     # ---- Tear down ----
 
