@@ -139,7 +139,7 @@ Copy `.env.example` to `.env` when you want to switch backends, provide API keys
 
 ### Hugging Face Connection Modes
 
-Use the built-in Hugging Face server. This is the default for a new install; set it explicitly only when you want to switch back from a saved local endpoint:
+Use the built-in Hugging Face server through the app-managed Space proxy. This is the default for a new install; set it explicitly only when you want to switch back from a saved local endpoint:
 
 ```env
 BACKEND_PROVIDER=huggingface

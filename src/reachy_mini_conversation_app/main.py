@@ -196,7 +196,7 @@ def run(
         transport_label = (
             "Hugging Face direct websocket"
             if hf_connection_selection.mode == HF_LOCAL_CONNECTION_MODE and hf_connection_selection.has_target
-            else "Hugging Face session allocator"
+            else "Hugging Face session proxy"
         )
         logger.info(
             "Using %s via Hugging Face realtime handler (%s)",

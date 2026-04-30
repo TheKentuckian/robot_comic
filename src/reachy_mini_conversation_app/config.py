@@ -93,6 +93,7 @@ HF_REALTIME_CONNECTION_MODE_ENV = "HF_REALTIME_CONNECTION_MODE"
 HF_REALTIME_WS_URL_ENV = "HF_REALTIME_WS_URL"
 HF_LOCAL_CONNECTION_MODE = "local"
 HF_DEPLOYED_CONNECTION_MODE = "deployed"
+HF_REALTIME_SESSION_PROXY_URL = "https://pollen-robotics-reachy-mini-realtime-url.hf.space/session"
 
 
 @dataclass(frozen=True)
@@ -100,10 +101,11 @@ class HFBackendDefaults:
     """Defaults for the Hugging Face realtime backend."""
 
     connection_mode: str = HF_DEPLOYED_CONNECTION_MODE
-    # App-managed Hugging Face server allocator. This is intentionally not read
-    # from the environment; users who need a custom target should use
-    # HF_REALTIME_CONNECTION_MODE=local with HF_REALTIME_WS_URL.
-    session_url: str = "https://v8si2gztnaqwjvf2.us-east-1.aws.endpoints.huggingface.cloud/session"
+    # App-managed Hugging Face Space proxy. The Space forwards to the current
+    # session allocator, so allocator changes do not require app releases.
+    # Users who need a custom target should use HF_REALTIME_CONNECTION_MODE=local
+    # with HF_REALTIME_WS_URL.
+    session_url: str = HF_REALTIME_SESSION_PROXY_URL
     voice: str = "Aiden"
     model_name: str = ""
     direct_port: int = 8765
@@ -355,7 +357,7 @@ class Config:
     HF_REALTIME_CONNECTION_MODE = (
         _normalize_hf_connection_mode(os.getenv(HF_REALTIME_CONNECTION_MODE_ENV)) or HF_DEFAULTS.connection_mode
     )
-    # Deliberately ignore HF_REALTIME_SESSION_URL from the environment; the app-managed allocator is HF_DEFAULTS.session_url.
+    # Deliberately ignore HF_REALTIME_SESSION_URL from the environment; the app-managed proxy is HF_DEFAULTS.session_url.
     HF_REALTIME_SESSION_URL = HF_DEFAULTS.session_url
     HF_REALTIME_WS_URL = os.getenv(HF_REALTIME_WS_URL_ENV)
     HF_HOME = os.getenv("HF_HOME", "./cache")
@@ -458,7 +460,7 @@ def refresh_runtime_config_from_env() -> None:
     config.HF_REALTIME_CONNECTION_MODE = (
         _normalize_hf_connection_mode(os.getenv(HF_REALTIME_CONNECTION_MODE_ENV)) or HF_DEFAULTS.connection_mode
     )
-    # Deliberately ignore HF_REALTIME_SESSION_URL from the environment; the app-managed allocator is HF_DEFAULTS.session_url.
+    # Deliberately ignore HF_REALTIME_SESSION_URL from the environment; the app-managed proxy is HF_DEFAULTS.session_url.
     config.HF_REALTIME_SESSION_URL = HF_DEFAULTS.session_url
     config.HF_REALTIME_WS_URL = os.getenv(HF_REALTIME_WS_URL_ENV)
     config.REACHY_MINI_CUSTOM_PROFILE = LOCKED_PROFILE or os.getenv("REACHY_MINI_CUSTOM_PROFILE")
@@ -499,7 +501,7 @@ def get_default_voice_for_backend(backend: str | None = None) -> str:
 
 
 def get_hf_session_url() -> str | None:
-    """Return the built-in Hugging Face session allocator URL, if any."""
+    """Return the built-in Hugging Face session proxy URL, if any."""
     value = (getattr(config, "HF_REALTIME_SESSION_URL", None) or "").strip()
     return value or None
 

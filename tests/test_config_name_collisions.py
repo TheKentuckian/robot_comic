@@ -74,6 +74,12 @@ def test_huggingface_backend_does_not_resolve_model_name() -> None:
     assert config_mod._resolve_model_name(config_mod.HF_BACKEND, "gpt-realtime") == ""
 
 
+def test_hf_default_session_url_uses_stable_space_proxy() -> None:
+    """The app should not embed the raw, replaceable Inference Endpoint allocator URL."""
+    assert config_mod.HF_DEFAULTS.session_url == "https://pollen-robotics-reachy-mini-realtime-url.hf.space/session"
+    assert ".aws.endpoints.huggingface.cloud" not in config_mod.HF_DEFAULTS.session_url
+
+
 @pytest.mark.parametrize(
     ("configured_mode", "session_url", "direct_ws_url", "expected_mode", "expected_has_target"),
     [

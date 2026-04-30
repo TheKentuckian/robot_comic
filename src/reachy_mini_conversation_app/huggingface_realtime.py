@@ -136,7 +136,7 @@ class HuggingFaceRealtimeHandler(BaseRealtimeHandler):
 
         session_url = connection_selection.session_url
         if not session_url:
-            raise RuntimeError("Built-in Hugging Face session allocator URL is unavailable")
+            raise RuntimeError("Built-in Hugging Face session proxy URL is unavailable")
         if direct_realtime_url:
             logger.info("HF_REALTIME_CONNECTION_MODE=deployed; ignoring HF_REALTIME_WS_URL.")
 
