@@ -433,30 +433,40 @@ def get_hf_direct_ws_url() -> str | None:
     return value or None
 
 
+def _resolve_hf_connection_mode(
+    configured_mode: str | None,
+    *,
+    session_url: str | None,
+    direct_ws_url: str | None,
+) -> str:
+    """Return the explicit Hugging Face mode or infer one from available targets."""
+    if configured_mode is not None:
+        return configured_mode
+    if direct_ws_url:
+        return HF_LOCAL_CONNECTION_MODE
+    if session_url:
+        return HF_DEPLOYED_CONNECTION_MODE
+    return HF_LOCAL_CONNECTION_MODE
+
+
 def get_hf_connection_selection() -> HFConnectionSelection:
     """Resolve the selected Hugging Face connection mode and whether it is usable."""
-    configured_mode = _normalize_hf_connection_mode(getattr(config, "HF_REALTIME_CONNECTION_MODE", None))
     session_url = get_hf_session_url()
     direct_ws_url = get_hf_direct_ws_url()
+    mode = _resolve_hf_connection_mode(
+        _normalize_hf_connection_mode(getattr(config, "HF_REALTIME_CONNECTION_MODE", None)),
+        session_url=session_url,
+        direct_ws_url=direct_ws_url,
+    )
 
-    if configured_mode is not None:
-        return HFConnectionSelection(
-            mode=configured_mode,
-            has_target=bool(direct_ws_url) if configured_mode == HF_LOCAL_CONNECTION_MODE else bool(session_url),
-            session_url=session_url,
-            direct_ws_url=direct_ws_url,
-        )
+    target_by_mode = {
+        HF_LOCAL_CONNECTION_MODE: direct_ws_url,
+        HF_DEPLOYED_CONNECTION_MODE: session_url,
+    }
 
-    if direct_ws_url:
-        return HFConnectionSelection(
-            mode=HF_LOCAL_CONNECTION_MODE,
-            has_target=True,
-            session_url=session_url,
-            direct_ws_url=direct_ws_url,
-        )
     return HFConnectionSelection(
-        mode=HF_DEPLOYED_CONNECTION_MODE if session_url else HF_LOCAL_CONNECTION_MODE,
-        has_target=bool(session_url),
+        mode=mode,
+        has_target=bool(target_by_mode[mode]),
         session_url=session_url,
         direct_ws_url=direct_ws_url,
     )

@@ -72,3 +72,34 @@ def test_huggingface_backend_does_not_resolve_model_name() -> None:
     """Hugging Face should rely on the server's model selection."""
     assert config_mod._resolve_model_name(config_mod.HF_BACKEND, None) == ""
     assert config_mod._resolve_model_name(config_mod.HF_BACKEND, "gpt-realtime") == ""
+
+
+@pytest.mark.parametrize(
+    ("configured_mode", "session_url", "direct_ws_url", "expected_mode", "expected_has_target"),
+    [
+        ("local", "https://hf.example.test/session", None, "local", False),
+        ("deployed", "https://hf.example.test/session", "ws://127.0.0.1:8765/v1/realtime", "deployed", True),
+        (None, None, "ws://127.0.0.1:8765/v1/realtime", "local", True),
+        (None, "https://hf.example.test/session", None, "deployed", True),
+        (None, None, None, "local", False),
+    ],
+)
+def test_hf_connection_selection_resolves_mode_then_target(
+    monkeypatch: pytest.MonkeyPatch,
+    configured_mode: str | None,
+    session_url: str | None,
+    direct_ws_url: str | None,
+    expected_mode: str,
+    expected_has_target: bool,
+) -> None:
+    """Hugging Face selection should separate mode choice from target availability."""
+    monkeypatch.setattr(config_mod.config, "HF_REALTIME_CONNECTION_MODE", configured_mode)
+    monkeypatch.setattr(config_mod.config, "HF_REALTIME_SESSION_URL", session_url)
+    monkeypatch.setattr(config_mod.config, "HF_REALTIME_WS_URL", direct_ws_url)
+
+    selection = config_mod.get_hf_connection_selection()
+
+    assert selection.mode == expected_mode
+    assert selection.has_target is expected_has_target
+    assert selection.session_url == session_url
+    assert selection.direct_ws_url == direct_ws_url
