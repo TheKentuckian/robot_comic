@@ -673,7 +673,7 @@ class BaseRealtimeHandler(ConversationHandler, ABC):
                 self._persist_credentials_if_needed()
             except Exception:
                 logger.exception("Realtime session.update failed; aborting startup")
-                return
+                raise
 
             logger.info("Realtime session updated successfully")
 

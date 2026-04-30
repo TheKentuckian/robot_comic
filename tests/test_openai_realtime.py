@@ -531,6 +531,41 @@ async def test_start_up_openai_gradio_collects_textbox_api_key(monkeypatch: Any)
 
 
 @pytest.mark.asyncio
+async def test_run_realtime_session_propagates_session_update_failure(monkeypatch: Any) -> None:
+    """A failed session.update must abort startup instead of looking like a clean session exit."""
+    monkeypatch.setattr(rt_mod, "get_session_instructions", lambda: "test")
+    monkeypatch.setattr(rt_mod, "get_session_voice", lambda default=OPENAI_DEFAULT_VOICE: "alloy")
+    monkeypatch.setattr(rt_mod, "get_active_tool_specs", lambda _: [])
+
+    class FakeSession:
+        async def update(self, **_kw: Any) -> None:
+            raise RuntimeError("invalid session config")
+
+    class FakeConn:
+        session = FakeSession()
+
+        async def __aenter__(self) -> "FakeConn":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> bool:
+            return False
+
+    class FakeRealtime:
+        def connect(self, **_kw: Any) -> FakeConn:
+            return FakeConn()
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.realtime = FakeRealtime()
+
+    handler = rt_mod.OpenaiRealtimeHandler(ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()))
+    handler.client = FakeClient()
+
+    with pytest.raises(RuntimeError, match="invalid session config"):
+        await handler._run_realtime_session()
+
+
+@pytest.mark.asyncio
 async def test_handler_uses_openai_sample_rate_for_openai_backend(monkeypatch: Any) -> None:
     """OpenAI backend should keep the 24 kHz realtime audio configuration."""
     monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")

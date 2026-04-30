@@ -145,6 +145,9 @@ def _normalize_backend_provider(
     candidate = (backend_provider or "").strip().lower()
     if candidate in DEFAULT_MODEL_NAME_BY_BACKEND:
         return candidate
+    if candidate:
+        expected = ", ".join(sorted(DEFAULT_MODEL_NAME_BY_BACKEND))
+        raise ValueError(f"Invalid BACKEND_PROVIDER={backend_provider!r}. Expected one of: {expected}.")
     return GEMINI_BACKEND if _is_gemini_model_name(model_name) else DEFAULT_BACKEND_PROVIDER
 
 
