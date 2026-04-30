@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 from pathlib import Path
+from dataclasses import dataclass
 from importlib.resources import files
 
 from dotenv import find_dotenv, load_dotenv
@@ -190,6 +191,16 @@ def _normalize_hf_connection_mode(value: str | None) -> str | None:
         )
         return None
     return candidate
+
+
+@dataclass(frozen=True)
+class HFConnectionSelection:
+    """Resolved Hugging Face connection mode and target availability."""
+
+    mode: str
+    has_target: bool
+    session_url: str | None = None
+    direct_ws_url: str | None = None
 
 
 def _collect_profile_names(profiles_root: Path) -> set[str]:
@@ -422,36 +433,38 @@ def get_hf_direct_ws_url() -> str | None:
     return value or None
 
 
-def get_hf_selected_connection_mode() -> str:
-    """Return the selected Hugging Face mode, falling back to URL inference."""
+def get_hf_connection_selection() -> HFConnectionSelection:
+    """Resolve the selected Hugging Face connection mode and whether it is usable."""
     configured_mode = _normalize_hf_connection_mode(getattr(config, "HF_REALTIME_CONNECTION_MODE", None))
+    session_url = get_hf_session_url()
+    direct_ws_url = get_hf_direct_ws_url()
+
     if configured_mode is not None:
-        return configured_mode
-    if get_hf_direct_ws_url():
-        return HF_LOCAL_CONNECTION_MODE
-    if get_hf_session_url():
-        return HF_DEPLOYED_CONNECTION_MODE
-    return HF_LOCAL_CONNECTION_MODE
+        return HFConnectionSelection(
+            mode=configured_mode,
+            has_target=bool(direct_ws_url) if configured_mode == HF_LOCAL_CONNECTION_MODE else bool(session_url),
+            session_url=session_url,
+            direct_ws_url=direct_ws_url,
+        )
 
-
-def get_hf_connection_mode() -> str | None:
-    """Return the selected Hugging Face mode only when its target is configured."""
-    configured_mode = _normalize_hf_connection_mode(getattr(config, "HF_REALTIME_CONNECTION_MODE", None))
-    if configured_mode == HF_LOCAL_CONNECTION_MODE:
-        return HF_LOCAL_CONNECTION_MODE if get_hf_direct_ws_url() else None
-    if configured_mode == HF_DEPLOYED_CONNECTION_MODE:
-        return HF_DEPLOYED_CONNECTION_MODE if get_hf_session_url() else None
-
-    if get_hf_direct_ws_url():
-        return HF_LOCAL_CONNECTION_MODE
-    if get_hf_session_url():
-        return HF_DEPLOYED_CONNECTION_MODE
-    return None
+    if direct_ws_url:
+        return HFConnectionSelection(
+            mode=HF_LOCAL_CONNECTION_MODE,
+            has_target=True,
+            session_url=session_url,
+            direct_ws_url=direct_ws_url,
+        )
+    return HFConnectionSelection(
+        mode=HF_DEPLOYED_CONNECTION_MODE if session_url else HF_LOCAL_CONNECTION_MODE,
+        has_target=bool(session_url),
+        session_url=session_url,
+        direct_ws_url=direct_ws_url,
+    )
 
 
 def has_hf_realtime_target() -> bool:
     """Return whether Hugging Face has a target for the selected mode."""
-    return get_hf_connection_mode() is not None
+    return get_hf_connection_selection().has_target
 
 
 def is_gemini_model() -> bool:

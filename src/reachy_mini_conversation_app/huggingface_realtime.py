@@ -12,9 +12,8 @@ from reachy_mini_conversation_app.config import (
     HF_BACKEND,
     HF_LOCAL_CONNECTION_MODE,
     config,
-    get_hf_session_url,
     get_hf_direct_ws_url,
-    get_hf_selected_connection_mode,
+    get_hf_connection_selection,
 )
 from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
 from reachy_mini_conversation_app.base_realtime import (
@@ -135,9 +134,9 @@ class HuggingFaceRealtimeHandler(BaseRealtimeHandler):
     async def _build_realtime_client(self, api_key: str | None = None) -> AsyncOpenAI:
         """Build the Hugging Face OpenAI-compatible realtime client."""
         resolved_api_key = (api_key or self._provided_api_key or config.OPENAI_API_KEY or "").strip()
-        selected_connection_mode = get_hf_selected_connection_mode()
+        connection_selection = get_hf_connection_selection()
         direct_realtime_url = get_hf_direct_ws_url()
-        if selected_connection_mode == HF_LOCAL_CONNECTION_MODE:
+        if connection_selection.mode == HF_LOCAL_CONNECTION_MODE:
             if not direct_realtime_url:
                 raise RuntimeError("HF_REALTIME_WS_URL must be set when HF_REALTIME_CONNECTION_MODE=local")
             client, connect_query = _build_openai_compatible_client_from_realtime_url(
@@ -148,7 +147,7 @@ class HuggingFaceRealtimeHandler(BaseRealtimeHandler):
             logger.info("Using direct Hugging Face realtime endpoint %s", direct_realtime_url)
             return client
 
-        session_url = get_hf_session_url()
+        session_url = connection_selection.session_url
         if not session_url:
             raise RuntimeError("Built-in Hugging Face session allocator URL is unavailable")
         if direct_realtime_url:

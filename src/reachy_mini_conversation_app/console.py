@@ -37,10 +37,9 @@ from reachy_mini_conversation_app.config import (
     get_backend_choice,
     get_hf_session_url,
     get_hf_direct_ws_url,
-    get_hf_connection_mode,
     has_hf_realtime_target,
     get_model_name_for_backend,
-    get_hf_selected_connection_mode,
+    get_hf_connection_selection,
     refresh_runtime_config_from_env,
 )
 from reachy_mini_conversation_app.openai_realtime import OpenaiRealtimeHandler
@@ -399,8 +398,9 @@ class LocalStream:
             hf_direct_host, hf_direct_port = _parse_direct_hf_target(hf_ws_url)
             has_hf_session_url = bool(hf_session_url)
             has_hf_ws_url = bool(hf_ws_url)
-            hf_connection_mode = get_hf_connection_mode()
-            has_hf_connection = hf_connection_mode is not None
+            hf_connection_selection = get_hf_connection_selection()
+            hf_connection_mode = hf_connection_selection.mode
+            has_hf_connection = hf_connection_selection.has_target
             can_proceed_with_openai = has_openai_key
             can_proceed_with_gemini = has_gemini_key
             can_proceed_with_hf = has_hf_connection
@@ -474,15 +474,17 @@ class LocalStream:
             if backend == GEMINI_BACKEND and api_key:
                 self._persist_gemini_api_key(api_key)
             if backend == HF_BACKEND:
-                hf_mode = (payload.hf_mode or get_hf_selected_connection_mode()).strip().lower()
+                hf_selection = get_hf_connection_selection()
+                hf_mode = (payload.hf_mode or hf_selection.mode).strip().lower()
                 if hf_mode == HF_LOCAL_CONNECTION_MODE:
-                    host = (payload.hf_host or "").strip()
+                    existing_host, existing_port = _parse_direct_hf_target(hf_selection.direct_ws_url)
+                    host = (payload.hf_host or "").strip() or existing_host or ""
                     if not host:
                         return JSONResponse({"ok": False, "error": "empty_hf_host"}, status_code=400)
                     if "://" in host or "/" in host or "?" in host or "#" in host:
                         return JSONResponse({"ok": False, "error": "invalid_hf_host"}, status_code=400)
 
-                    port = payload.hf_port or 8765
+                    port = payload.hf_port if payload.hf_port is not None else existing_port or 8765
                     if port < 1 or port > 65535:
                         return JSONResponse({"ok": False, "error": "invalid_hf_port"}, status_code=400)
 

@@ -54,8 +54,7 @@ def run(
         config,
         is_gemini_model,
         get_backend_label,
-        get_hf_connection_mode,
-        get_hf_selected_connection_mode,
+        get_hf_connection_selection,
         refresh_runtime_config_from_env,
     )
     from reachy_mini_conversation_app.startup_settings import (
@@ -89,7 +88,7 @@ def run(
             "Configured backend provider: %s (%s), connection mode: %s",
             config.BACKEND_PROVIDER,
             get_backend_label(config.BACKEND_PROVIDER),
-            get_hf_selected_connection_mode(),
+            get_hf_connection_selection().mode,
         )
     else:
         logger.info(
@@ -193,9 +192,10 @@ def run(
     elif config.BACKEND_PROVIDER == HF_BACKEND:
         from reachy_mini_conversation_app.huggingface_realtime import HuggingFaceRealtimeHandler
 
+        hf_connection_selection = get_hf_connection_selection()
         transport_label = (
             "Hugging Face direct websocket"
-            if get_hf_connection_mode() == HF_LOCAL_CONNECTION_MODE
+            if hf_connection_selection.mode == HF_LOCAL_CONNECTION_MODE and hf_connection_selection.has_target
             else "Hugging Face session allocator"
         )
         logger.info(

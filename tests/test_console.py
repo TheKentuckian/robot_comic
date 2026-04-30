@@ -329,6 +329,85 @@ def test_backend_config_persists_deployed_mode_without_clearing_local_hf_ws_url(
     assert "HF_REALTIME_WS_URL=ws://localhost:8765/v1/realtime" in env_text
 
 
+def test_backend_config_switches_to_saved_local_hf_connection_without_payload_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Switching back to a saved local Hugging Face backend should reuse the persisted target."""
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "BACKEND_PROVIDER=openai\n"
+        "MODEL_NAME=gpt-realtime\n"
+        "HF_REALTIME_CONNECTION_MODE=local\n"
+        "HF_REALTIME_WS_URL=ws://192.168.1.42:8766/v1/realtime\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
+    monkeypatch.setattr(config, "MODEL_NAME", "gpt-realtime")
+    monkeypatch.setattr(config, "HF_REALTIME_CONNECTION_MODE", "local")
+    monkeypatch.setattr(config, "HF_REALTIME_SESSION_URL", None)
+    monkeypatch.setattr(config, "HF_REALTIME_WS_URL", "ws://192.168.1.42:8766/v1/realtime")
+    monkeypatch.setenv("BACKEND_PROVIDER", "openai")
+    monkeypatch.setenv("MODEL_NAME", "gpt-realtime")
+    monkeypatch.setenv("HF_REALTIME_CONNECTION_MODE", "local")
+    monkeypatch.setenv("HF_REALTIME_WS_URL", "ws://192.168.1.42:8766/v1/realtime")
+
+    app = FastAPI()
+    robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
+    stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
+    stream._init_settings_ui_if_needed()
+
+    client = TestClient(app)
+    response = client.post(
+        "/backend_config",
+        json={"backend": "huggingface"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["backend_provider"] == "huggingface"
+    assert data["hf_connection_mode"] == "local"
+    assert data["hf_direct_host"] == "192.168.1.42"
+    assert data["hf_direct_port"] == 8766
+
+    env_text = env_path.read_text(encoding="utf-8")
+    assert "BACKEND_PROVIDER=huggingface" in env_text
+    assert "HF_REALTIME_CONNECTION_MODE=local" in env_text
+    assert "HF_REALTIME_WS_URL=ws://192.168.1.42:8766/v1/realtime" in env_text
+
+
+def test_backend_config_rejects_invalid_hf_port_zero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Settings API should reject invalid local Hugging Face ports from direct callers."""
+    monkeypatch.setattr(config, "BACKEND_PROVIDER", "huggingface")
+    monkeypatch.setattr(config, "HF_REALTIME_CONNECTION_MODE", None)
+    monkeypatch.setattr(config, "HF_REALTIME_SESSION_URL", None)
+    monkeypatch.setattr(config, "HF_REALTIME_WS_URL", None)
+
+    app = FastAPI()
+    robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
+    stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
+    stream._init_settings_ui_if_needed()
+
+    client = TestClient(app)
+    response = client.post(
+        "/backend_config",
+        json={
+            "backend": "huggingface",
+            "hf_mode": "local",
+            "hf_host": "localhost",
+            "hf_port": 0,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_hf_port"
+
+
 def test_status_reports_direct_hf_ws_url_as_ready(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
