@@ -3,8 +3,6 @@ from typing import Any, cast
 from pathlib import Path
 
 from openai import AsyncOpenAI
-from fastrtc import AdditionalOutputs, wait_for_item
-from numpy.typing import NDArray
 from openai.types.realtime import (
     AudioTranscriptionParam,
     RealtimeAudioConfigParam,
@@ -12,23 +10,18 @@ from openai.types.realtime import (
     RealtimeAudioConfigOutputParam,
     RealtimeSessionCreateRequestParam,
 )
-from websockets.exceptions import ConnectionClosedError
 from openai.types.realtime.realtime_audio_formats_param import AudioPCM
 from openai.types.realtime.realtime_audio_input_turn_detection_param import ServerVad
 
 from reachy_mini_conversation_app.config import OPENAI_BACKEND, config, get_default_voice_for_backend
 from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
-from reachy_mini_conversation_app.base_realtime import (
-    _RESPONSE_DONE_TIMEOUT,
-    BaseRealtimeHandler,
-    _normalize_startup_voice,
-)
+from reachy_mini_conversation_app.base_realtime import BaseRealtimeHandler
 from reachy_mini_conversation_app.tools.core_tools import get_active_tool_specs
 
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["OpenaiRealtimeHandler", "_normalize_startup_voice"]
+__all__ = ["OpenaiRealtimeHandler"]
 
 
 class OpenaiRealtimeHandler(BaseRealtimeHandler):
@@ -116,14 +109,6 @@ class OpenaiRealtimeHandler(BaseRealtimeHandler):
             # Never crash the app for QoL persistence; just log.
             logger.warning("Could not persist OPENAI_API_KEY to .env: %s", e)
 
-    def _response_done_timeout(self) -> float:
-        """Return the response completion timeout."""
-        return _RESPONSE_DONE_TIMEOUT
-
-    def _connection_closed_errors(self) -> tuple[type[BaseException], ...]:
-        """Return websocket closure exceptions handled as reconnectable/ignorable."""
-        return (ConnectionClosedError,)
-
     def _get_session_instructions(self) -> str:
         """Return OpenAI session instructions."""
         return get_session_instructions()
@@ -155,10 +140,6 @@ class OpenaiRealtimeHandler(BaseRealtimeHandler):
             tools=cast(Any, tool_specs),
             tool_choice="auto",
         )
-
-    async def _wait_for_output_item(self) -> tuple[int, NDArray[Any]] | AdditionalOutputs | None:
-        """Wait for the next output item."""
-        return await wait_for_item(self.output_queue)  # type: ignore[no-any-return]
 
     async def get_available_voices(self) -> list[str]:
         """Try to discover available voices for the configured OpenAI realtime model.

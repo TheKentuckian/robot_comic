@@ -4,8 +4,6 @@ from urllib.parse import urlsplit, parse_qsl, urlunsplit
 
 import httpx
 from openai import AsyncOpenAI
-from fastrtc import AdditionalOutputs, wait_for_item
-from numpy.typing import NDArray
 from openai.types.realtime import (
     AudioTranscriptionParam,
     RealtimeAudioConfigParam,
@@ -13,7 +11,6 @@ from openai.types.realtime import (
     RealtimeAudioConfigOutputParam,
     RealtimeSessionCreateRequestParam,
 )
-from websockets.exceptions import ConnectionClosedError
 from openai.types.realtime.realtime_audio_formats_param import AudioPCM
 from openai.types.realtime.realtime_audio_input_turn_detection_param import ServerVad
 
@@ -26,7 +23,6 @@ from reachy_mini_conversation_app.config import (
 )
 from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
 from reachy_mini_conversation_app.base_realtime import (
-    _RESPONSE_DONE_TIMEOUT,
     BaseRealtimeHandler,
     InputTranscriptChunksByItem,
 )
@@ -88,14 +84,6 @@ class HuggingFaceRealtimeHandler(BaseRealtimeHandler):
     TEXT_OUTPUT_COST_PER_1M = 0.0
     IMAGE_INPUT_COST_PER_1M = 0.0
 
-    def _response_done_timeout(self) -> float:
-        """Return the response completion timeout."""
-        return _RESPONSE_DONE_TIMEOUT
-
-    def _connection_closed_errors(self) -> tuple[type[BaseException], ...]:
-        """Return websocket closure exceptions handled as reconnectable/ignorable."""
-        return (ConnectionClosedError,)
-
     def _get_session_instructions(self) -> str:
         """Return Hugging Face session instructions."""
         return get_session_instructions()
@@ -127,10 +115,6 @@ class HuggingFaceRealtimeHandler(BaseRealtimeHandler):
             tools=cast(Any, tool_specs),
             tool_choice="auto",
         )
-
-    async def _wait_for_output_item(self) -> tuple[int, NDArray[Any]] | AdditionalOutputs | None:
-        """Wait for the next output item."""
-        return await wait_for_item(self.output_queue)  # type: ignore[no-any-return]
 
     def _record_partial_transcript_delta(
         self,

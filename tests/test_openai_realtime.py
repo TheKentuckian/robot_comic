@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastrtc import AdditionalOutputs
 
+import reachy_mini_conversation_app.base_realtime as base_rt_mod
 import reachy_mini_conversation_app.openai_realtime as rt_mod
 import reachy_mini_conversation_app.tools.core_tools as ct_mod
 import reachy_mini_conversation_app.huggingface_realtime as hf_mod
@@ -535,7 +536,7 @@ async def test_emit_skips_idle_signal_while_response_active(monkeypatch: Any) ->
 
     send_idle_signal = AsyncMock()
     monkeypatch.setattr(handler, "send_idle_signal", send_idle_signal)
-    monkeypatch.setattr(rt_mod, "wait_for_item", AsyncMock(return_value=None))
+    monkeypatch.setattr(base_rt_mod, "wait_for_item", AsyncMock(return_value=None))
 
     result = await handler.emit()
 
@@ -635,9 +636,9 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
     """
     caplog.set_level(logging.WARNING)
 
-    # Use a local Exception as the module's ConnectionClosedError to avoid ws dependency
+    # Use a local Exception as the base module's ConnectionClosedError to avoid ws dependency.
     FakeCCE = type("FakeCCE", (Exception,), {})
-    monkeypatch.setattr(rt_mod, "ConnectionClosedError", FakeCCE)
+    monkeypatch.setattr(base_rt_mod, "ConnectionClosedError", FakeCCE)
 
     # Make asyncio.sleep return immediately (for backoff)
     _real_sleep = asyncio.sleep
@@ -1280,7 +1281,7 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
     caplog.set_level(logging.DEBUG)
 
     FakeCCE = type("FakeCCE", (Exception,), {})
-    monkeypatch.setattr(rt_mod, "ConnectionClosedError", FakeCCE)
+    monkeypatch.setattr(base_rt_mod, "ConnectionClosedError", FakeCCE)
     monkeypatch.setattr(rt_mod, "get_session_instructions", lambda: "test")
     monkeypatch.setattr(rt_mod, "get_session_voice", lambda default=OPENAI_DEFAULT_VOICE: "alloy")
     monkeypatch.setattr(rt_mod, "get_active_tool_specs", lambda _: [])
@@ -1522,7 +1523,7 @@ async def test_response_sender_loop_times_out_waiting_for_response_done(
     """
     caplog.set_level(logging.DEBUG)
 
-    monkeypatch.setattr(rt_mod, "_RESPONSE_DONE_TIMEOUT", 0.3)
+    monkeypatch.setattr(base_rt_mod, "_RESPONSE_DONE_TIMEOUT", 0.3)
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
     handler = rt_mod.OpenaiRealtimeHandler(deps)
@@ -1574,7 +1575,7 @@ async def test_response_sender_loop_times_out_waiting_for_previous_response(
     """
     caplog.set_level(logging.DEBUG)
 
-    monkeypatch.setattr(rt_mod, "_RESPONSE_DONE_TIMEOUT", 0.3)
+    monkeypatch.setattr(base_rt_mod, "_RESPONSE_DONE_TIMEOUT", 0.3)
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
     handler = rt_mod.OpenaiRealtimeHandler(deps)
