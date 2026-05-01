@@ -466,6 +466,9 @@ def refresh_runtime_config_from_env() -> None:
     # Deliberately ignore HF_REALTIME_SESSION_URL from the environment; the app-managed proxy is HF_DEFAULTS.session_url.
     config.HF_REALTIME_SESSION_URL = HF_DEFAULTS.session_url
     config.HF_REALTIME_WS_URL = os.getenv(HF_REALTIME_WS_URL_ENV)
+    config.HF_HOME = os.getenv("HF_HOME", "./cache")
+    config.LOCAL_VISION_MODEL = os.getenv("LOCAL_VISION_MODEL", "HuggingFaceTB/SmolVLM2-2.2B-Instruct")
+    config.HF_TOKEN = os.getenv("HF_TOKEN")
     config.REACHY_MINI_CUSTOM_PROFILE = LOCKED_PROFILE or os.getenv("REACHY_MINI_CUSTOM_PROFILE")
 
 

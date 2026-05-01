@@ -87,6 +87,23 @@ def test_hf_default_session_url_uses_stable_space_proxy() -> None:
     assert ".aws.endpoints.huggingface.cloud" not in config_mod.HF_DEFAULTS.session_url
 
 
+def test_refresh_runtime_config_reloads_hf_runtime_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Instance-local .env reloads should update every env-backed Hugging Face runtime field."""
+    monkeypatch.setenv("HF_TOKEN", "hf-runtime-token")
+    monkeypatch.setenv("HF_HOME", "/tmp/reachy-hf-cache")
+    monkeypatch.setenv("LOCAL_VISION_MODEL", "test/local-vision-model")
+
+    monkeypatch.setattr(config_mod.config, "HF_TOKEN", None)
+    monkeypatch.setattr(config_mod.config, "HF_HOME", "./old-cache")
+    monkeypatch.setattr(config_mod.config, "LOCAL_VISION_MODEL", "old/model")
+
+    config_mod.refresh_runtime_config_from_env()
+
+    assert config_mod.config.HF_TOKEN == "hf-runtime-token"
+    assert config_mod.config.HF_HOME == "/tmp/reachy-hf-cache"
+    assert config_mod.config.LOCAL_VISION_MODEL == "test/local-vision-model"
+
+
 @pytest.mark.parametrize(
     ("configured_mode", "session_url", "direct_ws_url", "expected_mode", "expected_has_target"),
     [
