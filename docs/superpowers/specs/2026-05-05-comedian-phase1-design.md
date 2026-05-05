@@ -54,7 +54,7 @@ Six sections:
 
 1. **Identity** — You are Don Rickles, the Merchant of Venom. Warm underneath, devastating on the surface. The audience always knows you love them — that's what makes it work.
 
-2. **Opening sequence** — As soon as a person appears, call `roast` to get their visual profile. Use `move_head` to scan them slowly before speaking (the "let me get a good look at you" beat). Open with the most distinctive visual target. Then transition to crowd-work questions.
+2. **Opening sequence** — As soon as a person appears, announce "Okay, who do we have here, let me get a look at you" (or a Rickles variation), then immediately call `roast`. The tool handles the scene scan, head orientation, and close-up capture internally — the LLM just waits for the structured targets and opens with the most distinctive one. Then transition to crowd-work questions.
 
 3. **Crowd-work pattern** — Ask one question at a time: what do you do, where are you from, are you married. After each answer, call `crowd_work update` to store it, riff on it immediately, then move to the next question. Periodically call `crowd_work query` to surface callback material.
 
@@ -70,9 +70,14 @@ Six sections:
 
 **Type:** custom `Tool` subclass, profile-scoped.
 
-**Trigger:** Called once at conversation open (before the first line), and optionally again mid-routine if the LLM wants a refresh.
+**Trigger:** Called once at conversation open (after the verbal announcement), and optionally again mid-routine if the LLM wants a refresh.
 
-**Behaviour:** Captures the current camera frame via the existing camera worker, then re-prompts the vision model with a structured extraction prompt requesting labelled roast fields — not a scene description.
+**Behaviour:** Two-phase capture internally — the tool handles the full locate-and-aim sequence before extraction:
+
+1. **Scene scan:** Capture a wide frame via the camera worker. Ask the vision model: "Are there people in this image? If so, describe where they are in the frame (left, right, center, close, far)."
+2. **Head orient:** If a person is detected, call `move_head` to aim toward them. If no person is found, return `{"no_subject": true}` immediately.
+3. **Close-up capture:** Capture a second frame after the head has moved.
+4. **Structured extraction:** Re-prompt the vision model with the close-up frame requesting labelled roast fields — not a scene description.
 
 **Extraction prompt targets:**
 - `hair` — style, quantity, condition
@@ -167,23 +172,34 @@ crowd_work
 ## Interaction Sequence
 
 ```
-1. Person appears
-2. roast() → labelled visual targets
-3. move_head (slow scan)
-4. Opening visual riff (lead with standout target)
-5. Crowd-work question: "What do you do?"
-6. crowd_work(action="update", job=...) [silent]
-7. Riff on job
-8. Crowd-work question: "Where you from?"
-9. crowd_work(action="update", hometown=...) [silent]
-10. Riff on hometown
-11. crowd_work(action="query") → callbacks surface
-12. Callback riff
-13. play_emotion (mock-horrified or warm reaction)
-14. "But I love ya" closer
+--- OPENING ---
+1. Announce: "Okay, who do we have here, let me get a look at you"
+2. roast() fires internally:
+   a. Capture wide scene frame via camera
+   b. Ask vision model: are there people? where in the frame?
+   c. move_head toward detected person for a closer look
+   d. Capture close-up frame
+   e. Run structured extraction on close-up → labelled roast targets
+3. Opening visual riff (lead with standout target)
+
+--- CROWD WORK ---
+4. Crowd-work question: "What do you do?"
+5. crowd_work(action="update", job=...) [silent]
+6. Riff on job
+7. Crowd-work question: "Where you from?"
+8. crowd_work(action="update", hometown=...) [silent]
+9. Riff on hometown
+10. crowd_work(action="query") → callback hints surface
+11. Callback riff
+12. play_emotion (mock-horrified or warm reaction)
+
+--- CLOSER ---
+13. "But I love ya" closer
 ```
 
-Steps 5–13 cycle as long as the conversation continues. The LLM decides when to call `query` based on how much material has accumulated.
+Steps 4–12 cycle as long as the conversation continues. The LLM decides when to call `query` based on how much material has accumulated.
+
+If no person is detected in step 2b, `roast()` returns `{"no_subject": true}` and the LLM improvises ("I know you're out there somewhere — I can hear you breathing").
 
 ---
 
