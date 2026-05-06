@@ -445,6 +445,8 @@ Be safe.
     assert "[amusement]" not in result
     assert "IDENTITY" in result
     assert "GUARDRAILS" in result
+    assert "You are a robot." in result
+    assert "Be safe." in result
 
 
 def test_strip_tts_delivery_tags_removes_stray_tags():

@@ -119,7 +119,7 @@ _TTS_DELIVERY_TAG_NAMES = (
     "amusement", "annoyance", "aggression", "enthusiasm",
 )
 _TTS_SECTION_RE = re.compile(
-    r"## GEMINI TTS DELIVERY TAGS\b.*?(?=\n##|\Z)",
+    r"## GEMINI TTS DELIVERY TAGS\b.*?(?=\r?\n##|\Z)",
     re.DOTALL,
 )
 _TTS_TAG_RE = re.compile(
