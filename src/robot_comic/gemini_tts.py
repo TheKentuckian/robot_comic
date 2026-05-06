@@ -301,3 +301,8 @@ class GeminiTTSResponseHandler(ConversationHandler):
 
 class LocalSTTGeminiTTSHandler(LocalSTTInputMixin, GeminiTTSResponseHandler):
     """Moonshine STT input + Gemini 3.1 Flash TTS voice output."""
+
+    async def _dispatch_completed_transcript(self, transcript: str) -> None:
+        # LocalSTTInputMixin._dispatch_completed_transcript is OpenAI-specific and
+        # shadows GeminiTTSResponseHandler's override due to MRO; route explicitly.
+        await GeminiTTSResponseHandler._dispatch_completed_transcript(self, transcript)
