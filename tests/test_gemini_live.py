@@ -242,6 +242,71 @@ async def test_gemini_camera_tool_sends_snapshot_and_returns_json_result() -> No
 
 
 @pytest.mark.asyncio
+async def test_gemini_tool_result_sends_b64_scene_as_video_and_compacts_json() -> None:
+    """Profile tools can return b64_scene without wedging the live function response."""
+    deps = ToolDependencies(
+        reachy_mini=MagicMock(),
+        movement_manager=MagicMock(),
+    )
+    handler = GeminiLiveHandler(deps)
+    session = _FakeSession([], handler._stop_event)
+    handler.session = session
+
+    await handler._handle_tool_result(
+        ToolNotification(
+            id="call_roast_1",
+            tool_name="roast",
+            is_idle_tool_call=False,
+            status=ToolState.COMPLETED,
+            result={
+                "b64_scene": base64.b64encode(b"scene-jpeg").decode("ascii"),
+                "extraction_prompt": "describe the person",
+                "note": "No local vision processor available.",
+            },
+        )
+    )
+
+    assert len(session.realtime_inputs) == 1
+    blob = session.realtime_inputs[0]["video"]
+    assert blob.data == b"scene-jpeg"
+    assert blob.mime_type == "image/jpeg"
+
+    assert len(session.tool_responses) == 1
+    function_response = session.tool_responses[0]["function_responses"][0]
+    assert function_response.response == {
+        "extraction_prompt": "describe the person",
+        "note": "No local vision processor available.",
+        "image": "sent_as_realtime_video_input",
+        "image_source": "b64_scene",
+    }
+    assert "b64_scene" not in function_response.response
+
+    outputs = []
+    while not handler.output_queue.empty():
+        outputs.append(handler.output_queue.get_nowait())
+
+    tool_messages = [
+        message
+        for output in outputs
+        if isinstance(output, AdditionalOutputs)
+        for message in output.args
+        if isinstance(message.get("content"), str)
+    ]
+    assert tool_messages == [
+        {
+            "role": "assistant",
+            "content": (
+                '{"extraction_prompt": "describe the person", '
+                '"note": "No local vision processor available.", '
+                '"image": "sent_as_realtime_video_input", '
+                '"image_source": "b64_scene"}'
+            ),
+            "metadata": {"title": "🛠️ Used tool roast", "status": "done"},
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_apply_personality_preserves_manual_voice_override(monkeypatch) -> None:
     """Applying a profile should keep a manually selected Gemini voice active."""
     monkeypatch.setattr(gemini_mod, "get_session_instructions", lambda: "test")

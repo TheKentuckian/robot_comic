@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 
 GEMINI_INPUT_SAMPLE_RATE: Final[int] = 16000
 GEMINI_OUTPUT_SAMPLE_RATE: Final[int] = 24000
+_B64_IMAGE_RESULT_KEYS: Final[tuple[str, ...]] = ("b64_im", "b64_scene")
 
 
 def _openai_tool_specs_to_gemini(specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -120,6 +121,41 @@ def _resolve_gemini_voice(profile_voice: str) -> str:
     """
     voice_map = {v.lower(): v for v in GEMINI_AVAILABLE_VOICES}
     return voice_map.get(profile_voice.lower(), DEFAULT_VOICE_BY_BACKEND[GEMINI_BACKEND])
+
+
+async def _send_b64_tool_image_to_gemini(
+    session: Any,
+    tool_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Send base64 JPEG tool payloads as video input and return compact JSON."""
+    compact_result = dict(tool_result)
+    image_key = next(
+        (
+            key
+            for key in _B64_IMAGE_RESULT_KEYS
+            if isinstance(compact_result.get(key), str | bytes | bytearray)
+        ),
+        None,
+    )
+    if image_key is None:
+        return compact_result
+
+    b64_image = compact_result.pop(image_key)
+    if compact_result:
+        compact_result.setdefault("image", "sent_as_realtime_video_input")
+        compact_result.setdefault("image_source", image_key)
+    else:
+        compact_result = {"status": "image_captured"}
+
+    try:
+        if isinstance(b64_image, str):
+            image_bytes = base64.b64decode(b64_image)
+        else:
+            image_bytes = bytes(b64_image)
+        await session.send_realtime_input(video=types.Blob(data=image_bytes, mime_type="image/jpeg"))
+    except Exception as exc:
+        compact_result["image_error"] = f"failed_to_send_realtime_video_input: {exc}"
+    return compact_result
 
 
 def _resolve_gemini_startup_voice(voice: str | None) -> str | None:
@@ -462,20 +498,14 @@ class GeminiLiveHandler(ConversationHandler):
             return
 
         try:
-            if bg_tool.tool_name == "camera" and isinstance(tool_result, dict) and "b64_im" in tool_result:
-                b64_im = tool_result.pop("b64_im")
-                if not tool_result:
-                    tool_result = {"status": "image_captured"}
-
-                try:
-                    if isinstance(b64_im, str):
-                        image_bytes = base64.b64decode(b64_im)
+            if isinstance(tool_result, dict):
+                original_keys = set(tool_result)
+                tool_result = await _send_b64_tool_image_to_gemini(self.session, tool_result)
+                if original_keys != set(tool_result):
+                    if "image_error" in tool_result:
+                        logger.warning("Failed to push tool image from %s to Gemini: %s", bg_tool.tool_name, tool_result["image_error"])
                     else:
-                        image_bytes = bytes(b64_im)
-                    await self.session.send_realtime_input(video=types.Blob(data=image_bytes, mime_type="image/jpeg"))
-                    logger.info("Pushed camera snapshot to Gemini via realtime video input")
-                except Exception as ve:
-                    logger.warning("Failed to push camera snapshot to Gemini: %s", ve)
+                        logger.info("Pushed tool image from %s to Gemini via realtime video input", bg_tool.tool_name)
 
             console_content = json.dumps(tool_result)
 
