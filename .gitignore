@@ -66,3 +66,6 @@ src/reachy_mini_conversation_app/profiles/user_personalities/
 
 # Git worktrees
 .worktrees/
+
+# Rickles session state (runtime artifacts)
+.rickles_sessions/
