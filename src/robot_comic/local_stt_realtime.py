@@ -209,11 +209,18 @@ class LocalSTTInputMixin:
         self._turn_first_audio_at = None
 
         await self.output_queue.put(AdditionalOutputs({"role": "user", "content": transcript}))
-        if not self.connection:
+        await self._dispatch_completed_transcript(transcript)
+
+    async def _dispatch_completed_transcript(self, transcript: str) -> None:
+        """Send a completed transcript to the realtime response backend.
+
+        Override in subclasses to redirect to a different response backend.
+        """
+        if not self.connection:  # type: ignore[attr-defined]
             logger.debug("Local STT transcript ready but realtime connection is not connected")
             return
 
-        await self.connection.conversation.item.create(
+        await self.connection.conversation.item.create(  # type: ignore[attr-defined]
             item={
                 "type": "message",
                 "role": "user",

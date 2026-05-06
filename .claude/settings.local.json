@@ -28,7 +28,9 @@
       "Bash(.venv/Scripts/python.exe -m pytest tests/tools/test_crowd_work.py tests/tools/test_roast.py -q)",
       "Bash(.venv/Scripts/python.exe *)",
       "Bash(git checkout *)",
-      "Bash(git rebase *)"
+      "Bash(git rebase *)",
+      "WebFetch(domain:ai.google.dev)",
+      "Bash(rtk proxy *)"
     ]
   }
 }
