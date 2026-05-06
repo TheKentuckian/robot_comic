@@ -420,7 +420,10 @@ async def test_video_task_not_started_when_streaming_disabled(monkeypatch):
 
     monkeypatch.setattr(handler, "_video_sender_loop", spy_video_loop)
 
-    stop_event.set()
+    # Set the handler's stop event so the receive loop exits immediately.
+    # Setting the session stop_event alone is insufficient — the outer while loop
+    # checks handler._stop_event and would spin forever on an empty session.
+    handler._stop_event.set()
     await handler._run_live_session()
 
     assert video_sender_calls == [], "Video sender must not start when flag is False"
