@@ -2,6 +2,7 @@ const OPENAI_BACKEND = "openai";
 const GEMINI_BACKEND = "gemini";
 const HF_BACKEND = "huggingface";
 const LOCAL_STT_BACKEND = "local_stt";
+const GEMINI_TTS_OUTPUT = "gemini_tts";
 const DEFAULT_BACKEND = HF_BACKEND;
 const HF_DEFAULT_HOST = "localhost";
 const HF_DEFAULT_PORT = 8765;
@@ -133,6 +134,10 @@ function journeyMeta(backend, outputBackend = OPENAI_BACKEND) {
       meta.brainLabel = "Hugging Face response backend";
       meta.outputLabel = "Hugging Face voice";
       meta.outputCopy = "Speech comes back through the configured Hugging Face endpoint.";
+    } else if (outputBackend === GEMINI_TTS_OUTPUT) {
+      meta.brainLabel = "Gemini Flash response backend";
+      meta.outputLabel = "Gemini Flash 3.1 TTS";
+      meta.outputCopy = "Speech comes back through Gemini 3.1 Flash TTS with the Algenib voice.";
     } else {
       meta.brainLabel = "OpenAI response backend";
       meta.outputLabel = "OpenAI voice";
@@ -513,7 +518,11 @@ async function init() {
   }
 
   function setSelectedLocalSTTOutput(outputBackend) {
-    const normalized = outputBackend === HF_BACKEND ? HF_BACKEND : OPENAI_BACKEND;
+    const normalized = outputBackend === HF_BACKEND
+      ? HF_BACKEND
+      : outputBackend === GEMINI_TTS_OUTPUT
+        ? GEMINI_TTS_OUTPUT
+        : OPENAI_BACKEND;
     localSttResponse.value = normalized;
     localSttOutputInputs.forEach((radio) => {
       radio.checked = radio.value === normalized;
@@ -541,13 +550,16 @@ async function init() {
     const selectedMatchesPersisted = selectedBackend === persistedBackend;
     const selectedMatchesActive = selectedBackend === activeBackend;
     const localSttUsesHF = selectedBackend === LOCAL_STT_BACKEND && localSttResponse.value === HF_BACKEND;
-    const localSttUsesOpenAI = selectedBackend === LOCAL_STT_BACKEND && localSttResponse.value !== HF_BACKEND;
+    const localSttUsesGeminiTTS = selectedBackend === LOCAL_STT_BACKEND && localSttResponse.value === GEMINI_TTS_OUTPUT;
+    const localSttUsesOpenAI = selectedBackend === LOCAL_STT_BACKEND && !localSttUsesHF && !localSttUsesGeminiTTS;
     const canProceedWithSelectedBackend = localSttUsesHF
       ? backendCanProceed(status, HF_BACKEND)
-      : localSttUsesOpenAI
-        ? backendCanProceed(status, OPENAI_BACKEND)
-        : backendCanProceed(status, selectedBackend);
-    const usesApiKeyForm = selectedBackend === OPENAI_BACKEND || selectedBackend === GEMINI_BACKEND || localSttUsesOpenAI;
+      : localSttUsesGeminiTTS
+        ? backendCanProceed(status, GEMINI_BACKEND)
+        : localSttUsesOpenAI
+          ? backendCanProceed(status, OPENAI_BACKEND)
+          : backendCanProceed(status, selectedBackend);
+    const usesApiKeyForm = selectedBackend === OPENAI_BACKEND || selectedBackend === GEMINI_BACKEND || localSttUsesOpenAI || localSttUsesGeminiTTS;
     const usesHFForm = selectedBackend === HF_BACKEND || localSttUsesHF;
     const usesLocalSTTForm = selectedBackend === LOCAL_STT_BACKEND;
     const supportsForm = usesApiKeyForm || usesHFForm || usesLocalSTTForm;
@@ -566,8 +578,8 @@ async function init() {
       : canProceedWithSelectedBackend
         ? meta.formCopy
         : meta.requiredCredentialsCopy;
-    apiKeyLabel.textContent = meta.inputLabel;
-    input.placeholder = meta.placeholder;
+    apiKeyLabel.textContent = localSttUsesGeminiTTS ? "GEMINI_API_KEY" : meta.inputLabel;
+    input.placeholder = localSttUsesGeminiTTS ? "AIza..." : meta.placeholder;
     saveBtn.textContent = meta.saveButton;
     changeKeyBtn.textContent = meta.changeButton;
 
