@@ -14,11 +14,37 @@ tags:
 
 # Robot Comic
 
+---
+
+> **DISCLAIMER — Non-Commercial Educational Fan Project**
+> This project is a transformative, fan-made simulation created for non-commercial research and
+> local development only. It is inspired by Don Rickles' publicly documented performance style
+> and is not affiliated with, endorsed by, or authorized by the Don Rickles estate, any talent
+> agency, or any production company. It does not reproduce verbatim material and generates no
+> revenue.
+
+## Project Persona
+
+The comedian profile in this repository is a **Don Rickles-inspired AI simulation** built to
+test low-latency robotic social interaction in a comedic context.
+
+- **This is a simulation, not impersonation.** The profile studies Rickles' publicly documented
+  performance patterns — crowd-work structure, roast escalation arcs, warm-undercurrent ethics —
+  as academic reference. It does not reproduce verbatim jokes or claim to be Don Rickles.
+- **"John Pickles" is the robot's own stage name.** When a synthesized voice clone is added
+  (Phase 2), the robot will perform under the name *John Pickles* — a fictional persona
+  inspired by mid-century insult-comic style, distinct from any real individual.
+- **Audio is AI-generated.** All voice output is synthetic. Any future voice clone will be
+  clearly labeled as a synthesized approximation, not a reproduction of Don Rickles' voice.
+
+---
+
 Conversational app for the Reachy Mini robot combining realtime voice backends, vision pipelines, and choreographed motion libraries.
 
 ![Reachy Mini Dance](docs/assets/reachy_mini_dance.gif)
 
 ## Table of contents
+- [Project Persona](#project-persona)
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Installation](#installation)
@@ -376,4 +402,10 @@ Quick start:
 
 ## License
 
-Apache 2.0
+Apache 2.0 — base application code (original Pollen Robotics fork).
+
+The comedian corpus and profile content (`docs/rickles_corpus.md`, `profiles/don_rickles/`)
+are original analytical and creative works produced for this project. They are separately
+licensed under [Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/).
+You may share and adapt them for non-commercial purposes with attribution.
+Don Rickles' name and likeness remain the property of his estate.
