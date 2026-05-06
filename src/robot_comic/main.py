@@ -52,6 +52,7 @@ def run(
         GEMINI_BACKEND,
         OPENAI_BACKEND,
         LOCAL_STT_BACKEND,
+        GEMINI_TTS_OUTPUT,
         HF_LOCAL_CONNECTION_MODE,
         config,
         is_gemini_model,
@@ -212,22 +213,26 @@ def run(
             startup_voice=startup_settings.voice,
         )  # type: ignore[assignment]
     elif config.BACKEND_PROVIDER == LOCAL_STT_BACKEND:
+        from robot_comic.gemini_tts import LocalSTTGeminiTTSHandler
         from robot_comic.local_stt_realtime import (
-            LocalSTTOpenAIRealtimeHandler,
             LocalSTTHuggingFaceRealtimeHandler,
+            LocalSTTOpenAIRealtimeHandler,
         )
 
         local_stt_response_backend = getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
         logger.info(
             "Using %s via local STT input and %s response audio",
             get_backend_label(config.BACKEND_PROVIDER),
-            get_backend_label(local_stt_response_backend),
+            get_backend_label(local_stt_response_backend) if local_stt_response_backend != GEMINI_TTS_OUTPUT else "Gemini TTS",
         )
-        handler_class = (
-            LocalSTTHuggingFaceRealtimeHandler
-            if local_stt_response_backend == HF_BACKEND
-            else LocalSTTOpenAIRealtimeHandler
-        )
+
+        if local_stt_response_backend == HF_BACKEND:
+            handler_class = LocalSTTHuggingFaceRealtimeHandler
+        elif local_stt_response_backend == GEMINI_TTS_OUTPUT:
+            handler_class = LocalSTTGeminiTTSHandler
+        else:
+            handler_class = LocalSTTOpenAIRealtimeHandler
+
         handler = handler_class(
             deps,
             gradio_mode=args.gradio,
