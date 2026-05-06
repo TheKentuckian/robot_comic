@@ -1,16 +1,16 @@
 """Greet tool — face presence scan, head sweep, and returning-visitor identity matching."""
-from __future__ import annotations
 
+from __future__ import annotations
+import json
 import asyncio
 import difflib
-import json
 import logging
-from datetime import datetime, timedelta
+from typing import Any, Dict, List, Tuple, Optional
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timedelta
 
-from robot_comic.tools.core_tools import Tool, ToolDependencies
 from robot_comic.tools.move_head import MoveHead
+from robot_comic.tools.core_tools import Tool, ToolDependencies
 
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ try:
     _mp_face_detection = mp.solutions.face_detection
     MP_AVAILABLE = True
 except ImportError:
-    _mp_face_detection = None  # type: ignore[assignment]
+    _mp_face_detection = None
     MP_AVAILABLE = False
 
 
@@ -176,9 +176,7 @@ class Greet(Tool):
             logger.warning("Failed to read matched session %s", matched_path)
             return {"returning": False}
 
-        last_seen = state.get("last_updated") or str(
-            datetime.fromtimestamp(matched_path.stat().st_mtime).isoformat()
-        )
+        last_seen = state.get("last_updated") or str(datetime.fromtimestamp(matched_path.stat().st_mtime).isoformat())
         profile = {
             "job": state.get("job"),
             "hometown": state.get("hometown"),

@@ -21,7 +21,14 @@
       "Bash(xargs sed -i 's/reachy_mini_conversation_app/robot_comic/g')",
       "Bash(reachy-mini-app-assistant check *)",
       "Bash(.venv/Scripts/python -c \"import robot_comic; print\\('robot_comic import OK'\\)\")",
-      "Bash(.venv/Scripts/python -m pytest tests/ -x -q)"
+      "Bash(.venv/Scripts/python -m pytest tests/ -x -q)",
+      "Bash(git remote *)",
+      "Bash(python *)",
+      "Bash(rtk pytest *)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/tools/test_crowd_work.py tests/tools/test_roast.py -q)",
+      "Bash(.venv/Scripts/python.exe *)",
+      "Bash(git checkout *)",
+      "Bash(git rebase *)"
     ]
   }
 }
