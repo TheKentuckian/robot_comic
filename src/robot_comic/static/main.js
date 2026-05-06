@@ -696,7 +696,6 @@ async function init() {
   localSttOutputInputs.forEach((radio) => {
     radio.addEventListener("change", () => {
       if (radio.disabled) return;
-      editingCredentials = false;
       setSelectedLocalSTTOutput(radio.value);
       setStatusMessage(statusEl, "");
       renderCredentialPanels(st);
@@ -810,10 +809,12 @@ async function init() {
       input.classList.add("error");
       return;
     }
-    setStatusMessage(statusEl, selectedBackend === GEMINI_BACKEND ? "Saving token..." : "Validating API key...");
+    const needsOpenAIValidation = (selectedBackend === OPENAI_BACKEND) ||
+      (selectedBackend === LOCAL_STT_BACKEND && !localSttUsesGeminiTTS);
+    setStatusMessage(statusEl, needsOpenAIValidation ? "Validating API key..." : "Saving token...");
     input.classList.remove("error");
     try {
-      if (selectedBackend === OPENAI_BACKEND || selectedBackend === LOCAL_STT_BACKEND) {
+      if (needsOpenAIValidation) {
         const validation = await validateKey(key);
         if (!validation.valid) {
           setStatusMessage(statusEl, "Invalid API key. Please check your key and try again.", "error");
@@ -829,12 +830,12 @@ async function init() {
       window.location.reload();
     } catch (e) {
       input.classList.add("error");
-      if ((selectedBackend === OPENAI_BACKEND || selectedBackend === LOCAL_STT_BACKEND) && e.message === "invalid_api_key") {
+      if (needsOpenAIValidation && e.message === "invalid_api_key") {
         setStatusMessage(statusEl, "Invalid API key. Please check your key and try again.", "error");
       } else {
         setStatusMessage(
           statusEl,
-          selectedBackend === GEMINI_BACKEND
+          localSttUsesGeminiTTS || selectedBackend === GEMINI_BACKEND
             ? "Failed to save Gemini token. Please try again."
             : "Failed to validate/save key. Please try again.",
           "error",
