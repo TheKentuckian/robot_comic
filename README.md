@@ -1,18 +1,18 @@
 ---
-title: Reachy Mini Conversation App
+title: Robot Comic
 emoji: 🎤
 colorFrom: red
 colorTo: blue
 sdk: static
 pinned: false
-short_description: Talk with Reachy Mini!
+short_description: Robot Comic — comedic Reachy Mini voice app
 suggested_storage: large
 tags:
  - reachy_mini
  - reachy_mini_python_app
 ---
 
-# Reachy Mini conversation app
+# Robot Comic
 
 Conversational app for the Reachy Mini robot combining realtime voice backends, vision pipelines, and choreographed motion libraries.
 
