@@ -85,10 +85,21 @@ GEMINI_AVAILABLE_VOICES: list[str] = [
     "Zephyr",
 ]
 
+# Voices supported by the Gemini TTS API (gemini-3.1-flash-tts-preview)
+GEMINI_TTS_AVAILABLE_VOICES: list[str] = [
+    "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
+    "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
+    "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
+    "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
+    "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat",
+]
+GEMINI_TTS_DEFAULT_VOICE = "Algenib"
+
 OPENAI_BACKEND = "openai"
 GEMINI_BACKEND = "gemini"
 HF_BACKEND = "huggingface"
 LOCAL_STT_BACKEND = "local_stt"
+GEMINI_TTS_OUTPUT = "gemini_tts"
 DEFAULT_BACKEND_PROVIDER = HF_BACKEND
 HF_REALTIME_CONNECTION_MODE_ENV = "HF_REALTIME_CONNECTION_MODE"
 HF_REALTIME_WS_URL_ENV = "HF_REALTIME_WS_URL"
@@ -141,7 +152,7 @@ LOCAL_STT_UPDATE_INTERVAL_ENV = "LOCAL_STT_UPDATE_INTERVAL"
 LOCAL_STT_DEFAULT_PROVIDER = "moonshine"
 LOCAL_STT_DEFAULT_CACHE_DIR = "./cache/moonshine_voice"
 LOCAL_STT_DEFAULT_RESPONSE_BACKEND = OPENAI_BACKEND
-LOCAL_STT_RESPONSE_BACKEND_CHOICES = (OPENAI_BACKEND, HF_BACKEND)
+LOCAL_STT_RESPONSE_BACKEND_CHOICES = (OPENAI_BACKEND, HF_BACKEND, GEMINI_TTS_OUTPUT)
 LOCAL_STT_DEFAULT_LANGUAGE = "en"
 LOCAL_STT_DEFAULT_MODEL = "tiny_streaming"
 LOCAL_STT_MODEL_CHOICES = ("tiny_streaming", "small_streaming")
