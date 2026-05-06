@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
@@ -62,7 +62,6 @@ class CrowdWork(Tool):
         self._load_recent_session()
 
     def _session_path(self) -> Path:
-        self._session_dir.mkdir(parents=True, exist_ok=True)
         return self._session_dir / f"session_{self._session_id}.json"
 
     def _load_recent_session(self) -> None:
@@ -79,12 +78,14 @@ class CrowdWork(Tool):
                 try:
                     with path.open() as f:
                         self._state = json.load(f)
+                    self._session_id = self._state.get("session_id", self._session_id)
                     logger.info("Resumed session from %s", path.name)
                     return
                 except Exception:
                     logger.warning("Failed to load session file %s", path)
 
     def _write_session(self) -> None:
+        self._session_dir.mkdir(parents=True, exist_ok=True)
         path = self._session_path()
         with path.open("w") as f:
             json.dump(self._state, f, indent=2)
@@ -112,10 +113,12 @@ class CrowdWork(Tool):
         if job and details:
             hints.append(f"job + visual: {job} + {details[0]}")
 
+        # Standalone detail callbacks — skip details already referenced above
+        already_in_hints = {details[0]} if (job and details) else set()
         for detail in details[:2]:
-            candidate = f"detail callback: {detail}"
-            if candidate not in hints:
-                hints.append(candidate)
+            if detail not in already_in_hints:
+                hints.append(f"detail callback: {detail}")
+                already_in_hints.add(detail)
 
         return hints[:3]
 
