@@ -91,11 +91,9 @@ class Roast(Tool):
         if "NO PERSON" in scan_result.upper():
             return {"no_subject": True}
 
-        direction = "front"
-        for key, mapped in _DIRECTION_MAP.items():
-            if key.upper() in scan_result.upper():
-                direction = mapped
-                break
+        _dir_match = re.search(r"PERSON:\s*(\w+)", scan_result, re.IGNORECASE)
+        raw_dir = _dir_match.group(1).lower() if _dir_match else "center"
+        direction = _DIRECTION_MAP.get(raw_dir, "front")
 
         # Phase 3: Orient head toward person
         move_result = await MoveHead()(deps, direction=direction)
@@ -122,6 +120,6 @@ def _parse_extraction(text: str) -> Dict[str, Any]:
     result: Dict[str, Any] = {}
     for field in fields:
         pattern = rf"(?i){re.escape(field)}:\s*(.+?)(?=\n\w[\w ]*:|$)"
-        match = re.search(pattern, text, re.DOTALL)
+        match = re.search(pattern, text, re.DOTALL | re.MULTILINE)
         result[field] = match.group(1).strip() if match else "unknown"
     return result

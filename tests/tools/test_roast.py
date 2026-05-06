@@ -100,6 +100,8 @@ async def test_roast_moves_head_left_when_person_on_left(Roast):
     with patch("asyncio.sleep"):
         await Roast()(deps)
     deps.movement_manager.queue_move.assert_called_once()
+    left_move = deps.movement_manager.queue_move.call_args[0][0]
+    assert left_move.target_head_pose is not None
 
 
 @pytest.mark.asyncio
@@ -108,6 +110,21 @@ async def test_roast_moves_head_right_when_person_on_right(Roast):
     with patch("asyncio.sleep"):
         await Roast()(deps)
     deps.movement_manager.queue_move.assert_called_once()
+    right_move = deps.movement_manager.queue_move.call_args[0][0]
+    assert right_move.target_head_pose is not None
+
+
+@pytest.mark.asyncio
+async def test_roast_left_and_right_produce_different_head_poses(Roast):
+    deps_left = make_deps(scan_response="PERSON: left", extraction_response=EXTRACTION_TEXT)
+    deps_right = make_deps(scan_response="PERSON: right", extraction_response=EXTRACTION_TEXT)
+    with patch("asyncio.sleep"):
+        await Roast()(deps_left)
+        await Roast()(deps_right)
+    left_pose = deps_left.movement_manager.queue_move.call_args[0][0].target_head_pose
+    right_pose = deps_right.movement_manager.queue_move.call_args[0][0].target_head_pose
+    import numpy as np
+    assert not np.allclose(left_pose, right_pose), "left and right head poses must differ"
 
 
 @pytest.mark.asyncio
