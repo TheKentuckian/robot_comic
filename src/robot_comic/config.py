@@ -128,13 +128,18 @@ DEFAULT_MODEL_NAME_BY_BACKEND = {
     OPENAI_BACKEND: "gpt-realtime",
     GEMINI_BACKEND: "gemini-3.1-flash-live-preview",
     HF_BACKEND: HF_DEFAULTS.model_name,
-    LOCAL_STT_BACKEND: "gpt-realtime",
+    LOCAL_STT_BACKEND: "moonshine",
 }
 BACKEND_LABEL_BY_PROVIDER = {
     OPENAI_BACKEND: "OpenAI Realtime",
     GEMINI_BACKEND: "Gemini Live",
     HF_BACKEND: "Hugging Face",
-    LOCAL_STT_BACKEND: "Local STT + OpenAI voice",
+    LOCAL_STT_BACKEND: "Local STT",
+}
+LOCAL_STT_OUTPUT_LABELS = {
+    OPENAI_BACKEND: "Local STT + OpenAI voice",
+    HF_BACKEND: "Local STT + Hugging Face voice",
+    GEMINI_TTS_OUTPUT: "Local STT + Gemini TTS",
 }
 DEFAULT_VOICE_BY_BACKEND = {
     OPENAI_BACKEND: OPENAI_DEFAULT_VOICE,
@@ -599,6 +604,9 @@ def get_model_name_for_backend(backend: str) -> str:
 def get_backend_label(backend: str | None = None) -> str:
     """Return a human-readable label for a backend selector value."""
     normalized_backend = get_backend_choice() if backend is None else _normalize_backend_provider(backend)
+    if normalized_backend == LOCAL_STT_BACKEND:
+        response_backend = getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
+        return LOCAL_STT_OUTPUT_LABELS.get(response_backend, LOCAL_STT_OUTPUT_LABELS[OPENAI_BACKEND])
     return BACKEND_LABEL_BY_PROVIDER[normalized_backend]
 
 

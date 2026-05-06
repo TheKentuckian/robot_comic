@@ -81,10 +81,10 @@ def test_huggingface_backend_does_not_resolve_model_name() -> None:
     assert config_mod._resolve_model_name(config_mod.HF_BACKEND, "gpt-realtime") == ""
 
 
-def test_local_stt_backend_uses_openai_realtime_model() -> None:
-    """Local STT uses OpenAI Realtime for response audio after local transcription."""
+def test_local_stt_backend_config() -> None:
+    """Local STT normalizes correctly and defaults response backend to OpenAI."""
     assert config_mod._normalize_backend_provider(config_mod.LOCAL_STT_BACKEND, None) == config_mod.LOCAL_STT_BACKEND
-    assert config_mod._resolve_model_name(config_mod.LOCAL_STT_BACKEND, None) == "gpt-realtime"
+    assert config_mod._resolve_model_name(config_mod.LOCAL_STT_BACKEND, None) == "moonshine"
     assert config_mod._normalize_local_stt_response_backend(None) == config_mod.OPENAI_BACKEND
     assert config_mod._normalize_local_stt_response_backend(config_mod.HF_BACKEND) == config_mod.HF_BACKEND
 
