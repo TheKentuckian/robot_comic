@@ -35,7 +35,7 @@ def _detect_face(frame: Any) -> bool:
     if not MP_AVAILABLE or _mp_face_detection is None:
         return False
     rgb = frame[..., ::-1].copy()
-    with _mp_face_detection.FaceDetection(min_detection_confidence=0.5) as detector:
+    with _mp_face_detection.FaceDetection(min_detection_confidence=0.3) as detector:
         results = detector.process(rgb)
         return bool(results.detections)
 
@@ -147,8 +147,12 @@ class Greet(Tool):
         if not MP_AVAILABLE:
             return {"face_detected": True, "note": "MediaPipe unavailable, assuming face present"}
 
-        if _detect_face(frame):
-            return {"face_detected": True}
+        # Try up to 3 times on the initial front frame before sweeping (camera may need to settle)
+        for _ in range(3):
+            frame = deps.camera_worker.get_latest_frame()
+            if frame is not None and _detect_face(frame):
+                return {"face_detected": True}
+            await asyncio.sleep(0.3)
 
         for direction in SWEEP_POSITIONS:
             move_result = await MoveHead()(deps, direction=direction)

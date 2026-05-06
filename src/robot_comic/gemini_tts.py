@@ -43,6 +43,8 @@ GEMINI_TTS_OUTPUT_SAMPLE_RATE = 24000
 _CHUNK_SAMPLES = 2400  # 100 ms at 24 kHz
 _TTS_MAX_RETRIES = 3
 _TTS_RETRY_DELAY = 0.5
+_LLM_MAX_RETRIES = 4
+_LLM_RETRY_BASE_DELAY = 1.0
 _LLM_MAX_TOOL_ROUNDS = 5
 
 
@@ -187,6 +189,29 @@ class GeminiTTSResponseHandler(ConversationHandler):
         for frame in self._pcm_to_frames(pcm_bytes):
             await self.output_queue.put((GEMINI_TTS_OUTPUT_SAMPLE_RATE, frame))
 
+    async def _llm_generate_with_backoff(self, contents: Any, config: Any) -> Any:
+        """Call generate_content with exponential backoff on 503/UNAVAILABLE errors."""
+        assert self._client is not None, "Client not initialised"
+        delay = _LLM_RETRY_BASE_DELAY
+        for attempt in range(_LLM_MAX_RETRIES):
+            try:
+                return await self._client.aio.models.generate_content(
+                    model=GEMINI_TTS_LLM_MODEL,
+                    contents=contents,
+                    config=config,
+                )
+            except Exception as exc:
+                msg = str(exc)
+                is_retryable = "503" in msg or "UNAVAILABLE" in msg or "429" in msg or "RESOURCE_EXHAUSTED" in msg
+                if not is_retryable or attempt == _LLM_MAX_RETRIES - 1:
+                    raise
+                logger.warning(
+                    "LLM attempt %d/%d failed (%s); retrying in %.1fs",
+                    attempt + 1, _LLM_MAX_RETRIES, msg.split("\n")[0], delay,
+                )
+                await asyncio.sleep(delay)
+                delay *= 2
+
     async def _run_llm_with_tools(self) -> str:
         """Call Gemini Flash with conversation history, handling tool round-trips."""
         assert self._client is not None, "Client not initialised"
@@ -206,11 +231,7 @@ class GeminiTTSResponseHandler(ConversationHandler):
         history: list[Any] = list(self._conversation_history)
 
         for _ in range(_LLM_MAX_TOOL_ROUNDS):
-            response = await self._client.aio.models.generate_content(
-                model=GEMINI_TTS_LLM_MODEL,
-                contents=history,
-                config=gen_config,
-            )
+            response = await self._llm_generate_with_backoff(history, gen_config)
 
             candidate = response.candidates[0]
             function_calls = [
