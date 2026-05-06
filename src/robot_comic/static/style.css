@@ -397,6 +397,19 @@ button.ghost {
   border: 1px solid var(--border);
 }
 button.ghost:hover { border-color: rgba(94, 240, 193, 0.4); }
+button.ghost.danger {
+  color: var(--error);
+  border-color: rgba(255, 92, 112, 0.32);
+}
+button.ghost.danger:hover {
+  border-color: rgba(255, 92, 112, 0.58);
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
+  filter: none;
+}
 .actions {
   display: flex;
   align-items: center;

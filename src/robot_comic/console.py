@@ -85,6 +85,7 @@ LEGACY_STARTUP_ENV_NAMES = (
     "REACHY_MINI_CUSTOM_PROFILE",
     "REACHY_MINI_VOICE_OVERRIDE",
 )
+CROWD_HISTORY_DIR = Path(".rickles_sessions")
 
 
 def _estimate_pending_playback_seconds(robot: ReachyMini) -> float:
@@ -379,6 +380,43 @@ class LocalStream:
         """Read the saved startup personality from instance-local UI settings."""
         return read_startup_settings(self._instance_path).profile
 
+    def _crowd_history_path(self) -> Path:
+        """Return the local crowd-work session directory for the running app."""
+        return CROWD_HISTORY_DIR
+
+    def _crowd_history_files(self) -> list[Path]:
+        """Return persisted crowd-work session files, newest first."""
+        session_dir = self._crowd_history_path()
+        if not session_dir.exists():
+            return []
+        return sorted(
+            session_dir.glob("session_*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+
+    def _crowd_history_status(self) -> dict[str, object]:
+        """Return admin-facing metadata for persisted crowd-work sessions."""
+        session_dir = self._crowd_history_path()
+        files = self._crowd_history_files()
+        latest = files[0] if files else None
+        return {
+            "crowd_history_dir": str(session_dir.resolve()),
+            "crowd_history_count": len(files),
+            "crowd_history_latest": str(latest.resolve()) if latest else None,
+        }
+
+    def _clear_crowd_history(self) -> dict[str, object]:
+        """Remove local crowd-work session files and return the new status."""
+        removed = 0
+        for path in self._crowd_history_files():
+            try:
+                path.unlink()
+                removed += 1
+            except FileNotFoundError:
+                continue
+        return {"removed": removed, **self._crowd_history_status()}
+
     def _init_settings_ui_if_needed(self) -> None:
         """Attach minimal settings UI to the settings app.
 
@@ -462,6 +500,7 @@ class LocalStream:
                 "can_proceed_with_hf": can_proceed_with_hf,
                 "can_proceed_with_local_stt": can_proceed_with_local_stt,
                 "requires_restart": requires_restart,
+                **self._crowd_history_status(),
             }
 
         # GET / -> index.html
@@ -478,6 +517,14 @@ class LocalStream:
         @self._settings_app.get("/status")
         def _status() -> JSONResponse:
             return JSONResponse(_status_payload())
+
+        @self._settings_app.post("/crowd_history/clear")
+        def _clear_history() -> JSONResponse:
+            try:
+                return JSONResponse({"ok": True, **self._clear_crowd_history()})
+            except Exception as e:
+                logger.warning("Failed to clear crowd history: %s", e)
+                return JSONResponse({"ok": False, "error": "clear_failed"}, status_code=500)
 
         # GET /ready -> whether backend finished loading tools
         @self._settings_app.get("/ready")

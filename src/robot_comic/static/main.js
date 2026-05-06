@@ -328,6 +328,15 @@ async function applyPersonality(name, { persist = false } = {}) {
   return await resp.json();
 }
 
+async function clearCrowdHistory() {
+  const resp = await fetchWithTimeout("/crowd_history/clear", { method: "POST" }, 5000);
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new Error(data.error || "clear_failed");
+  }
+  return data;
+}
+
 async function getVoices() {
   try {
     const url = new URL("/voices", window.location.origin);
@@ -401,6 +410,10 @@ async function init() {
   const configuredPanel = document.getElementById("configured");
   const configuredTitle = document.getElementById("configured-title");
   const configuredCopy = document.getElementById("configured-copy");
+  const crowdHistoryChip = document.getElementById("crowd-history-chip");
+  const crowdHistoryPath = document.getElementById("crowd-history-path");
+  const crowdHistoryStatus = document.getElementById("crowd-history-status");
+  const clearCrowdHistoryBtn = document.getElementById("clear-crowd-history");
   const personalityPanel = document.getElementById("personality-panel");
   const formTitle = document.getElementById("form-title");
   const formCopy = document.getElementById("form-copy");
@@ -503,6 +516,15 @@ async function init() {
     localSttModel.value = choices.includes(status.local_stt_model) ? status.local_stt_model : choices[0];
     localSttUpdate.value = String(status.local_stt_update_interval || 0.35);
     setSelectedLocalSTTOutput(localSttResponse.value || OPENAI_BACKEND);
+  }
+
+  function renderCrowdHistory(status) {
+    const count = Number.parseInt(status.crowd_history_count ?? 0, 10) || 0;
+    crowdHistoryChip.textContent = `${count} stored`;
+    crowdHistoryPath.textContent = status.crowd_history_dir
+      ? `Local path: ${status.crowd_history_dir}`
+      : "Local path unavailable.";
+    clearCrowdHistoryBtn.disabled = count === 0;
   }
 
   function setSelectedBackend(backend) {
@@ -648,12 +670,30 @@ async function init() {
     local_stt_update_interval: 0.35,
     local_stt_model_choices: ["tiny_streaming", "small_streaming"],
     requires_restart: false,
+    crowd_history_dir: "",
+    crowd_history_count: 0,
+    crowd_history_latest: null,
   };
   populateHFFields(st);
   populateLocalSTTFields(st);
+  renderCrowdHistory(st);
   setSelectedBackend(st.backend_provider || DEFAULT_BACKEND);
   statusEl.textContent = "";
   renderCredentialPanels(st);
+
+  clearCrowdHistoryBtn.addEventListener("click", async () => {
+    setStatusMessage(crowdHistoryStatus, "Clearing crowd history...");
+    clearCrowdHistoryBtn.disabled = true;
+    try {
+      const data = await clearCrowdHistory();
+      renderCrowdHistory(data);
+      const plural = data.removed === 1 ? "" : "s";
+      setStatusMessage(crowdHistoryStatus, `Cleared ${data.removed || 0} session file${plural}.`, "ok");
+    } catch (e) {
+      clearCrowdHistoryBtn.disabled = false;
+      setStatusMessage(crowdHistoryStatus, "Failed to clear crowd history.", "error");
+    }
+  });
 
   // Handler for "Change API key" button
   changeKeyBtn.addEventListener("click", () => {

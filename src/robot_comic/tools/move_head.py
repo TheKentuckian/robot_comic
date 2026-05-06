@@ -15,13 +15,21 @@ class MoveHead(Tool):
     """Move head in a given direction."""
 
     name = "move_head"
-    description = "Move your head in a given direction: left, right, up, down or front."
+    description = (
+        "Move your head in a given direction: left, right, up, down or front. "
+        "Use down only when the user explicitly asks you to look or move down."
+    )
     parameters_schema = {
         "type": "object",
         "properties": {
             "direction": {
                 "type": "string",
                 "enum": ["left", "right", "up", "down", "front"],
+                "description": (
+                    "Head direction. Use down only when the user explicitly asks "
+                    "you to look or move down; avoid it for normal conversation, "
+                    "idle behavior, scanning, jokes, and emotional beats."
+                ),
             },
         },
         "required": ["direction"],

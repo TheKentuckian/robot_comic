@@ -1,6 +1,7 @@
 """Tests for the headless console stream."""
 
 import sys
+import json
 import asyncio
 import threading
 from types import SimpleNamespace
@@ -516,6 +517,65 @@ def test_status_reports_direct_hf_ws_url_as_ready(
     assert data["has_hf_connection"] is True
     assert data["hf_connection_mode"] == "local"
     assert data["can_proceed_with_hf"] is True
+
+
+def test_status_reports_local_crowd_history_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Settings API should expose where crowd-work session JSON is stored."""
+    monkeypatch.chdir(tmp_path)
+    session_dir = tmp_path / ".rickles_sessions"
+    session_dir.mkdir()
+    session_file = session_dir / "session_20260506_204006.json"
+    session_file.write_text(json.dumps({"name": "Tony"}), encoding="utf-8")
+
+    app = FastAPI()
+    robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
+    stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
+    stream._init_settings_ui_if_needed()
+
+    client = TestClient(app)
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["crowd_history_dir"] == str(session_dir.resolve())
+    assert data["crowd_history_count"] == 1
+    assert data["crowd_history_latest"] == str(session_file.resolve())
+
+
+def test_crowd_history_clear_removes_session_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Admin API should clear persisted crowd-work history without touching unrelated files."""
+    monkeypatch.chdir(tmp_path)
+    session_dir = tmp_path / ".rickles_sessions"
+    session_dir.mkdir()
+    first = session_dir / "session_20260506_204006.json"
+    second = session_dir / "session_20260506_214915.json"
+    unrelated = session_dir / "notes.txt"
+    first.write_text(json.dumps({"name": "Tony"}), encoding="utf-8")
+    second.write_text(json.dumps({"name": "Ari"}), encoding="utf-8")
+    unrelated.write_text("keep me", encoding="utf-8")
+
+    app = FastAPI()
+    robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
+    stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
+    stream._init_settings_ui_if_needed()
+
+    client = TestClient(app)
+    response = client.post("/crowd_history/clear")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["removed"] == 2
+    assert data["crowd_history_count"] == 0
+    assert not first.exists()
+    assert not second.exists()
+    assert unrelated.exists()
 
 
 def test_headless_personality_routes_return_gemini_voices_when_backend_selected(

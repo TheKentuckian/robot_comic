@@ -21,4 +21,6 @@ class MediapipeHeadTracker:
 
     def get_head_position(self, img: NDArray[np.uint8]) -> HeadTrackerResult:
         """Return the detected head position for a frame."""
+        if img.ndim == 3 and img.shape[-1] == 3:
+            img = np.ascontiguousarray(img[..., ::-1])
         return self._tracker.get_head_position(img)

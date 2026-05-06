@@ -130,6 +130,22 @@
         <button id="change-key-btn" class="ghost">Change API key</button>
       </div>
 
+      <div id="crowd-history-panel" class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Admin</p>
+            <h2>Crowd history</h2>
+          </div>
+          <span id="crowd-history-chip" class="chip">0 stored</span>
+        </div>
+        <p class="muted small">Crowd-work profiles are stored locally as JSON session files.</p>
+        <p id="crowd-history-path" class="status"></p>
+        <div class="actions">
+          <button id="clear-crowd-history" class="ghost danger">Clear Crowd History</button>
+          <p id="crowd-history-status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
+        </div>
+      </div>
+
       <div id="form-panel" class="panel hidden">
         <div class="panel-heading">
           <div>
