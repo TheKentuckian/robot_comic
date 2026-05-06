@@ -559,8 +559,9 @@ class GeminiLiveHandler(ConversationHandler):
                 # Start the background tool manager
                 self.tool_manager.start_up(tool_callbacks=[self._handle_tool_result])
 
-                # Start video sender if camera is available
-                if self.deps.camera_worker is not None:
+                # Start video sender only when explicitly enabled — continuous
+                # streaming triggers 1007 errors on some Gemini Live models.
+                if self.deps.camera_worker is not None and config.GEMINI_LIVE_VIDEO_STREAMING:
                     video_task = asyncio.create_task(self._video_sender_loop(), name="gemini-video-sender")
 
                 # session.receive() yields responses for the current turn then completes.

@@ -316,3 +316,46 @@ def test_gemini_excludes_head_tracking_when_no_head_tracker(monkeypatch) -> None
     tool_names = [fd.name for fd in live_config.tools[0].function_declarations] if live_config.tools else []
     assert "head_tracking" not in tool_names, "case 2 failed: camera_worker.head_tracker=None"
     assert "fake_tool" in tool_names, "case 2 failed: a non-head-tracking tool was unexpectedly excluded"
+
+
+@pytest.mark.asyncio
+async def test_video_task_not_started_when_streaming_disabled(monkeypatch):
+    """Video sender task must not start when GEMINI_LIVE_VIDEO_STREAMING=False."""
+    monkeypatch.setattr(gemini_mod, "get_session_instructions", lambda: "test")
+    monkeypatch.setattr(gemini_mod, "get_session_voice", lambda: "Kore")
+    monkeypatch.setattr(gemini_mod, "get_active_tool_specs", lambda _: [])
+
+    camera = MagicMock()
+    camera.get_latest_frame.return_value = None
+    deps = ToolDependencies(
+        reachy_mini=MagicMock(),
+        movement_manager=MagicMock(),
+        camera_worker=camera,
+    )
+
+    handler = GeminiLiveHandler(deps)
+    monkeypatch.setattr(type(handler.tool_manager), "start_up", MagicMock())
+    monkeypatch.setattr(type(handler.tool_manager), "shutdown", AsyncMock())
+
+    stop_event = asyncio.Event()
+    session = _FakeSession(batches=[], stop_event=stop_event)
+    fake_client = _FakeLiveClient(session)
+    handler.client = fake_client
+
+    # Flag off (default)
+    import robot_comic.config as cfg_mod
+    monkeypatch.setattr(cfg_mod.config, "GEMINI_LIVE_VIDEO_STREAMING", False)
+
+    video_sender_calls = []
+    original = handler._video_sender_loop
+
+    async def spy_video_loop():
+        video_sender_calls.append(True)
+        await original()
+
+    monkeypatch.setattr(handler, "_video_sender_loop", spy_video_loop)
+
+    stop_event.set()
+    await handler._run_live_session()
+
+    assert video_sender_calls == [], "Video sender must not start when flag is False"
