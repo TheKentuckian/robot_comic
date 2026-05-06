@@ -1,12 +1,12 @@
 """Session state tool for Don Rickles crowd-work — accumulates person profile and surfaces callback hints."""
-from __future__ import annotations
 
-import asyncio
+from __future__ import annotations
 import json
+import asyncio
 import logging
-from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict
+from pathlib import Path
+from datetime import datetime
 
 from reachy_mini_conversation_app.tools.core_tools import Tool, ToolDependencies
 
@@ -47,6 +47,7 @@ class CrowdWork(Tool):
     }
 
     def __init__(self, session_dir: Path | None = None) -> None:
+        """Initialise state and resume the most recent same-day session if one exists."""
         self._session_dir = session_dir if session_dir is not None else SESSION_DIR
         self._session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._state: Dict[str, Any] = {
@@ -123,6 +124,7 @@ class CrowdWork(Tool):
         return hints[:3]
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
+        """Dispatch to update or query based on the required 'action' kwarg."""
         action = kwargs.get("action")
         logger.info("Tool call: crowd_work action=%s", action)
 

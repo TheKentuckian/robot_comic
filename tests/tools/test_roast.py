@@ -1,15 +1,16 @@
 """Tests for the Roast tool."""
-from __future__ import annotations
 
-import importlib.util
+from __future__ import annotations
 import sys
+import importlib.util
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
 from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
+
 
 _PROFILE_PATH = Path(__file__).parents[2] / "profiles" / "don_rickles" / "roast.py"
 
@@ -25,20 +26,24 @@ def _load_roast_module():
 
 @pytest.fixture(scope="module")
 def roast_mod():
+    """Module-scoped fixture that loads the roast module from its profile path."""
     return _load_roast_module()
 
 
 @pytest.fixture
 def Roast(roast_mod):
+    """Fixture that returns the Roast class from the loaded module."""
     return roast_mod.Roast
 
 
 @pytest.fixture
 def parse_extraction(roast_mod):
+    """Fixture that returns the _parse_extraction helper from the loaded module."""
     return roast_mod._parse_extraction
 
 
 def make_deps(scan_response: str = "PERSON: center", extraction_response: str = "") -> ToolDependencies:
+    """Build a mock ToolDependencies whose vision_processor returns the given canned responses."""
     deps = MagicMock(spec=ToolDependencies)
     deps.motion_duration_s = 0.0
     frame = np.zeros((32, 32, 3), dtype=np.uint8)
@@ -65,7 +70,9 @@ EXTRACTION_TEXT = (
 
 # --- _parse_extraction ---
 
+
 def test_parse_extraction_returns_all_fields(parse_extraction):
+    """All six labelled fields are extracted correctly from a well-formed response."""
     result = parse_extraction(EXTRACTION_TEXT)
     assert result["hair"] == "thinning on top, attempting a combover"
     assert result["clothing"] == "wrinkled button-down, tucked in badly"
@@ -76,6 +83,7 @@ def test_parse_extraction_returns_all_fields(parse_extraction):
 
 
 def test_parse_extraction_missing_field_returns_unknown(parse_extraction):
+    """Fields absent from the response are substituted with 'unknown'."""
     result = parse_extraction("hair: thinning\nclothing: wrinkled")
     assert result["hair"] == "thinning"
     assert result["clothing"] == "wrinkled"
@@ -85,8 +93,10 @@ def test_parse_extraction_missing_field_returns_unknown(parse_extraction):
 
 # --- Roast tool ---
 
+
 @pytest.mark.asyncio
 async def test_roast_returns_no_subject_when_no_person_detected(Roast):
+    """When the scene scan finds no person, the tool returns {no_subject: True}."""
     deps = make_deps(scan_response="NO PERSON")
     with patch("asyncio.sleep"):
         result = await Roast()(deps)
@@ -96,6 +106,7 @@ async def test_roast_returns_no_subject_when_no_person_detected(Roast):
 
 @pytest.mark.asyncio
 async def test_roast_moves_head_left_when_person_on_left(Roast):
+    """A person on the left side triggers a head-left movement command."""
     deps = make_deps(scan_response="PERSON: left", extraction_response=EXTRACTION_TEXT)
     with patch("asyncio.sleep"):
         await Roast()(deps)
@@ -106,6 +117,7 @@ async def test_roast_moves_head_left_when_person_on_left(Roast):
 
 @pytest.mark.asyncio
 async def test_roast_moves_head_right_when_person_on_right(Roast):
+    """A person on the right side triggers a head-right movement command."""
     deps = make_deps(scan_response="PERSON: right", extraction_response=EXTRACTION_TEXT)
     with patch("asyncio.sleep"):
         await Roast()(deps)
@@ -116,6 +128,7 @@ async def test_roast_moves_head_right_when_person_on_right(Roast):
 
 @pytest.mark.asyncio
 async def test_roast_left_and_right_produce_different_head_poses(Roast):
+    """Left and right scene positions map to numerically distinct head-pose targets."""
     deps_left = make_deps(scan_response="PERSON: left", extraction_response=EXTRACTION_TEXT)
     deps_right = make_deps(scan_response="PERSON: right", extraction_response=EXTRACTION_TEXT)
     with patch("asyncio.sleep"):
@@ -124,11 +137,13 @@ async def test_roast_left_and_right_produce_different_head_poses(Roast):
     left_pose = deps_left.movement_manager.queue_move.call_args[0][0].target_head_pose
     right_pose = deps_right.movement_manager.queue_move.call_args[0][0].target_head_pose
     import numpy as np
+
     assert not np.allclose(left_pose, right_pose), "left and right head poses must differ"
 
 
 @pytest.mark.asyncio
 async def test_roast_returns_parsed_fields_on_success(Roast):
+    """A successful run returns a dict with all six parsed roast-target fields."""
     deps = make_deps(scan_response="PERSON: center", extraction_response=EXTRACTION_TEXT)
     with patch("asyncio.sleep"):
         result = await Roast()(deps)
@@ -139,6 +154,7 @@ async def test_roast_returns_parsed_fields_on_success(Roast):
 
 @pytest.mark.asyncio
 async def test_roast_captures_two_frames(Roast):
+    """The camera is sampled exactly twice: once for the scene scan and once for extraction."""
     deps = make_deps(scan_response="PERSON: center", extraction_response=EXTRACTION_TEXT)
     with patch("asyncio.sleep"):
         await Roast()(deps)
@@ -147,6 +163,7 @@ async def test_roast_captures_two_frames(Roast):
 
 @pytest.mark.asyncio
 async def test_roast_returns_error_when_camera_worker_unavailable(Roast):
+    """Missing camera_worker returns an error dict rather than raising."""
     deps = make_deps()
     deps.camera_worker = None
     result = await Roast()(deps)
@@ -155,6 +172,7 @@ async def test_roast_returns_error_when_camera_worker_unavailable(Roast):
 
 @pytest.mark.asyncio
 async def test_roast_returns_error_when_no_frame_available(Roast):
+    """A None frame from the camera worker returns an error dict."""
     deps = make_deps()
     deps.camera_worker.get_latest_frame.return_value = None
     result = await Roast()(deps)
@@ -163,6 +181,7 @@ async def test_roast_returns_error_when_no_frame_available(Roast):
 
 @pytest.mark.asyncio
 async def test_roast_falls_back_to_b64_when_no_vision_processor(Roast):
+    """Without a local vision processor the tool returns a base64 frame for remote interpretation."""
     deps = make_deps()
     deps.vision_processor = None
     with patch("asyncio.sleep"):

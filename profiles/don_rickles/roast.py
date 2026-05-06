@@ -1,15 +1,15 @@
 """Roast target extractor — scene scan, head orient, close-up capture, structured extraction."""
-from __future__ import annotations
 
-import asyncio
-import base64
-import logging
+from __future__ import annotations
 import re
+import base64
+import asyncio
+import logging
 from typing import Any, Dict
 
-from reachy_mini_conversation_app.camera_frame_encoding import encode_bgr_frame_as_jpeg
-from reachy_mini_conversation_app.tools.core_tools import Tool, ToolDependencies
 from reachy_mini_conversation_app.tools.move_head import MoveHead
+from reachy_mini_conversation_app.tools.core_tools import Tool, ToolDependencies
+from reachy_mini_conversation_app.camera_frame_encoding import encode_bgr_frame_as_jpeg
 
 
 logger = logging.getLogger(__name__)

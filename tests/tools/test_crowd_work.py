@@ -1,14 +1,15 @@
 """Tests for the CrowdWork session state tool."""
-from __future__ import annotations
 
+from __future__ import annotations
+import sys
+import json
 import asyncio
 import importlib.util
-import json
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+
 
 # Load CrowdWork from its profile path (not on sys.path)
 _PROFILE_PATH = Path(__file__).parents[2] / "profiles" / "don_rickles" / "crowd_work.py"
@@ -24,24 +25,29 @@ def _load_crowd_work():
 
 
 def make_deps() -> MagicMock:
+    """Return a minimal mock ToolDependencies."""
     return MagicMock()
 
 
 @pytest.fixture
 def CrowdWork():
+    """Fixture that returns the CrowdWork class loaded from the profile path."""
     return _load_crowd_work()
 
 
 @pytest.fixture
 def crowd_work(tmp_path, CrowdWork):
+    """Fixture that returns a CrowdWork instance backed by a temp session directory."""
     session_dir = tmp_path / ".rickles_sessions"
     return CrowdWork(session_dir=session_dir)
 
 
 # --- update action ---
 
+
 @pytest.mark.asyncio
 async def test_update_stores_name_job_hometown(crowd_work):
+    """Update action persists name, job, and hometown in state."""
     result = await crowd_work(make_deps(), action="update", name="Tony", job="engineer", hometown="Pittsburgh")
     assert result["status"] == "updated"
     assert crowd_work._state["name"] == "Tony"
@@ -51,6 +57,7 @@ async def test_update_stores_name_job_hometown(crowd_work):
 
 @pytest.mark.asyncio
 async def test_update_appends_details_without_duplicates(crowd_work):
+    """Repeated detail strings are deduplicated rather than appended twice."""
     await crowd_work(make_deps(), action="update", details=["nervous laugh"])
     await crowd_work(make_deps(), action="update", details=["nervous laugh", "wrinkled shirt"])
     assert crowd_work._state["details"] == ["nervous laugh", "wrinkled shirt"]
@@ -58,6 +65,7 @@ async def test_update_appends_details_without_duplicates(crowd_work):
 
 @pytest.mark.asyncio
 async def test_update_partial_fields_does_not_overwrite_others(crowd_work):
+    """Partial update only sets the supplied fields; existing fields are preserved."""
     await crowd_work(make_deps(), action="update", name="Tony", job="engineer")
     await crowd_work(make_deps(), action="update", hometown="Pittsburgh")
     assert crowd_work._state["name"] == "Tony"
@@ -67,8 +75,10 @@ async def test_update_partial_fields_does_not_overwrite_others(crowd_work):
 
 # --- query action ---
 
+
 @pytest.mark.asyncio
 async def test_query_returns_empty_callbacks_when_no_data(crowd_work):
+    """Query on an empty session returns null identity fields and an empty callbacks list."""
     result = await crowd_work(make_deps(), action="query")
     assert result["profile"]["name"] is None
     assert result["profile"]["job"] is None
@@ -78,6 +88,7 @@ async def test_query_returns_empty_callbacks_when_no_data(crowd_work):
 
 @pytest.mark.asyncio
 async def test_query_returns_callbacks_with_two_or_more_identity_fields(crowd_work):
+    """Query surfaces a callback hint when at least two identity fields are known."""
     await crowd_work(make_deps(), action="update", name="Tony", job="engineer")
     result = await crowd_work(make_deps(), action="query")
     assert len(result["callbacks"]) >= 1
@@ -87,6 +98,7 @@ async def test_query_returns_callbacks_with_two_or_more_identity_fields(crowd_wo
 
 @pytest.mark.asyncio
 async def test_query_includes_detail_callbacks(crowd_work):
+    """Query includes at least one detail-based callback when details have been stored."""
     await crowd_work(make_deps(), action="update", details=["nervous laugh", "wrinkled shirt"])
     result = await crowd_work(make_deps(), action="query")
     assert any("nervous laugh" in cb for cb in result["callbacks"])
@@ -94,10 +106,13 @@ async def test_query_includes_detail_callbacks(crowd_work):
 
 @pytest.mark.asyncio
 async def test_query_returns_at_most_three_callbacks(crowd_work):
+    """Query never returns more than three callback hints regardless of data richness."""
     await crowd_work(
         make_deps(),
         action="update",
-        name="Tony", job="engineer", hometown="Pittsburgh",
+        name="Tony",
+        job="engineer",
+        hometown="Pittsburgh",
         details=["nervous laugh", "wrinkled shirt", "combover"],
     )
     result = await crowd_work(make_deps(), action="query")
@@ -106,16 +121,20 @@ async def test_query_returns_at_most_three_callbacks(crowd_work):
 
 # --- unknown action ---
 
+
 @pytest.mark.asyncio
 async def test_unknown_action_returns_error(crowd_work):
+    """An unrecognised action returns a dict containing an 'error' key."""
     result = await crowd_work(make_deps(), action="explode")
     assert "error" in result
 
 
 # --- persistence ---
 
+
 @pytest.mark.asyncio
 async def test_update_writes_session_file(crowd_work, tmp_path):
+    """Update triggers a background write that persists the session to disk."""
     await crowd_work(make_deps(), action="update", name="Tony")
     await asyncio.sleep(0.15)  # let fire-and-forget write complete
     session_dir = tmp_path / ".rickles_sessions"
@@ -129,19 +148,24 @@ async def test_update_writes_session_file(crowd_work, tmp_path):
 
 @pytest.mark.asyncio
 async def test_load_recent_session_resumes_from_disk(tmp_path, CrowdWork):
+    """A same-day session file on disk is resumed on construction."""
     session_dir = tmp_path / ".rickles_sessions"
     session_dir.mkdir()
     session_file = session_dir / "session_20260506_120000.json"
-    session_file.write_text(json.dumps({
-        "session_id": "20260506_120000",
-        "started_at": "2026-05-06T12:00:00",
-        "name": "Tony",
-        "job": "engineer",
-        "hometown": "Pittsburgh",
-        "details": ["nervous laugh"],
-        "roast_targets_used": [],
-        "last_updated": "2026-05-06T12:05:00",
-    }))
+    session_file.write_text(
+        json.dumps(
+            {
+                "session_id": "20260506_120000",
+                "started_at": "2026-05-06T12:00:00",
+                "name": "Tony",
+                "job": "engineer",
+                "hometown": "Pittsburgh",
+                "details": ["nervous laugh"],
+                "roast_targets_used": [],
+                "last_updated": "2026-05-06T12:05:00",
+            }
+        )
+    )
     cw = CrowdWork(session_dir=session_dir)
     assert cw._state["name"] == "Tony"
     assert cw._state["job"] == "engineer"
@@ -165,7 +189,8 @@ async def test_load_does_not_resume_old_session(tmp_path, CrowdWork):
     }
     session_file.write_text(json.dumps(old_data))
     # Force old mtime
-    import os, time
+    import os
+
     old_time = 946728000  # 2000-01-01 approximately
     os.utime(session_file, (old_time, old_time))
     cw = CrowdWork(session_dir=session_dir)
