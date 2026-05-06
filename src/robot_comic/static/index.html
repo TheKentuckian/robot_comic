@@ -30,7 +30,7 @@
           <a href="https://ai.google.dev/gemini-api/terms#data-use-unpaid" target="_blank" rel="noopener">
             Gemini API data usage policy
           </a>
-          for details.
+          for details. Local STT keeps speech recognition on-device, then sends the resulting text to OpenAI for response generation and speech.
         </p>
 
         <details>
@@ -68,6 +68,13 @@
             <span class="backend-choice-body">
               <span class="backend-choice-title">Hugging Face</span>
               <span class="backend-choice-copy">Use the built-in Hugging Face server or your own local endpoint.</span>
+            </span>
+          </label>
+          <label class="backend-choice" data-backend-card="local_stt">
+            <input type="radio" name="backend" value="local_stt" />
+            <span class="backend-choice-body">
+              <span class="backend-choice-title">Local STT</span>
+              <span class="backend-choice-copy">Run Moonshine speech recognition on-device, then use OpenAI for voice.</span>
             </span>
           </label>
           <label class="backend-choice is-selected" data-backend-card="openai">
@@ -112,6 +119,32 @@
           <span class="chip">Required</span>
         </div>
         <p id="form-copy" class="muted">Paste your API key once and we will store it locally for the headless conversation loop.</p>
+        <div id="local-stt-fields" class="hidden">
+          <label for="local-stt-language">Speech language</label>
+          <input id="local-stt-language" type="text" value="en" placeholder="en" autocomplete="off" />
+
+          <label for="local-stt-cache">Model cache</label>
+          <input id="local-stt-cache" type="text" value="./cache/moonshine_voice" placeholder="./cache/moonshine_voice" autocomplete="off" />
+
+          <label for="local-stt-response">Response voice backend</label>
+          <select id="local-stt-response">
+            <option value="openai">OpenAI Realtime</option>
+            <option value="huggingface">Hugging Face</option>
+          </select>
+
+          <label for="local-stt-model">Local STT model</label>
+          <select id="local-stt-model">
+            <option value="tiny_streaming">Tiny streaming</option>
+            <option value="small_streaming">Small streaming</option>
+          </select>
+
+          <label for="local-stt-update">Partial update interval</label>
+          <input id="local-stt-update" type="text" inputmode="decimal" value="0.35" placeholder="0.35" autocomplete="off" />
+
+          <p class="muted hf-help">
+            Requires the optional local STT install on the robot. Smaller models are faster; larger models are steadier when the room is noisy.
+          </p>
+        </div>
         <div id="api-key-fields">
           <label id="api-key-label" for="api-key">OpenAI API Key</label>
           <input id="api-key" type="password" placeholder="sk-..." autocomplete="off" />

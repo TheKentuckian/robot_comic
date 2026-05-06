@@ -219,6 +219,95 @@ def test_backend_config_preserves_explicit_model_override_when_saving_key(
     assert "OPENAI_API_KEY=openai-test-key" in env_text
 
 
+def test_backend_config_persists_local_stt_selection_and_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Settings API should persist local STT options and reuse OpenAI credentials."""
+    monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
+    monkeypatch.setattr(config, "MODEL_NAME", "gpt-realtime")
+    monkeypatch.setattr(config, "OPENAI_API_KEY", None)
+    monkeypatch.setattr(config, "LOCAL_STT_CACHE_DIR", "./cache/moonshine_voice")
+    monkeypatch.setattr(config, "LOCAL_STT_LANGUAGE", "en")
+    monkeypatch.setattr(config, "LOCAL_STT_MODEL", "tiny_streaming")
+    monkeypatch.setattr(config, "LOCAL_STT_UPDATE_INTERVAL", 0.35)
+    monkeypatch.setenv("BACKEND_PROVIDER", "openai")
+    monkeypatch.setenv("MODEL_NAME", "gpt-realtime")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    app = FastAPI()
+    robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
+    stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
+    stream._init_settings_ui_if_needed()
+
+    client = TestClient(app)
+    response = client.post(
+        "/backend_config",
+        json={
+            "backend": "local_stt",
+            "api_key": "openai-test-key",
+            "local_stt_response_backend": "openai",
+            "local_stt_cache_dir": "./cache/moonshine_voice",
+            "local_stt_language": "en",
+            "local_stt_model": "small_streaming",
+            "local_stt_update_interval": 0.5,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["backend_provider"] == "local_stt"
+    assert data["active_backend"] == "openai"
+    assert data["has_local_stt_key"] is True
+    assert data["can_proceed_with_local_stt"] is True
+    assert data["local_stt_response_backend"] == "openai"
+    assert data["local_stt_cache_dir"] == "./cache/moonshine_voice"
+    assert data["local_stt_language"] == "en"
+    assert data["local_stt_model"] == "small_streaming"
+    assert data["local_stt_update_interval"] == 0.5
+    assert data["requires_restart"] is True
+
+    env_text = (tmp_path / ".env").read_text(encoding="utf-8")
+    env_lines = env_text.splitlines()
+    assert "BACKEND_PROVIDER=local_stt" in env_text
+    assert "OPENAI_API_KEY=openai-test-key" in env_text
+    assert "LOCAL_STT_PROVIDER=moonshine" in env_text
+    assert "LOCAL_STT_RESPONSE_BACKEND=openai" in env_text
+    assert "LOCAL_STT_CACHE_DIR=./cache/moonshine_voice" in env_text
+    assert "LOCAL_STT_LANGUAGE=en" in env_text
+    assert "LOCAL_STT_MODEL=small_streaming" in env_text
+    assert "LOCAL_STT_UPDATE_INTERVAL=0.50" in env_text
+    assert not any(line.startswith("MODEL_NAME=") for line in env_lines)
+
+
+def test_backend_config_rejects_invalid_local_stt_update_interval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Settings API should reject local STT update intervals that would hurt UX."""
+    monkeypatch.setattr(config, "BACKEND_PROVIDER", "local_stt")
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "openai-test-key")
+
+    app = FastAPI()
+    robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
+    stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
+    stream._init_settings_ui_if_needed()
+
+    client = TestClient(app)
+    response = client.post(
+        "/backend_config",
+        json={
+            "backend": "local_stt",
+            "local_stt_model": "tiny_streaming",
+            "local_stt_update_interval": 9.0,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_local_stt_update_interval"
+
+
 def test_backend_config_persists_local_hf_selection_and_status(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

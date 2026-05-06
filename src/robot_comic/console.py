@@ -28,10 +28,19 @@ from robot_comic.config import (
     GEMINI_BACKEND,
     LOCKED_PROFILE,
     OPENAI_BACKEND,
+    LOCAL_STT_BACKEND,
+    LOCAL_STT_MODEL_ENV,
     HF_REALTIME_WS_URL_ENV,
+    LOCAL_STT_LANGUAGE_ENV,
+    LOCAL_STT_PROVIDER_ENV,
+    LOCAL_STT_CACHE_DIR_ENV,
+    LOCAL_STT_MODEL_CHOICES,
     HF_LOCAL_CONNECTION_MODE,
     HF_DEPLOYED_CONNECTION_MODE,
+    LOCAL_STT_UPDATE_INTERVAL_ENV,
+    LOCAL_STT_RESPONSE_BACKEND_ENV,
     HF_REALTIME_CONNECTION_MODE_ENV,
+    LOCAL_STT_RESPONSE_BACKEND_CHOICES,
     config,
     get_backend_choice,
     get_hf_session_url,
@@ -175,6 +184,10 @@ class LocalStream:
             return self._has_key(config.GEMINI_API_KEY)
         if backend == HF_BACKEND:
             return has_hf_realtime_target()
+        if backend == LOCAL_STT_BACKEND:
+            if getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND) == HF_BACKEND:
+                return has_hf_realtime_target()
+            return self._has_key(config.OPENAI_API_KEY)
         return self._has_key(config.OPENAI_API_KEY)
 
     @staticmethod
@@ -184,6 +197,10 @@ class LocalStream:
             return "GEMINI_API_KEY"
         if backend == HF_BACKEND:
             return HF_REALTIME_WS_URL_ENV
+        if backend == LOCAL_STT_BACKEND:
+            if getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND) == HF_BACKEND:
+                return HF_REALTIME_WS_URL_ENV
+            return "OPENAI_API_KEY"
         return "OPENAI_API_KEY"
 
     def _persist_env_value(self, env_name: str, value: str) -> None:
@@ -283,12 +300,33 @@ class LocalStream:
         """Persist GEMINI_API_KEY to environment and instance `.env`."""
         self._persist_env_value("GEMINI_API_KEY", key)
 
+    def _persist_local_stt_settings(
+        self,
+        *,
+        response_backend: str,
+        cache_dir: str,
+        language: str,
+        model: str,
+        update_interval: float,
+    ) -> None:
+        """Persist local STT settings to environment and instance `.env`."""
+        self._persist_env_values(
+            {
+                LOCAL_STT_PROVIDER_ENV: "moonshine",
+                LOCAL_STT_RESPONSE_BACKEND_ENV: response_backend,
+                LOCAL_STT_CACHE_DIR_ENV: cache_dir,
+                LOCAL_STT_LANGUAGE_ENV: language,
+                LOCAL_STT_MODEL_ENV: model,
+                LOCAL_STT_UPDATE_INTERVAL_ENV: f"{update_interval:.2f}",
+            }
+        )
+
     def _persist_backend_choice(self, backend: str) -> None:
         """Persist the selected backend without clobbering explicit model overrides."""
         current_backend = get_backend_choice()
         current_model_name = (os.getenv("MODEL_NAME") or "").strip()
         updates = {"BACKEND_PROVIDER": backend}
-        if backend == HF_BACKEND:
+        if backend in {HF_BACKEND, LOCAL_STT_BACKEND}:
             self._persist_env_values(updates)
             try:
                 os.environ.pop("MODEL_NAME", None)
@@ -364,6 +402,11 @@ class LocalStream:
             hf_mode: Optional[str] = None
             hf_host: Optional[str] = None
             hf_port: Optional[int] = None
+            local_stt_response_backend: Optional[str] = None
+            local_stt_cache_dir: Optional[str] = None
+            local_stt_language: Optional[str] = None
+            local_stt_model: Optional[str] = None
+            local_stt_update_interval: Optional[float] = None
 
         def _status_payload() -> dict[str, object]:
             backend_provider = get_backend_choice()
@@ -378,9 +421,11 @@ class LocalStream:
             hf_connection_selection = get_hf_connection_selection()
             hf_connection_mode = hf_connection_selection.mode
             has_hf_connection = hf_connection_selection.has_target
+            has_local_stt_key = self._has_required_key(LOCAL_STT_BACKEND)
             can_proceed_with_openai = has_openai_key
             can_proceed_with_gemini = has_gemini_key
             can_proceed_with_hf = has_hf_connection
+            can_proceed_with_local_stt = has_local_stt_key
             can_proceed = self._has_required_key(active_backend)
             requires_restart = backend_provider != active_backend
             return {
@@ -392,13 +437,23 @@ class LocalStream:
                 "has_hf_session_url": has_hf_session_url,
                 "has_hf_ws_url": has_hf_ws_url,
                 "has_hf_connection": has_hf_connection,
+                "has_local_stt_key": has_local_stt_key,
                 "hf_connection_mode": hf_connection_mode,
                 "hf_direct_host": hf_direct_host,
                 "hf_direct_port": hf_direct_port,
+                "local_stt_provider": getattr(config, "LOCAL_STT_PROVIDER", "moonshine"),
+                "local_stt_response_backend": getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND),
+                "local_stt_response_backend_choices": list(LOCAL_STT_RESPONSE_BACKEND_CHOICES),
+                "local_stt_cache_dir": getattr(config, "LOCAL_STT_CACHE_DIR", "./cache/moonshine_voice"),
+                "local_stt_language": getattr(config, "LOCAL_STT_LANGUAGE", "en"),
+                "local_stt_model": getattr(config, "LOCAL_STT_MODEL", "tiny_streaming"),
+                "local_stt_update_interval": getattr(config, "LOCAL_STT_UPDATE_INTERVAL", 0.35),
+                "local_stt_model_choices": list(LOCAL_STT_MODEL_CHOICES),
                 "can_proceed": can_proceed,
                 "can_proceed_with_openai": can_proceed_with_openai,
                 "can_proceed_with_gemini": can_proceed_with_gemini,
                 "can_proceed_with_hf": can_proceed_with_hf,
+                "can_proceed_with_local_stt": can_proceed_with_local_stt,
                 "requires_restart": requires_restart,
             }
 
@@ -439,18 +494,67 @@ class LocalStream:
         @self._settings_app.post("/backend_config")
         def _set_backend(payload: BackendPayload) -> JSONResponse:
             backend = payload.backend.strip().lower()
-            if backend not in {OPENAI_BACKEND, GEMINI_BACKEND, HF_BACKEND}:
+            if backend not in {OPENAI_BACKEND, GEMINI_BACKEND, HF_BACKEND, LOCAL_STT_BACKEND}:
                 return JSONResponse({"ok": False, "error": "invalid_backend"}, status_code=400)
 
             api_key = (payload.api_key or "").strip()
             if backend == GEMINI_BACKEND and not api_key and not self._has_required_key(GEMINI_BACKEND):
                 return JSONResponse({"ok": False, "error": "empty_key"}, status_code=400)
 
+            local_stt_response_backend = (
+                payload.local_stt_response_backend or getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
+            ).strip().lower()
+            if backend == LOCAL_STT_BACKEND and local_stt_response_backend not in LOCAL_STT_RESPONSE_BACKEND_CHOICES:
+                return JSONResponse({"ok": False, "error": "invalid_local_stt_response_backend"}, status_code=400)
+            if (
+                backend == LOCAL_STT_BACKEND
+                and local_stt_response_backend == OPENAI_BACKEND
+                and not api_key
+                and not self._has_key(config.OPENAI_API_KEY)
+            ):
+                return JSONResponse({"ok": False, "error": "empty_key"}, status_code=400)
+
             if backend == OPENAI_BACKEND and api_key:
+                self._persist_api_key(api_key)
+            if backend == LOCAL_STT_BACKEND and local_stt_response_backend == OPENAI_BACKEND and api_key:
                 self._persist_api_key(api_key)
             if backend == GEMINI_BACKEND and api_key:
                 self._persist_gemini_api_key(api_key)
-            if backend == HF_BACKEND:
+            if backend == LOCAL_STT_BACKEND:
+                cache_dir = (
+                    payload.local_stt_cache_dir
+                    or getattr(config, "LOCAL_STT_CACHE_DIR", "./cache/moonshine_voice")
+                    or "./cache/moonshine_voice"
+                ).strip()
+                if not cache_dir:
+                    return JSONResponse({"ok": False, "error": "invalid_local_stt_cache_dir"}, status_code=400)
+
+                language = (payload.local_stt_language or getattr(config, "LOCAL_STT_LANGUAGE", "en") or "en").strip()
+                if not language or "/" in language or "\\" in language:
+                    return JSONResponse({"ok": False, "error": "invalid_local_stt_language"}, status_code=400)
+
+                model = (
+                    payload.local_stt_model or getattr(config, "LOCAL_STT_MODEL", "tiny_streaming") or "tiny_streaming"
+                ).strip().lower().replace("-", "_")
+                if model not in LOCAL_STT_MODEL_CHOICES:
+                    return JSONResponse({"ok": False, "error": "invalid_local_stt_model"}, status_code=400)
+
+                update_interval = (
+                    payload.local_stt_update_interval
+                    if payload.local_stt_update_interval is not None
+                    else float(getattr(config, "LOCAL_STT_UPDATE_INTERVAL", 0.35))
+                )
+                if update_interval < 0.1 or update_interval > 2.0:
+                    return JSONResponse({"ok": False, "error": "invalid_local_stt_update_interval"}, status_code=400)
+
+                self._persist_local_stt_settings(
+                    response_backend=local_stt_response_backend,
+                    cache_dir=cache_dir,
+                    language=language.lower(),
+                    model=model,
+                    update_interval=update_interval,
+                )
+            if backend == HF_BACKEND or (backend == LOCAL_STT_BACKEND and local_stt_response_backend == HF_BACKEND):
                 hf_selection = get_hf_connection_selection()
                 hf_mode = (payload.hf_mode or hf_selection.mode).strip().lower()
                 if hf_mode == HF_LOCAL_CONNECTION_MODE:

@@ -1,6 +1,7 @@
 const OPENAI_BACKEND = "openai";
 const GEMINI_BACKEND = "gemini";
 const HF_BACKEND = "huggingface";
+const LOCAL_STT_BACKEND = "local_stt";
 const DEFAULT_BACKEND = HF_BACKEND;
 const HF_DEFAULT_HOST = "localhost";
 const HF_DEFAULT_PORT = 8765;
@@ -44,11 +45,25 @@ const BACKEND_META = {
     requiredCredentialsCopy: "Set up the Hugging Face connection details before switching.",
     note: "Hugging Face can use the built-in server or your own local realtime websocket.",
   },
+  [LOCAL_STT_BACKEND]: {
+    label: "Local STT",
+    formTitle: "Configure Local STT",
+    inputLabel: "OPENAI_API_KEY",
+    placeholder: "sk-...",
+    saveButton: "Save local STT",
+    changeButton: "Edit local STT",
+    readyTitle: "Local STT ready",
+    readyCopy: "Moonshine will transcribe speech on-device, then OpenAI will generate the spoken response.",
+    formCopy: "Choose a local Moonshine model and provide an OpenAI key for response audio.",
+    requiredCredentialsCopy: "Local STT still needs OPENAI_API_KEY for response generation and speech.",
+    note: "Local STT keeps speech recognition on-device, then sends text to OpenAI for the spoken response.",
+  },
 };
 
 function backendHasCredentials(status, backend) {
   if (backend === GEMINI_BACKEND) return !!status.has_gemini_key;
   if (backend === HF_BACKEND) return !!(status.has_hf_connection ?? (status.has_hf_session_url || status.has_hf_ws_url));
+  if (backend === LOCAL_STT_BACKEND) return !!status.has_local_stt_key;
   return !!status.has_openai_key;
 }
 
@@ -61,6 +76,11 @@ function backendCanProceed(status, backend) {
   if (backend === HF_BACKEND) {
     return status.can_proceed_with_hf !== undefined
       ? !!status.can_proceed_with_hf
+      : backendHasCredentials(status, backend);
+  }
+  if (backend === LOCAL_STT_BACKEND) {
+    return status.can_proceed_with_local_stt !== undefined
+      ? !!status.can_proceed_with_local_stt
       : backendHasCredentials(status, backend);
   }
   return status.can_proceed_with_openai !== undefined
@@ -145,6 +165,19 @@ async function saveBackendConfig(backend, { key = "", hfMode = "", hfHost = "", 
     if (hfMode) body.hf_mode = hfMode;
     if (hfHost) body.hf_host = hfHost;
     if (hfPort !== null && hfPort !== undefined) body.hf_port = hfPort;
+  }
+  if (backend === LOCAL_STT_BACKEND) {
+    const languageEl = document.getElementById("local-stt-language");
+    const cacheEl = document.getElementById("local-stt-cache");
+    const responseEl = document.getElementById("local-stt-response");
+    const modelEl = document.getElementById("local-stt-model");
+    const updateEl = document.getElementById("local-stt-update");
+    body.local_stt_language = (languageEl?.value || "en").trim();
+    body.local_stt_cache_dir = (cacheEl?.value || "./cache/moonshine_voice").trim();
+    body.local_stt_response_backend = responseEl?.value || OPENAI_BACKEND;
+    body.local_stt_model = modelEl?.value || "tiny_streaming";
+    const updateInterval = Number.parseFloat((updateEl?.value || "0.35").trim());
+    if (Number.isFinite(updateInterval)) body.local_stt_update_interval = updateInterval;
   }
   const resp = await fetch("/backend_config", {
     method: "POST",
@@ -323,6 +356,12 @@ async function init() {
   const hfHostCustom = document.getElementById("hf-host-custom");
   const hfPort = document.getElementById("hf-port");
   const hfPreview = document.getElementById("hf-preview");
+  const localSttFields = document.getElementById("local-stt-fields");
+  const localSttLanguage = document.getElementById("local-stt-language");
+  const localSttCache = document.getElementById("local-stt-cache");
+  const localSttResponse = document.getElementById("local-stt-response");
+  const localSttModel = document.getElementById("local-stt-model");
+  const localSttUpdate = document.getElementById("local-stt-update");
 
   // Personality elements
   const pSelect = document.getElementById("personality-select");
@@ -384,8 +423,26 @@ async function init() {
     updateHFControls();
   }
 
+  function populateLocalSTTFields(status) {
+    localSttLanguage.value = status.local_stt_language || "en";
+    localSttCache.value = status.local_stt_cache_dir || "./cache/moonshine_voice";
+    localSttResponse.value = status.local_stt_response_backend || OPENAI_BACKEND;
+    localSttModel.innerHTML = "";
+    const choices = Array.isArray(status.local_stt_model_choices) && status.local_stt_model_choices.length
+      ? status.local_stt_model_choices
+      : ["tiny_streaming", "small_streaming"];
+    for (const choice of choices) {
+      const opt = document.createElement("option");
+      opt.value = choice;
+      opt.textContent = choice === "small_streaming" ? "Small streaming" : "Tiny streaming";
+      localSttModel.appendChild(opt);
+    }
+    localSttModel.value = choices.includes(status.local_stt_model) ? status.local_stt_model : choices[0];
+    localSttUpdate.value = String(status.local_stt_update_interval || 0.35);
+  }
+
   function setSelectedBackend(backend) {
-    selectedBackend = [OPENAI_BACKEND, GEMINI_BACKEND, HF_BACKEND].includes(backend)
+    selectedBackend = [OPENAI_BACKEND, GEMINI_BACKEND, HF_BACKEND, LOCAL_STT_BACKEND].includes(backend)
       ? backend
       : DEFAULT_BACKEND;
     backendInputs.forEach((radio) => {
@@ -401,20 +458,29 @@ async function init() {
     const activeBackend = status.active_backend || persistedBackend;
     const requiresRestart = !!status.requires_restart;
     const meta = backendMeta(selectedBackend);
-    const canProceedWithSelectedBackend = backendCanProceed(status, selectedBackend);
     const selectedMatchesPersisted = selectedBackend === persistedBackend;
     const selectedMatchesActive = selectedBackend === activeBackend;
-    const usesApiKeyForm = selectedBackend === OPENAI_BACKEND || selectedBackend === GEMINI_BACKEND;
-    const usesHFForm = selectedBackend === HF_BACKEND;
-    const supportsForm = usesApiKeyForm || usesHFForm;
+    const localSttUsesHF = selectedBackend === LOCAL_STT_BACKEND && localSttResponse.value === HF_BACKEND;
+    const localSttUsesOpenAI = selectedBackend === LOCAL_STT_BACKEND && localSttResponse.value !== HF_BACKEND;
+    const canProceedWithSelectedBackend = localSttUsesHF
+      ? backendCanProceed(status, HF_BACKEND)
+      : localSttUsesOpenAI
+        ? backendCanProceed(status, OPENAI_BACKEND)
+        : backendCanProceed(status, selectedBackend);
+    const usesApiKeyForm = selectedBackend === OPENAI_BACKEND || selectedBackend === GEMINI_BACKEND || localSttUsesOpenAI;
+    const usesHFForm = selectedBackend === HF_BACKEND || localSttUsesHF;
+    const usesLocalSTTForm = selectedBackend === LOCAL_STT_BACKEND;
+    const supportsForm = usesApiKeyForm || usesHFForm || usesLocalSTTForm;
 
     backendChip.textContent = selectedBackend === persistedBackend ? "Saved" : "Selected";
     backendNote.innerHTML = formatBackendNote(meta.note);
 
     configuredTitle.textContent = meta.readyTitle;
-    configuredCopy.textContent = usesHFForm ? describeHFConfiguration(status) : meta.readyCopy;
+    configuredCopy.textContent = usesHFForm && selectedBackend !== LOCAL_STT_BACKEND
+      ? describeHFConfiguration(status)
+      : meta.readyCopy;
     formTitle.textContent = meta.formTitle;
-    formCopy.textContent = usesHFForm
+    formCopy.textContent = usesHFForm && selectedBackend !== LOCAL_STT_BACKEND
       ? meta.formCopy
       : canProceedWithSelectedBackend
         ? meta.formCopy
@@ -427,6 +493,7 @@ async function init() {
     show(configuredPanel, canProceedWithSelectedBackend && !editingCredentials);
     show(formPanel, supportsForm && (editingCredentials || !canProceedWithSelectedBackend));
     show(apiKeyFields, usesApiKeyForm);
+    show(localSttFields, usesLocalSTTForm);
     show(hfFields, usesHFForm);
     if (usesHFForm) updateHFControls();
     show(changeKeyBtn, supportsForm && canProceedWithSelectedBackend && !editingCredentials);
@@ -478,9 +545,19 @@ async function init() {
     can_proceed_with_openai: false,
     can_proceed_with_gemini: false,
     can_proceed_with_hf: false,
+    has_local_stt_key: false,
+    can_proceed_with_local_stt: false,
+    local_stt_language: "en",
+    local_stt_cache_dir: "./cache/moonshine_voice",
+    local_stt_response_backend: OPENAI_BACKEND,
+    local_stt_response_backend_choices: [OPENAI_BACKEND, HF_BACKEND],
+    local_stt_model: "tiny_streaming",
+    local_stt_update_interval: 0.35,
+    local_stt_model_choices: ["tiny_streaming", "small_streaming"],
     requires_restart: false,
   };
   populateHFFields(st);
+  populateLocalSTTFields(st);
   setSelectedBackend(st.backend_provider || DEFAULT_BACKEND);
   statusEl.textContent = "";
   renderCredentialPanels(st);
@@ -514,6 +591,14 @@ async function init() {
     hfHostCustom.classList.remove("error");
     updateHFControls();
   });
+  localSttLanguage.addEventListener("input", () => localSttLanguage.classList.remove("error"));
+  localSttCache.addEventListener("input", () => localSttCache.classList.remove("error"));
+  localSttUpdate.addEventListener("input", () => localSttUpdate.classList.remove("error"));
+  localSttResponse.addEventListener("change", () => {
+    editingCredentials = false;
+    setStatusMessage(statusEl, "");
+    renderCredentialPanels(st);
+  });
 
   backendInputs.forEach((radio) => {
     radio.addEventListener("change", () => {
@@ -536,7 +621,7 @@ async function init() {
   });
 
   saveBtn.addEventListener("click", async () => {
-    if (selectedBackend === HF_BACKEND) {
+    if (selectedBackend === HF_BACKEND || (selectedBackend === LOCAL_STT_BACKEND && localSttResponse.value === HF_BACKEND)) {
       const localMode = hfMode.value !== "deployed";
       setStatusMessage(statusEl, "Saving connection...");
       hfHostCustom.classList.remove("error");
@@ -586,7 +671,34 @@ async function init() {
           setStatusMessage(statusEl, "Failed to save the Hugging Face connection.", "error");
         }
       }
+      if (selectedBackend === HF_BACKEND) return;
+      setStatusMessage(statusEl, "Saved. Reloading…", "ok");
+      window.location.reload();
       return;
+    }
+
+    if (selectedBackend === LOCAL_STT_BACKEND) {
+      const language = (localSttLanguage.value || "").trim();
+      const cacheDir = (localSttCache.value || "").trim();
+      const updateInterval = Number.parseFloat((localSttUpdate.value || "").trim());
+      localSttLanguage.classList.remove("error");
+      localSttCache.classList.remove("error");
+      localSttUpdate.classList.remove("error");
+      if (!language || language.includes("/") || language.includes("\\")) {
+        localSttLanguage.classList.add("error");
+        setStatusMessage(statusEl, "Enter a valid language code, such as en.", "warn");
+        return;
+      }
+      if (!cacheDir) {
+        localSttCache.classList.add("error");
+        setStatusMessage(statusEl, "Enter a writable model cache path.", "warn");
+        return;
+      }
+      if (!Number.isFinite(updateInterval) || updateInterval < 0.1 || updateInterval > 2.0) {
+        localSttUpdate.classList.add("error");
+        setStatusMessage(statusEl, "Use an update interval from 0.1 to 2.0 seconds.", "warn");
+        return;
+      }
     }
 
     const key = input.value.trim();
@@ -598,7 +710,7 @@ async function init() {
     setStatusMessage(statusEl, selectedBackend === GEMINI_BACKEND ? "Saving token..." : "Validating API key...");
     input.classList.remove("error");
     try {
-      if (selectedBackend === OPENAI_BACKEND) {
+      if (selectedBackend === OPENAI_BACKEND || selectedBackend === LOCAL_STT_BACKEND) {
         const validation = await validateKey(key);
         if (!validation.valid) {
           setStatusMessage(statusEl, "Invalid API key. Please check your key and try again.", "error");
@@ -614,7 +726,7 @@ async function init() {
       window.location.reload();
     } catch (e) {
       input.classList.add("error");
-      if (selectedBackend === OPENAI_BACKEND && e.message === "invalid_api_key") {
+      if ((selectedBackend === OPENAI_BACKEND || selectedBackend === LOCAL_STT_BACKEND) && e.message === "invalid_api_key") {
         setStatusMessage(statusEl, "Invalid API key. Please check your key and try again.", "error");
       } else {
         setStatusMessage(

@@ -88,6 +88,7 @@ GEMINI_AVAILABLE_VOICES: list[str] = [
 OPENAI_BACKEND = "openai"
 GEMINI_BACKEND = "gemini"
 HF_BACKEND = "huggingface"
+LOCAL_STT_BACKEND = "local_stt"
 DEFAULT_BACKEND_PROVIDER = HF_BACKEND
 HF_REALTIME_CONNECTION_MODE_ENV = "HF_REALTIME_CONNECTION_MODE"
 HF_REALTIME_WS_URL_ENV = "HF_REALTIME_WS_URL"
@@ -116,17 +117,35 @@ DEFAULT_MODEL_NAME_BY_BACKEND = {
     OPENAI_BACKEND: "gpt-realtime",
     GEMINI_BACKEND: "gemini-3.1-flash-live-preview",
     HF_BACKEND: HF_DEFAULTS.model_name,
+    LOCAL_STT_BACKEND: "gpt-realtime",
 }
 BACKEND_LABEL_BY_PROVIDER = {
     OPENAI_BACKEND: "OpenAI Realtime",
     GEMINI_BACKEND: "Gemini Live",
     HF_BACKEND: "Hugging Face",
+    LOCAL_STT_BACKEND: "Local STT + OpenAI voice",
 }
 DEFAULT_VOICE_BY_BACKEND = {
     OPENAI_BACKEND: OPENAI_DEFAULT_VOICE,
     GEMINI_BACKEND: "Kore",
     HF_BACKEND: HF_DEFAULTS.voice,
+    LOCAL_STT_BACKEND: OPENAI_DEFAULT_VOICE,
 }
+
+LOCAL_STT_PROVIDER_ENV = "LOCAL_STT_PROVIDER"
+LOCAL_STT_CACHE_DIR_ENV = "LOCAL_STT_CACHE_DIR"
+LOCAL_STT_RESPONSE_BACKEND_ENV = "LOCAL_STT_RESPONSE_BACKEND"
+LOCAL_STT_LANGUAGE_ENV = "LOCAL_STT_LANGUAGE"
+LOCAL_STT_MODEL_ENV = "LOCAL_STT_MODEL"
+LOCAL_STT_UPDATE_INTERVAL_ENV = "LOCAL_STT_UPDATE_INTERVAL"
+LOCAL_STT_DEFAULT_PROVIDER = "moonshine"
+LOCAL_STT_DEFAULT_CACHE_DIR = "./cache/moonshine_voice"
+LOCAL_STT_DEFAULT_RESPONSE_BACKEND = OPENAI_BACKEND
+LOCAL_STT_RESPONSE_BACKEND_CHOICES = (OPENAI_BACKEND, HF_BACKEND)
+LOCAL_STT_DEFAULT_LANGUAGE = "en"
+LOCAL_STT_DEFAULT_MODEL = "tiny_streaming"
+LOCAL_STT_MODEL_CHOICES = ("tiny_streaming", "small_streaming")
+LOCAL_STT_DEFAULT_UPDATE_INTERVAL = 0.35
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +228,71 @@ def _normalize_hf_connection_mode(value: str | None) -> str | None:
         )
         return None
     return candidate
+
+
+def _normalize_local_stt_model(value: str | None) -> str:
+    """Normalize the local STT model selector."""
+    candidate = (value or "").strip().lower().replace("-", "_")
+    if not candidate:
+        return LOCAL_STT_DEFAULT_MODEL
+    if candidate not in LOCAL_STT_MODEL_CHOICES:
+        logger.warning(
+            "Invalid %s=%r. Expected one of %s; using %s.",
+            LOCAL_STT_MODEL_ENV,
+            value,
+            ", ".join(LOCAL_STT_MODEL_CHOICES),
+            LOCAL_STT_DEFAULT_MODEL,
+        )
+        return LOCAL_STT_DEFAULT_MODEL
+    return candidate
+
+
+def _normalize_local_stt_language(value: str | None) -> str:
+    """Normalize the local STT language code."""
+    candidate = (value or "").strip().lower()
+    return candidate or LOCAL_STT_DEFAULT_LANGUAGE
+
+
+def _normalize_local_stt_response_backend(value: str | None) -> str:
+    """Normalize the response/audio backend for the local STT frontend."""
+    candidate = (value or "").strip().lower()
+    if not candidate:
+        return LOCAL_STT_DEFAULT_RESPONSE_BACKEND
+    if candidate not in LOCAL_STT_RESPONSE_BACKEND_CHOICES:
+        logger.warning(
+            "Invalid %s=%r. Expected one of %s; using %s.",
+            LOCAL_STT_RESPONSE_BACKEND_ENV,
+            value,
+            ", ".join(LOCAL_STT_RESPONSE_BACKEND_CHOICES),
+            LOCAL_STT_DEFAULT_RESPONSE_BACKEND,
+        )
+        return LOCAL_STT_DEFAULT_RESPONSE_BACKEND
+    return candidate
+
+
+def _normalize_local_stt_update_interval(value: str | None) -> float:
+    """Normalize the local STT partial update interval in seconds."""
+    if value is None or not value.strip():
+        return LOCAL_STT_DEFAULT_UPDATE_INTERVAL
+    try:
+        interval = float(value)
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r. Using %.2f.",
+            LOCAL_STT_UPDATE_INTERVAL_ENV,
+            value,
+            LOCAL_STT_DEFAULT_UPDATE_INTERVAL,
+        )
+        return LOCAL_STT_DEFAULT_UPDATE_INTERVAL
+    if interval < 0.1 or interval > 2.0:
+        logger.warning(
+            "Invalid %s=%r. Expected 0.1-2.0 seconds; using %.2f.",
+            LOCAL_STT_UPDATE_INTERVAL_ENV,
+            value,
+            LOCAL_STT_DEFAULT_UPDATE_INTERVAL,
+        )
+        return LOCAL_STT_DEFAULT_UPDATE_INTERVAL
+    return interval
 
 
 @dataclass(frozen=True)
@@ -366,9 +450,15 @@ class Config:
     HF_HOME = os.getenv("HF_HOME", "./cache")
     LOCAL_VISION_MODEL = os.getenv("LOCAL_VISION_MODEL", "HuggingFaceTB/SmolVLM2-2.2B-Instruct")
     HF_TOKEN = os.getenv("HF_TOKEN")  # Optional, falls back to hf auth login if not set
+    LOCAL_STT_PROVIDER = (os.getenv(LOCAL_STT_PROVIDER_ENV) or LOCAL_STT_DEFAULT_PROVIDER).strip().lower()
+    LOCAL_STT_CACHE_DIR = os.getenv(LOCAL_STT_CACHE_DIR_ENV, LOCAL_STT_DEFAULT_CACHE_DIR)
+    LOCAL_STT_RESPONSE_BACKEND = _normalize_local_stt_response_backend(os.getenv(LOCAL_STT_RESPONSE_BACKEND_ENV))
+    LOCAL_STT_LANGUAGE = _normalize_local_stt_language(os.getenv(LOCAL_STT_LANGUAGE_ENV))
+    LOCAL_STT_MODEL = _normalize_local_stt_model(os.getenv(LOCAL_STT_MODEL_ENV))
+    LOCAL_STT_UPDATE_INTERVAL = _normalize_local_stt_update_interval(os.getenv(LOCAL_STT_UPDATE_INTERVAL_ENV))
 
     logger.debug(
-        "Backend provider: %s, Model: %s, HF mode: %s, HF session URL set: %s, HF direct URL set: %s, HF_HOME: %s, Vision Model: %s",
+        "Backend provider: %s, Model: %s, HF mode: %s, HF session URL set: %s, HF direct URL set: %s, HF_HOME: %s, Vision Model: %s, Local STT: %s/%s/%s response=%s cache=%s",
         BACKEND_PROVIDER,
         MODEL_NAME,
         HF_REALTIME_CONNECTION_MODE,
@@ -376,6 +466,11 @@ class Config:
         bool(HF_REALTIME_WS_URL and HF_REALTIME_WS_URL.strip()),
         HF_HOME,
         LOCAL_VISION_MODEL,
+        LOCAL_STT_PROVIDER,
+        LOCAL_STT_LANGUAGE,
+        LOCAL_STT_MODEL,
+        LOCAL_STT_RESPONSE_BACKEND,
+        LOCAL_STT_CACHE_DIR,
     )
 
     # Filesystem root containing profile directories, not a Python import path.
@@ -469,6 +564,12 @@ def refresh_runtime_config_from_env() -> None:
     config.HF_HOME = os.getenv("HF_HOME", "./cache")
     config.LOCAL_VISION_MODEL = os.getenv("LOCAL_VISION_MODEL", "HuggingFaceTB/SmolVLM2-2.2B-Instruct")
     config.HF_TOKEN = os.getenv("HF_TOKEN")
+    config.LOCAL_STT_PROVIDER = (os.getenv(LOCAL_STT_PROVIDER_ENV) or LOCAL_STT_DEFAULT_PROVIDER).strip().lower()
+    config.LOCAL_STT_CACHE_DIR = os.getenv(LOCAL_STT_CACHE_DIR_ENV, LOCAL_STT_DEFAULT_CACHE_DIR)
+    config.LOCAL_STT_RESPONSE_BACKEND = _normalize_local_stt_response_backend(os.getenv(LOCAL_STT_RESPONSE_BACKEND_ENV))
+    config.LOCAL_STT_LANGUAGE = _normalize_local_stt_language(os.getenv(LOCAL_STT_LANGUAGE_ENV))
+    config.LOCAL_STT_MODEL = _normalize_local_stt_model(os.getenv(LOCAL_STT_MODEL_ENV))
+    config.LOCAL_STT_UPDATE_INTERVAL = _normalize_local_stt_update_interval(os.getenv(LOCAL_STT_UPDATE_INTERVAL_ENV))
     config.REACHY_MINI_CUSTOM_PROFILE = LOCKED_PROFILE or os.getenv("REACHY_MINI_CUSTOM_PROFILE")
 
 

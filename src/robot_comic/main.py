@@ -50,6 +50,7 @@ def run(
         HF_BACKEND,
         GEMINI_BACKEND,
         OPENAI_BACKEND,
+        LOCAL_STT_BACKEND,
         HF_LOCAL_CONNECTION_MODE,
         config,
         is_gemini_model,
@@ -209,6 +210,29 @@ def run(
             instance_path=instance_path,
             startup_voice=startup_settings.voice,
         )  # type: ignore[assignment]
+    elif config.BACKEND_PROVIDER == LOCAL_STT_BACKEND:
+        from robot_comic.local_stt_realtime import (
+            LocalSTTOpenAIRealtimeHandler,
+            LocalSTTHuggingFaceRealtimeHandler,
+        )
+
+        local_stt_response_backend = getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
+        logger.info(
+            "Using %s via local STT input and %s response audio",
+            get_backend_label(config.BACKEND_PROVIDER),
+            get_backend_label(local_stt_response_backend),
+        )
+        handler_class = (
+            LocalSTTHuggingFaceRealtimeHandler
+            if local_stt_response_backend == HF_BACKEND
+            else LocalSTTOpenAIRealtimeHandler
+        )
+        handler = handler_class(
+            deps,
+            gradio_mode=args.gradio,
+            instance_path=instance_path,
+            startup_voice=startup_settings.voice,
+        )  # type: ignore[assignment]
     else:
         from robot_comic.openai_realtime import OpenaiRealtimeHandler
 
@@ -232,7 +256,7 @@ def run(
         personality_ui.create_components()
         additional_inputs: list[Any] = [chatbot, *personality_ui.additional_inputs_ordered()]
 
-        if config.BACKEND_PROVIDER in {OPENAI_BACKEND, GEMINI_BACKEND}:
+        if config.BACKEND_PROVIDER in {OPENAI_BACKEND, GEMINI_BACKEND, LOCAL_STT_BACKEND}:
             uses_gemini_backend = is_gemini_model()
             api_key_textbox = gr.Textbox(
                 label="GEMINI_API_KEY" if uses_gemini_backend else "OPENAI API Key",

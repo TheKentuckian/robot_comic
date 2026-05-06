@@ -81,6 +81,14 @@ def test_huggingface_backend_does_not_resolve_model_name() -> None:
     assert config_mod._resolve_model_name(config_mod.HF_BACKEND, "gpt-realtime") == ""
 
 
+def test_local_stt_backend_uses_openai_realtime_model() -> None:
+    """Local STT uses OpenAI Realtime for response audio after local transcription."""
+    assert config_mod._normalize_backend_provider(config_mod.LOCAL_STT_BACKEND, None) == config_mod.LOCAL_STT_BACKEND
+    assert config_mod._resolve_model_name(config_mod.LOCAL_STT_BACKEND, None) == "gpt-realtime"
+    assert config_mod._normalize_local_stt_response_backend(None) == config_mod.OPENAI_BACKEND
+    assert config_mod._normalize_local_stt_response_backend(config_mod.HF_BACKEND) == config_mod.HF_BACKEND
+
+
 def test_hf_default_session_url_uses_stable_space_proxy() -> None:
     """The app should not embed the raw, replaceable Inference Endpoint allocator URL."""
     assert config_mod.HF_DEFAULTS.session_url == "https://pollen-robotics-reachy-mini-realtime-url.hf.space/session"
