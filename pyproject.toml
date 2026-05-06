@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "robot_comic"
-version = "0.6.1"
+version = "0.6.2"
 authors = [{ name = "Pollen Robotics", email = "contact@pollen-robotics.com" }]
 description = "Robot Comic voice app for Reachy Mini"
 readme = "README.md"

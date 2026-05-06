@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import sys
 import logging
 import argparse
@@ -11,6 +12,11 @@ from robot_comic.camera_worker import CameraWorker
 from robot_comic.vision.head_tracking import HeadTracker
 
 
+HEAD_TRACKER_ENV = "REACHY_MINI_HEAD_TRACKER"
+HEAD_TRACKER_CHOICES = ("yolo", "mediapipe")
+HEAD_TRACKER_DISABLED_VALUES = {"", "0", "false", "none", "off", "disabled"}
+
+
 if TYPE_CHECKING:
     from robot_comic.vision.local_vision import VisionProcessor
 
@@ -19,16 +25,33 @@ class CameraVisionInitializationError(Exception):
     """Raised when camera or vision setup fails in an expected way."""
 
 
+def get_requested_head_tracker(args: argparse.Namespace) -> str | None:
+    """Return the requested head-tracking backend from CLI args or environment."""
+    cli_value = getattr(args, "head_tracker", None)
+    if cli_value is not None:
+        return str(cli_value)
+
+    env_value = (os.getenv(HEAD_TRACKER_ENV) or "").strip().lower()
+    if env_value in HEAD_TRACKER_DISABLED_VALUES:
+        return None
+    if env_value in HEAD_TRACKER_CHOICES:
+        return env_value
+    raise CameraVisionInitializationError(
+        f"Invalid {HEAD_TRACKER_ENV}={env_value!r}. Expected one of: {', '.join(HEAD_TRACKER_CHOICES)}.",
+    )
+
+
 def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
     """Parse command line arguments."""
     parser = argparse.ArgumentParser("Robot Comic")
     parser.add_argument(
         "--head-tracker",
-        choices=["yolo", "mediapipe"],
+        choices=HEAD_TRACKER_CHOICES,
         default=None,
         help=(
             "Optional head-tracking backend: yolo uses a local face detector in a subprocess, "
-            "mediapipe uses reachy_mini_toolbox in process. Disabled by default."
+            f"mediapipe uses reachy_mini_toolbox in process. Disabled by default. "
+            f"Can also be set with {HEAD_TRACKER_ENV}=mediapipe."
         ),
     )
     parser.add_argument("--no-camera", default=False, action="store_true", help="Disable camera usage")
@@ -59,9 +82,10 @@ def initialize_camera_and_vision(
     vision_processor: Optional[VisionProcessor] = None
 
     if not args.no_camera:
-        if args.head_tracker is not None:
+        requested_head_tracker = get_requested_head_tracker(args)
+        if requested_head_tracker is not None:
             try:
-                if args.head_tracker == "yolo":
+                if requested_head_tracker == "yolo":
                     from robot_comic.vision.head_tracking.yolo_process import (
                         YoloHeadTrackerProcess,
                     )
@@ -77,7 +101,7 @@ def initialize_camera_and_vision(
                     logging.getLogger(__name__).info("Using mediapipe head tracker in process")
             except Exception as e:
                 raise CameraVisionInitializationError(
-                    f"Failed to initialize {args.head_tracker} head tracker: {e}",
+                    f"Failed to initialize {requested_head_tracker} head tracker: {e}",
                 ) from e
 
         camera_worker = CameraWorker(current_robot, head_tracker)

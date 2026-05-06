@@ -158,6 +158,7 @@ Copy `.env.example` to `.env` when you want to switch backends, provide API keys
 | `MODEL_NAME` | Optional model override for OpenAI Realtime or Gemini Live. Defaults to `gpt-realtime` for OpenAI and `gemini-3.1-flash-live-preview` for Gemini. Hugging Face uses the server's model selection. |
 | `HF_REALTIME_CONNECTION_MODE` | Hugging Face connection selector: `deployed` uses the built-in Hugging Face server; `local` uses `HF_REALTIME_WS_URL`. Defaults to `deployed`. |
 | `HF_REALTIME_WS_URL` | Direct websocket endpoint for your own Hugging Face backend. Accepts either a base URL like `ws://127.0.0.1:8765/v1` or the full websocket URL `ws://127.0.0.1:8765/v1/realtime`. Used when `HF_REALTIME_CONNECTION_MODE=local`. |
+| `REACHY_MINI_HEAD_TRACKER` | Optional startup head-tracking backend: `mediapipe` or `yolo`. Set to `mediapipe` on Reachy Mini Wireless to opt in on app launch without CLI flags. Use `off` or leave unset to disable. |
 | `HF_HOME` | Cache directory for local Hugging Face downloads (only used with `--local-vision` flag, defaults to `./cache`). |
 | `HF_TOKEN` | Optional token for Hugging Face access (for gated/private assets). |
 | `LOCAL_VISION_MODEL` | Hugging Face model path for local vision processing (only used with `--local-vision` flag, defaults to `HuggingFaceTB/SmolVLM2-2.2B-Instruct`). |
@@ -249,7 +250,7 @@ The app runs in console mode by default. Add `--gradio` to launch a web UI at ht
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--head-tracker {yolo,mediapipe}` | `None` | Select a head-tracking backend when a camera is available. `mediapipe` comes from the `reachy_mini_toolbox` package and is installed by default; `yolo` uses a local YOLO face detector and requires the `yolo_vision` extra. |
+| `--head-tracker {yolo,mediapipe}` | `None` | Select a head-tracking backend when a camera is available. `mediapipe` comes from the `reachy_mini_toolbox` package and is installed by default; `yolo` uses a local YOLO face detector and requires the `yolo_vision` extra. For app launches without CLI flags, set `REACHY_MINI_HEAD_TRACKER=mediapipe` in the app instance `.env`. |
 | `--no-camera` | `False` | Run without camera capture or head tracking. |
 | `--local-vision` | `False` | Use the local vision model (SmolVLM2) for camera-tool requests instead of the selected realtime backend. Requires `local_vision` extra to be installed. |
 | `--gradio` | `False` | Launch the Gradio web UI. Without this flag, runs in console mode. Required when running in simulation mode. |

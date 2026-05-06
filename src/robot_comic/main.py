@@ -19,6 +19,7 @@ from robot_comic.utils import (
     CameraVisionInitializationError,
     parse_args,
     setup_logger,
+    get_requested_head_tracker,
     initialize_camera_and_vision,
     log_connection_troubleshooting,
 )
@@ -103,7 +104,7 @@ def run(
     from robot_comic.tools.core_tools import ToolDependencies
     from robot_comic.audio.head_wobbler import HeadWobbler
 
-    if args.no_camera and args.head_tracker is not None:
+    if args.no_camera and get_requested_head_tracker(args) is not None:
         logger.warning("Head tracking disabled: --no-camera flag is set. Remove --no-camera to enable head tracking.")
 
     if robot is None:
