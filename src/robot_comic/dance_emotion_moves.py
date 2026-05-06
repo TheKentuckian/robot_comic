@@ -26,7 +26,7 @@ class DanceQueueMove(Move):  # type: ignore
         """Initialize a DanceQueueMove."""
         self.dance_move = DanceMove(move_name)
         self.move_name = move_name
-        self.speed_factor = max(0.1, speed_factor)
+        self.speed_factor = max(0.1, min(2.0, speed_factor))
 
     @property
     def duration(self) -> float:
@@ -58,7 +58,7 @@ class EmotionQueueMove(Move):  # type: ignore
         """Initialize an EmotionQueueMove."""
         self.emotion_move = recorded_moves.get(emotion_name)
         self.emotion_name = emotion_name
-        self.speed_factor = max(0.1, speed_factor)
+        self.speed_factor = max(0.1, min(2.0, speed_factor))
 
     @property
     def duration(self) -> float:
