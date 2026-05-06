@@ -100,7 +100,6 @@ uv sync
 ```bash
 uv sync --extra local_vision         # Local PyTorch/Transformers vision
 uv sync --extra yolo_vision          # YOLO face-detection backend for head tracking
-uv sync --extra mediapipe_vision     # MediaPipe-based head-tracking
 uv sync --extra local_stt            # On-device Moonshine speech-to-text
 uv sync --extra all_vision           # All vision features
 ```
@@ -125,7 +124,6 @@ pip install -e .
 ```bash
 pip install -e .[local_vision]          # Local vision stack
 pip install -e .[yolo_vision]           # YOLO face-detection backend for head tracking
-pip install -e .[mediapipe_vision]      # MediaPipe-based vision
 pip install -e .[all_vision]            # All vision features
 pip install -e .[dev]                   # Development tools
 ```
@@ -140,7 +138,6 @@ Some wheels (like PyTorch) are large and require compatible CUDA or CPU buildsâ€
 |-------|---------|-------|
 | `local_vision` | Run the local VLM (SmolVLM2) through PyTorch/Transformers | GPU recommended. Ensure compatible PyTorch builds for your platform. |
 | `yolo_vision` | YOLOv11n face detection via `ultralytics` and `supervision` | Used as the `yolo` head-tracking backend. Runs on CPU (default). GPU improves performance. |
-| `mediapipe_vision` | Lightweight landmark tracking with MediaPipe | Works on CPU. Enables `--head-tracker mediapipe`. |
 | `local_stt` | On-device speech recognition via Moonshine | Enables the `local_stt` backend, which transcribes speech on the robot and uses OpenAI Realtime for response audio. |
 | `all_vision` | Convenience alias installing every vision extra | Install when you want the flexibility to experiment with every provider. |
 | `dev` | Developer tooling (`pytest`, `ruff`, `mypy`) | Development-only dependencies. Use `--group dev` with uv or `[dev]` with pip. |
@@ -252,7 +249,7 @@ The app runs in console mode by default. Add `--gradio` to launch a web UI at ht
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--head-tracker {yolo,mediapipe}` | `None` | Select a head-tracking backend when a camera is available. `yolo` uses a local YOLO face detector, `mediapipe` comes from the `reachy_mini_toolbox` package. Requires the matching optional extra. |
+| `--head-tracker {yolo,mediapipe}` | `None` | Select a head-tracking backend when a camera is available. `mediapipe` comes from the `reachy_mini_toolbox` package and is installed by default; `yolo` uses a local YOLO face detector and requires the `yolo_vision` extra. |
 | `--no-camera` | `False` | Run without camera capture or head tracking. |
 | `--local-vision` | `False` | Use the local vision model (SmolVLM2) for camera-tool requests instead of the selected realtime backend. Requires `local_vision` extra to be installed. |
 | `--gradio` | `False` | Launch the Gradio web UI. Without this flag, runs in console mode. Required when running in simulation mode. |

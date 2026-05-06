@@ -2619,6 +2619,26 @@ wheels = [
 ]
 
 [[package]]
+name = "moonshine-voice"
+version = "0.0.59"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "filelock" },
+    { name = "numpy" },
+    { name = "platformdirs" },
+    { name = "requests" },
+    { name = "sounddevice" },
+    { name = "tqdm" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/05/0e/b7c7794cfb1d346d71583131a92424e4e0f4d27596195fde529ddd932068/moonshine_voice-0.0.59-py3-none-macosx_15_0_universal2.whl", hash = "sha256:2544c55302869bb6e1287929a2f5b2d5f24c652dda17e247eb522cbac2e0206f", size = 80186863, upload-time = "2026-04-20T19:22:21.499Z" },
+    { url = "https://files.pythonhosted.org/packages/17/87/4c037e5c459263bdc155fcd7f9887c8cafe90b23544ecbe469334d30c5fe/moonshine_voice-0.0.59-py3-none-manylinux_2_31_aarch64.manylinux_2_34_aarch64.whl", hash = "sha256:3f23b4e73243d485d93e486cb236193a8079e7c76f7aa6d19c33df8527a4c9b4", size = 59637970, upload-time = "2026-04-20T21:55:24.413Z" },
+    { url = "https://files.pythonhosted.org/packages/83/1f/61d580375638a35c59650f78d91dd0a23b09df35dcb85f65b060681c0c4e/moonshine_voice-0.0.59-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:18a82935205983d0b9f2cf30789609e4af96783c45b8cfc983fb77c63911cdf6", size = 87267275, upload-time = "2026-04-20T19:31:10.195Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/f7/84140df51fa82cf582e888ac7e7a57e94639bd8fa2e47a831ba93c39ebc7/moonshine_voice-0.0.59-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:631f3fc4bc1ea98ed921a8387d916fa674b60649cfaf869d94d18f1393e192e6", size = 88425812, upload-time = "2026-04-20T19:28:21.842Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/b7/304df3b13df9581dba71f42e5e067da354598ab851ae89177576c677f5a1/moonshine_voice-0.0.59-py3-none-win_amd64.whl", hash = "sha256:25f2ca173c523af3f331c9babee1cba7105c8eb035ac62bb11a79f969b8192de", size = 56489845, upload-time = "2026-04-20T22:38:49.598Z" },
+]
+
+[[package]]
 name = "mpmath"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4641,6 +4661,7 @@ dependencies = [
     { name = "gradio-client" },
     { name = "httpx" },
     { name = "huggingface-hub" },
+    { name = "mediapipe" },
     { name = "openai" },
     { name = "python-dotenv" },
     { name = "reachy-mini" },
@@ -4651,7 +4672,6 @@ dependencies = [
 [package.optional-dependencies]
 all-vision = [
     { name = "accelerate" },
-    { name = "mediapipe" },
     { name = "num2words" },
     { name = "opencv-python" },
     { name = "supervision" },
@@ -4659,14 +4679,14 @@ all-vision = [
     { name = "transformers" },
     { name = "ultralytics" },
 ]
+local-stt = [
+    { name = "moonshine-voice" },
+]
 local-vision = [
     { name = "accelerate" },
     { name = "num2words" },
     { name = "torch" },
     { name = "transformers" },
-]
-mediapipe-vision = [
-    { name = "mediapipe" },
 ]
 yolo-vision = [
     { name = "opencv-python" },
@@ -4697,8 +4717,8 @@ requires-dist = [
     { name = "gradio-client", specifier = ">=1.13.3" },
     { name = "httpx" },
     { name = "huggingface-hub", specifier = "==1.3.0" },
-    { name = "mediapipe", marker = "extra == 'all-vision'", specifier = "==0.10.14" },
-    { name = "mediapipe", marker = "extra == 'mediapipe-vision'", specifier = "==0.10.14" },
+    { name = "mediapipe", specifier = "==0.10.14" },
+    { name = "moonshine-voice", marker = "extra == 'local-stt'", specifier = ">=0.0.46" },
     { name = "num2words", marker = "extra == 'all-vision'" },
     { name = "num2words", marker = "extra == 'local-vision'" },
     { name = "openai", specifier = ">=2.30.0" },
@@ -4717,7 +4737,7 @@ requires-dist = [
     { name = "ultralytics", marker = "extra == 'all-vision'" },
     { name = "ultralytics", marker = "extra == 'yolo-vision'" },
 ]
-provides-extras = ["local-vision", "yolo-vision", "mediapipe-vision", "all-vision"]
+provides-extras = ["local-vision", "yolo-vision", "mediapipe-vision", "local-stt", "all-vision"]
 
 [package.metadata.requires-dev]
 dev = [

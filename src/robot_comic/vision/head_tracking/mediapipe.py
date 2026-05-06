@@ -1,5 +1,7 @@
 """MediaPipe head tracker backed by reachy_mini_toolbox."""
 
+import os
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -11,6 +13,8 @@ class MediapipeHeadTracker:
 
     def __init__(self) -> None:
         """Initialize the toolbox head tracker lazily."""
+        os.environ.setdefault("MPLCONFIGDIR", "/tmp/robot-comic-matplotlib")
+
         from reachy_mini_toolbox import vision
 
         self._tracker: HeadTracker = vision.HeadTracker()

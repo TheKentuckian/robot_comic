@@ -17,6 +17,7 @@ dependencies = [
     "gradio==5.50.1.dev1",
     "huggingface-hub==1.3.0",
     "httpx",
+    "mediapipe==0.10.14",
 
     #Environment variables
     "python-dotenv",
@@ -47,7 +48,8 @@ yolo_vision = [
   "opencv-python>=4.13.0.92",
 ]
 mediapipe_vision = [
-  "mediapipe==0.10.14",
+  # Kept for backwards-compatible install commands. MediaPipe is now part of
+  # the default app install because it powers the lightweight head tracker.
 ]
 local_stt = [
   "moonshine-voice>=0.0.46",
@@ -60,7 +62,6 @@ all_vision = [
   "ultralytics",
   "supervision",
   "opencv-python>=4.13.0.92",
-  "mediapipe==0.10.14",
 ]
 
 [dependency-groups]
