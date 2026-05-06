@@ -26,18 +26,26 @@ class CameraVisionInitializationError(Exception):
 
 
 def get_requested_head_tracker(args: argparse.Namespace) -> str | None:
-    """Return the requested head-tracking backend from CLI args or environment."""
+    """Return the requested head-tracking backend from CLI args or environment.
+
+    Priority: CLI flag > REACHY_MINI_HEAD_TRACKER env var > default (mediapipe).
+    Set REACHY_MINI_HEAD_TRACKER=off to disable head tracking without a CLI flag.
+    """
     cli_value = getattr(args, "head_tracker", None)
     if cli_value is not None:
         return str(cli_value)
 
-    env_value = (os.getenv(HEAD_TRACKER_ENV) or "").strip().lower()
+    raw_env = os.getenv(HEAD_TRACKER_ENV)
+    if raw_env is None:
+        return "mediapipe"  # default: mediapipe on when no env override
+
+    env_value = raw_env.strip().lower()
     if env_value in HEAD_TRACKER_DISABLED_VALUES:
         return None
     if env_value in HEAD_TRACKER_CHOICES:
         return env_value
     raise CameraVisionInitializationError(
-        f"Invalid {HEAD_TRACKER_ENV}={env_value!r}. Expected one of: {', '.join(HEAD_TRACKER_CHOICES)}.",
+        f"Invalid {HEAD_TRACKER_ENV}={raw_env!r}. Expected one of: {', '.join(HEAD_TRACKER_CHOICES)}, or a disabled value (off, false, 0).",
     )
 
 

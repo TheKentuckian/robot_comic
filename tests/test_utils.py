@@ -1,6 +1,8 @@
 """Tests for utility helpers."""
 
+import sys
 import argparse
+from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,13 +23,18 @@ def test_initialize_camera_and_vision_propagates_local_vision_init_failures() ->
         local_vision=True,
     )
 
+    # local_vision requires torch which isn't installed in the dev environment.
+    # Mock the module in sys.modules so the in-function import succeeds.
+    mock_lv = ModuleType("robot_comic.vision.local_vision")
+    mock_lv.VisionProcessor = MagicMock()  # type: ignore[attr-defined]
+    mock_lv.initialize_vision_processor = MagicMock(  # type: ignore[attr-defined]
+        side_effect=RuntimeError("Vision processor initialization failed")
+    )
+
     with (
         patch("robot_comic.utils.CameraWorker") as mock_camera_worker,
         patch("robot_comic.utils.subprocess.run", return_value=MagicMock(returncode=0)),
-        patch(
-            "robot_comic.vision.local_vision.initialize_vision_processor",
-            side_effect=RuntimeError("Vision processor initialization failed"),
-        ),
+        patch.dict(sys.modules, {"robot_comic.vision.local_vision": mock_lv}),
     ):
         with pytest.raises(RuntimeError, match="Vision processor initialization failed"):
             initialize_camera_and_vision(args, MagicMock())
