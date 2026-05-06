@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rtk ls *)",
+      "Bash(rtk read *)",
+      "Bash(bash *)",
+      "Bash(rtk git *)",
+      "Bash(rtk grep *)",
+      "Bash(git check-ignore *)",
+      "Bash(~/.local/bin/uv sync *)",
+      "Bash(uv run *)",
+      "Bash(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader)",
+      "Bash(nvcc --version)",
+      "PowerShell(Set-Location \"D:\\\\Projects\\\\reachy_mini_conversation_app\\\\.worktrees\\\\comedian-phase1\"; & \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" sync --extra local_vision 2>&1 | Select-Object -Last 15)",
+      "PowerShell(Set-Location \"D:\\\\Projects\\\\reachy_mini_conversation_app\\\\.worktrees\\\\comedian-phase1\"; & \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" sync --extra local_vision 2>&1 | Select-Object -Last 10)",
+      "PowerShell(Set-Location \"D:\\\\Projects\\\\reachy_mini_conversation_app\\\\.worktrees\\\\comedian-phase1\"; & \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" run pytest tests/ -q --tb=short 2>&1 | Select-Object -Last 5)",
+      "Bash(Get-ChildItem -Path \"D:\\\\Projects\\\\reachy_mini_conversation_app\" -Recurse -Directory)",
+      "Bash(Select-Object FullName)",
+      "PowerShell(Rename-Item *)"
+    ]
+  }
+}
