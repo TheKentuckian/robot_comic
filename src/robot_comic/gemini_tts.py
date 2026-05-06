@@ -129,7 +129,11 @@ class GeminiTTSResponseHandler(ConversationHandler):
         return list(GEMINI_TTS_AVAILABLE_VOICES)
 
     def get_current_voice(self) -> str:
-        return self._voice_override or GEMINI_TTS_DEFAULT_VOICE
+        voice = self._voice_override or GEMINI_TTS_DEFAULT_VOICE
+        if voice not in GEMINI_TTS_AVAILABLE_VOICES:
+            logger.warning("Voice %r is not a valid Gemini TTS voice; falling back to %s", voice, GEMINI_TTS_DEFAULT_VOICE)
+            return GEMINI_TTS_DEFAULT_VOICE
+        return voice
 
     async def change_voice(self, voice: str) -> str:
         self._voice_override = voice

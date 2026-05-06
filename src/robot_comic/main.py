@@ -223,11 +223,7 @@ def run(
         )
 
         local_stt_response_backend = getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
-        logger.info(
-            "Using %s via local STT input and %s response audio",
-            get_backend_label(config.BACKEND_PROVIDER),
-            get_backend_label(local_stt_response_backend) if local_stt_response_backend != GEMINI_TTS_OUTPUT else "Gemini TTS",
-        )
+        logger.info("Using %s", get_backend_label(config.BACKEND_PROVIDER))
 
         if local_stt_response_backend == HF_BACKEND:
             handler_class = LocalSTTHuggingFaceRealtimeHandler
