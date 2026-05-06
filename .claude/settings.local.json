@@ -18,7 +18,10 @@
       "Bash(Select-Object FullName)",
       "PowerShell(Rename-Item *)",
       "Bash(xargs grep -l \"reachy_mini_conversation_app\")",
-      "Bash(xargs sed -i 's/reachy_mini_conversation_app/robot_comic/g')"
+      "Bash(xargs sed -i 's/reachy_mini_conversation_app/robot_comic/g')",
+      "Bash(reachy-mini-app-assistant check *)",
+      "Bash(.venv/Scripts/python -c \"import robot_comic; print\\('robot_comic import OK'\\)\")",
+      "Bash(.venv/Scripts/python -m pytest tests/ -x -q)"
     ]
   }
 }
