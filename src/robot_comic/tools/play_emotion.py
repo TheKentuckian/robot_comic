@@ -2,7 +2,7 @@ import random
 import logging
 from typing import Any, Dict
 
-from reachy_mini_conversation_app.tools.core_tools import Tool, ToolDependencies
+from robot_comic.tools.core_tools import Tool, ToolDependencies
 
 
 logger = logging.getLogger(__name__)
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 # Initialize emotion library
 try:
     from reachy_mini.motion.recorded_move import RecordedMoves
-    from reachy_mini_conversation_app.dance_emotion_moves import EmotionQueueMove
+    from robot_comic.dance_emotion_moves import EmotionQueueMove
 
     # Note: huggingface_hub automatically reads HF_TOKEN from environment variables
     RECORDED_MOVES = RecordedMoves("pollen-robotics/reachy-mini-emotions-library")

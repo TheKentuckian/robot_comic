@@ -13,7 +13,7 @@ from openai.types.realtime import (
 )
 from openai.types.realtime.realtime_audio_input_turn_detection_param import ServerVad
 
-from reachy_mini_conversation_app.config import (
+from robot_comic.config import (
     HF_BACKEND,
     HF_LOCAL_CONNECTION_MODE,
     config,
@@ -21,13 +21,13 @@ from reachy_mini_conversation_app.config import (
     parse_hf_realtime_url,
     get_hf_connection_selection,
 )
-from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
-from reachy_mini_conversation_app.base_realtime import (
+from robot_comic.prompts import get_session_voice, get_session_instructions
+from robot_comic.base_realtime import (
     BaseRealtimeHandler,
     InputTranscriptChunksByItem,
     to_realtime_tools_config,
 )
-from reachy_mini_conversation_app.tools.core_tools import get_active_tool_specs
+from robot_comic.tools.core_tools import get_active_tool_specs
 
 
 logger = logging.getLogger(__name__)

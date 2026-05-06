@@ -23,7 +23,7 @@ from scipy.signal import resample
 
 from reachy_mini import ReachyMini
 from reachy_mini.media.media_manager import MediaBackend
-from reachy_mini_conversation_app.config import (
+from robot_comic.config import (
     HF_BACKEND,
     GEMINI_BACKEND,
     LOCKED_PROFILE,
@@ -43,10 +43,10 @@ from reachy_mini_conversation_app.config import (
     get_hf_connection_selection,
     refresh_runtime_config_from_env,
 )
-from reachy_mini_conversation_app.startup_settings import read_startup_settings, write_startup_settings
-from reachy_mini_conversation_app.audio.startup_config import apply_audio_startup_config
-from reachy_mini_conversation_app.conversation_handler import ConversationHandler
-from reachy_mini_conversation_app.headless_personality_ui import mount_personality_routes
+from robot_comic.startup_settings import read_startup_settings, write_startup_settings
+from robot_comic.audio.startup_config import apply_audio_startup_config
+from robot_comic.conversation_handler import ConversationHandler
+from robot_comic.headless_personality_ui import mount_personality_routes
 
 
 try:
@@ -311,7 +311,7 @@ class LocalStream:
         selection = (profile or "").strip() or None
         normalized_voice_override = (voice_override or "").strip() or None
         try:
-            from reachy_mini_conversation_app.config import set_custom_profile
+            from robot_comic.config import set_custom_profile
 
             set_custom_profile(selection)
         except Exception:
@@ -421,7 +421,7 @@ class LocalStream:
         @self._settings_app.get("/ready")
         def _ready() -> JSONResponse:
             try:
-                mod = sys.modules.get("reachy_mini_conversation_app.tools.core_tools")
+                mod = sys.modules.get("robot_comic.tools.core_tools")
                 ready = bool(getattr(mod, "_TOOLS_INITIALIZED", False)) if mod else False
             except Exception:
                 ready = False

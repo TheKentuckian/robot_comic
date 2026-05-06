@@ -3,8 +3,8 @@ import asyncio
 import logging
 from typing import Any, Dict
 
-from reachy_mini_conversation_app.tools.core_tools import Tool, ToolDependencies
-from reachy_mini_conversation_app.camera_frame_encoding import encode_bgr_frame_as_jpeg
+from robot_comic.tools.core_tools import Tool, ToolDependencies
+from robot_comic.camera_frame_encoding import encode_bgr_frame_as_jpeg
 
 
 logger = logging.getLogger(__name__)

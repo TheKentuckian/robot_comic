@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-import reachy_mini_conversation_app.config as config_mod
+import robot_comic.config as config_mod
 
 
 def test_config_raises_on_external_profile_name_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import gradio as gr
 
-from reachy_mini_conversation_app.config import (
+from robot_comic.config import (
     LOCKED_PROFILE,
     DEFAULT_PROFILES_DIRECTORY,
     config,

@@ -7,12 +7,12 @@ import subprocess
 from typing import TYPE_CHECKING, Optional
 
 from reachy_mini import ReachyMini
-from reachy_mini_conversation_app.camera_worker import CameraWorker
-from reachy_mini_conversation_app.vision.head_tracking import HeadTracker
+from robot_comic.camera_worker import CameraWorker
+from robot_comic.vision.head_tracking import HeadTracker
 
 
 if TYPE_CHECKING:
-    from reachy_mini_conversation_app.vision.local_vision import VisionProcessor
+    from robot_comic.vision.local_vision import VisionProcessor
 
 
 class CameraVisionInitializationError(Exception):
@@ -62,14 +62,14 @@ def initialize_camera_and_vision(
         if args.head_tracker is not None:
             try:
                 if args.head_tracker == "yolo":
-                    from reachy_mini_conversation_app.vision.head_tracking.yolo_process import (
+                    from robot_comic.vision.head_tracking.yolo_process import (
                         YoloHeadTrackerProcess,
                     )
 
                     head_tracker = YoloHeadTrackerProcess()
                     logging.getLogger(__name__).info("Using yolo head tracker subprocess")
                 else:
-                    from reachy_mini_conversation_app.vision.head_tracking.mediapipe import (
+                    from robot_comic.vision.head_tracking.mediapipe import (
                         MediapipeHeadTracker,
                     )
 
@@ -87,7 +87,7 @@ def initialize_camera_and_vision(
                 [
                     sys.executable,
                     "-c",
-                    "from reachy_mini_conversation_app.vision.local_vision import VisionProcessor",
+                    "from robot_comic.vision.local_vision import VisionProcessor",
                 ],
                 capture_output=True,
                 text=True,
@@ -99,7 +99,7 @@ def initialize_camera_and_vision(
                     "Run without --local-vision or install compatible dependencies.",
                 )
             try:
-                from reachy_mini_conversation_app.vision.local_vision import initialize_vision_processor
+                from robot_comic.vision.local_vision import initialize_vision_processor
 
             except ImportError as e:
                 raise CameraVisionInitializationError(

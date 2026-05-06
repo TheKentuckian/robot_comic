@@ -16,7 +16,9 @@
       "PowerShell(Set-Location \"D:\\\\Projects\\\\reachy_mini_conversation_app\\\\.worktrees\\\\comedian-phase1\"; & \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" run pytest tests/ -q --tb=short 2>&1 | Select-Object -Last 5)",
       "Bash(Get-ChildItem -Path \"D:\\\\Projects\\\\reachy_mini_conversation_app\" -Recurse -Directory)",
       "Bash(Select-Object FullName)",
-      "PowerShell(Rename-Item *)"
+      "PowerShell(Rename-Item *)",
+      "Bash(xargs grep -l \"reachy_mini_conversation_app\")",
+      "Bash(xargs sed -i 's/reachy_mini_conversation_app/robot_comic/g')"
     ]
   }
 }

@@ -4,12 +4,12 @@ import time
 import logging
 from typing import TYPE_CHECKING, Any, Dict
 
-from reachy_mini_conversation_app.tools.core_tools import Tool, ToolDependencies
-from reachy_mini_conversation_app.tools.tool_constants import SystemTool
+from robot_comic.tools.core_tools import Tool, ToolDependencies
+from robot_comic.tools.tool_constants import SystemTool
 
 
 if TYPE_CHECKING:
-    from reachy_mini_conversation_app.tools.background_tool_manager import BackgroundToolManager
+    from robot_comic.tools.background_tool_manager import BackgroundToolManager
 
 
 logger = logging.getLogger(__name__)

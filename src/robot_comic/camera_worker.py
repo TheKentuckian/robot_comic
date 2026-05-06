@@ -11,7 +11,7 @@ from scipy.spatial.transform import Rotation as R
 
 from reachy_mini import ReachyMini
 from reachy_mini.utils.interpolation import linear_pose_interpolation
-from reachy_mini_conversation_app.vision.head_tracking import HeadTracker
+from robot_comic.vision.head_tracking import HeadTracker
 
 
 logger = logging.getLogger(__name__)

@@ -4,11 +4,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import reachy_mini_conversation_app.base_realtime as base_rt_mod
-import reachy_mini_conversation_app.huggingface_realtime as hf_mod
-from reachy_mini_conversation_app.config import HF_BACKEND, config, get_default_voice_for_backend
-from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
-from reachy_mini_conversation_app.huggingface_realtime import HuggingFaceRealtimeHandler
+import robot_comic.base_realtime as base_rt_mod
+import robot_comic.huggingface_realtime as hf_mod
+from robot_comic.config import HF_BACKEND, config, get_default_voice_for_backend
+from robot_comic.tools.core_tools import ToolDependencies
+from robot_comic.huggingface_realtime import HuggingFaceRealtimeHandler
 
 
 HF_DEFAULT_VOICE = get_default_voice_for_backend(HF_BACKEND)

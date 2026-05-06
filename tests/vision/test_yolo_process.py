@@ -13,7 +13,7 @@ from textwrap import dedent
 import numpy as np
 import pytest
 
-from reachy_mini_conversation_app.vision.head_tracking.yolo_process import YoloHeadTrackerProcess
+from robot_comic.vision.head_tracking.yolo_process import YoloHeadTrackerProcess
 
 
 def _patch_fake_worker(
@@ -72,7 +72,7 @@ def _patch_fake_worker(
         return real_popen([sys.executable, str(worker_script)], **kwargs)
 
     monkeypatch.setattr(
-        "reachy_mini_conversation_app.vision.head_tracking.yolo_process.subprocess.Popen",
+        "robot_comic.vision.head_tracking.yolo_process.subprocess.Popen",
         _spawn_fake_worker,
     )
 
@@ -204,7 +204,7 @@ def test_head_tracker_bootstrap_adds_src_parent_to_pythonpath(
         assert isinstance(env, dict)
         pythonpath = env["PYTHONPATH"]
         assert isinstance(pythonpath, str)
-        package_spec = importlib.util.find_spec("reachy_mini_conversation_app")
+        package_spec = importlib.util.find_spec("robot_comic")
         package_locations = None if package_spec is None else package_spec.submodule_search_locations
         assert package_locations
         assert pythonpath.split(os.pathsep)[0] == str(Path(next(iter(package_locations))).resolve().parent)

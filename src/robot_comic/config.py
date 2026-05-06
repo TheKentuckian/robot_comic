@@ -17,7 +17,7 @@ PROJECT_ROOT = Path(__file__).parents[2].resolve()
 
 def _is_source_checkout_root(root: Path) -> bool:
     """Return whether the given root looks like this project's source checkout."""
-    return (root / "pyproject.toml").is_file() and (root / "src" / "reachy_mini_conversation_app").is_dir()
+    return (root / "pyproject.toml").is_file() and (root / "src" / "robot_comic").is_dir()
 
 
 def _packaged_profiles_directory() -> Path | None:

@@ -8,7 +8,7 @@ import numpy as np
 from fastrtc import AdditionalOutputs, AsyncStreamHandler
 from numpy.typing import NDArray
 
-from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
+from robot_comic.tools.core_tools import ToolDependencies
 
 
 AudioFrame: TypeAlias = tuple[int, NDArray[np.int16]]

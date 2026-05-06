@@ -91,7 +91,7 @@ def write_startup_settings(
 
 def load_startup_settings_into_runtime(instance_path: str | Path | None) -> StartupSettings:
     """Load instance-local startup settings when no explicit profile override is set."""
-    from reachy_mini_conversation_app.config import LOCKED_PROFILE, set_custom_profile
+    from robot_comic.config import LOCKED_PROFILE, set_custom_profile
 
     if LOCKED_PROFILE is not None:
         return StartupSettings()

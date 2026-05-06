@@ -25,20 +25,20 @@ from google.genai import types
 from numpy.typing import NDArray
 from scipy.signal import resample
 
-from reachy_mini_conversation_app.config import (
+from robot_comic.config import (
     GEMINI_BACKEND,
     GEMINI_AVAILABLE_VOICES,
     DEFAULT_VOICE_BY_BACKEND,
     config,
 )
-from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
-from reachy_mini_conversation_app.tools.core_tools import (
+from robot_comic.prompts import get_session_voice, get_session_instructions
+from robot_comic.tools.core_tools import (
     ToolDependencies,
     get_active_tool_specs,
 )
-from reachy_mini_conversation_app.conversation_handler import ConversationHandler
-from reachy_mini_conversation_app.camera_frame_encoding import encode_bgr_frame_as_jpeg
-from reachy_mini_conversation_app.tools.background_tool_manager import (
+from robot_comic.conversation_handler import ConversationHandler
+from robot_comic.camera_frame_encoding import encode_bgr_frame_as_jpeg
+from robot_comic.tools.background_tool_manager import (
     ToolCallRoutine,
     ToolNotification,
     BackgroundToolManager,
@@ -242,7 +242,7 @@ class GeminiLiveHandler(ConversationHandler):
         session.update equivalent.
         """
         try:
-            from reachy_mini_conversation_app.config import set_custom_profile
+            from robot_comic.config import set_custom_profile
 
             set_custom_profile(profile)
             logger.info("Set custom profile to %r", profile)

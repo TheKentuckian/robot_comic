@@ -15,13 +15,13 @@ from numpy.typing import NDArray
 from fastapi.testclient import TestClient
 
 from reachy_mini.media.media_manager import MediaBackend
-from reachy_mini_conversation_app.config import GEMINI_AVAILABLE_VOICES, config
-from reachy_mini_conversation_app.console import LOCAL_PLAYER_BACKEND, LocalStream
-from reachy_mini_conversation_app.startup_settings import (
+from robot_comic.config import GEMINI_AVAILABLE_VOICES, config
+from robot_comic.console import LOCAL_PLAYER_BACKEND, LocalStream
+from robot_comic.startup_settings import (
     StartupSettings,
     load_startup_settings_into_runtime,
 )
-from reachy_mini_conversation_app.headless_personality_ui import mount_personality_routes
+from robot_comic.headless_personality_ui import mount_personality_routes
 
 
 def test_clear_audio_queue_prefers_clear_player_when_available() -> None:
@@ -565,7 +565,7 @@ def test_local_stream_persist_personality_clears_legacy_startup_env_overrides(tm
     applied_profiles: list[str | None] = []
     monkeypatch.delenv("REACHY_MINI_CUSTOM_PROFILE", raising=False)
     monkeypatch.setattr(
-        "reachy_mini_conversation_app.config.set_custom_profile",
+        "robot_comic.config.set_custom_profile",
         lambda profile: applied_profiles.append(profile),
     )
 
@@ -599,7 +599,7 @@ def test_local_stream_launch_waits_for_manual_openai_key_without_download(
     init_settings_ui = MagicMock()
     monkeypatch.setattr(stream, "_init_settings_ui_if_needed", init_settings_ui)
     monkeypatch.setattr(stream, "_has_required_key", MagicMock(side_effect=[False, False]))
-    monkeypatch.setattr("reachy_mini_conversation_app.console.time.sleep", MagicMock(side_effect=KeyboardInterrupt))
+    monkeypatch.setattr("robot_comic.console.time.sleep", MagicMock(side_effect=KeyboardInterrupt))
 
     stream.launch()
 

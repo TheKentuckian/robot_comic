@@ -3,7 +3,7 @@
 from __future__ import annotations
 from types import SimpleNamespace
 
-from reachy_mini_conversation_app.audio.startup_config import (
+from robot_comic.audio.startup_config import (
     AUDIO_STARTUP_CONFIG,
     WRITE_SETTLE_SECONDS,
     apply_audio_startup_config,

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
+from robot_comic.tools.core_tools import ToolDependencies
 
 
 _PROFILE_PATH = Path(__file__).parents[2] / "profiles" / "don_rickles" / "roast.py"

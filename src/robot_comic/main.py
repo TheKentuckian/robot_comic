@@ -15,7 +15,7 @@ from fastrtc import Stream
 from gradio.utils import get_space
 
 from reachy_mini import ReachyMini, ReachyMiniApp
-from reachy_mini_conversation_app.utils import (
+from robot_comic.utils import (
     CameraVisionInitializationError,
     parse_args,
     setup_logger,
@@ -45,8 +45,8 @@ def run(
 ) -> None:
     """Run the Reachy Mini conversation app."""
     # Putting these dependencies here makes the dashboard faster to load when the conversation app is installed
-    from reachy_mini_conversation_app.moves import MovementManager
-    from reachy_mini_conversation_app.config import (
+    from robot_comic.moves import MovementManager
+    from robot_comic.config import (
         HF_BACKEND,
         GEMINI_BACKEND,
         OPENAI_BACKEND,
@@ -57,7 +57,7 @@ def run(
         get_hf_connection_selection,
         refresh_runtime_config_from_env,
     )
-    from reachy_mini_conversation_app.startup_settings import (
+    from robot_comic.startup_settings import (
         StartupSettings,
         load_startup_settings_into_runtime,
     )
@@ -98,9 +98,9 @@ def run(
             config.MODEL_NAME,
         )
 
-    from reachy_mini_conversation_app.console import LocalStream
-    from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
-    from reachy_mini_conversation_app.audio.head_wobbler import HeadWobbler
+    from robot_comic.console import LocalStream
+    from robot_comic.tools.core_tools import ToolDependencies
+    from robot_comic.audio.head_wobbler import HeadWobbler
 
     if args.no_camera and args.head_tracker is not None:
         logger.warning("Head tracking disabled: --no-camera flag is set. Remove --no-camera to enable head tracking.")
@@ -177,7 +177,7 @@ def run(
     logger.debug(f"Chatbot avatar images: {chatbot.avatar_images}")
 
     if is_gemini_model():
-        from reachy_mini_conversation_app.gemini_live import GeminiLiveHandler
+        from robot_comic.gemini_live import GeminiLiveHandler
 
         logger.info(
             "Using %s via GeminiLiveHandler",
@@ -190,7 +190,7 @@ def run(
             startup_voice=startup_settings.voice,
         )
     elif config.BACKEND_PROVIDER == HF_BACKEND:
-        from reachy_mini_conversation_app.huggingface_realtime import HuggingFaceRealtimeHandler
+        from robot_comic.huggingface_realtime import HuggingFaceRealtimeHandler
 
         hf_connection_selection = get_hf_connection_selection()
         transport_label = (
@@ -210,7 +210,7 @@ def run(
             startup_voice=startup_settings.voice,
         )  # type: ignore[assignment]
     else:
-        from reachy_mini_conversation_app.openai_realtime import OpenaiRealtimeHandler
+        from robot_comic.openai_realtime import OpenaiRealtimeHandler
 
         logger.info(
             "Using %s via OpenAI realtime handler (OpenAI Realtime API)",
@@ -226,7 +226,7 @@ def run(
     stream_manager: gr.Blocks | LocalStream | None = None
 
     if args.gradio:
-        from reachy_mini_conversation_app.gradio_personality import PersonalityUI
+        from robot_comic.gradio_personality import PersonalityUI
 
         personality_ui = PersonalityUI()
         personality_ui.create_components()

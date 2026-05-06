@@ -13,10 +13,10 @@ from openai.types.realtime import (
 from openai.types.realtime.realtime_audio_formats_param import AudioPCM
 from openai.types.realtime.realtime_audio_input_turn_detection_param import ServerVad
 
-from reachy_mini_conversation_app.config import OPENAI_BACKEND, config, get_default_voice_for_backend
-from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
-from reachy_mini_conversation_app.base_realtime import BaseRealtimeHandler, to_realtime_tools_config
-from reachy_mini_conversation_app.tools.core_tools import ToolDependencies, get_active_tool_specs
+from robot_comic.config import OPENAI_BACKEND, config, get_default_voice_for_backend
+from robot_comic.prompts import get_session_voice, get_session_instructions
+from robot_comic.base_realtime import BaseRealtimeHandler, to_realtime_tools_config
+from robot_comic.tools.core_tools import ToolDependencies, get_active_tool_specs
 
 
 logger = logging.getLogger(__name__)

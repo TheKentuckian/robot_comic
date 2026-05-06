@@ -27,14 +27,14 @@ from openai.types.realtime import (
 from websockets.exceptions import ConnectionClosedError
 from openai.resources.realtime.realtime import AsyncRealtimeConnection
 
-from reachy_mini_conversation_app.config import (
+from robot_comic.config import (
     config,
     get_default_voice_for_backend,
     get_available_voices_for_backend,
 )
-from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
-from reachy_mini_conversation_app.conversation_handler import ConversationHandler
-from reachy_mini_conversation_app.tools.background_tool_manager import (
+from robot_comic.tools.core_tools import ToolDependencies
+from robot_comic.conversation_handler import ConversationHandler
+from robot_comic.tools.background_tool_manager import (
     ToolCallRoutine,
     ToolNotification,
     BackgroundToolManager,
@@ -259,8 +259,8 @@ class BaseRealtimeHandler(ConversationHandler, ABC):
         """
         try:
             # Update the in-process config value and env
-            from reachy_mini_conversation_app.config import config as _config
-            from reachy_mini_conversation_app.config import set_custom_profile
+            from robot_comic.config import config as _config
+            from robot_comic.config import set_custom_profile
 
             set_custom_profile(profile)
             logger.info(

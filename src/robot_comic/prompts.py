@@ -3,7 +3,7 @@ import sys
 import logging
 from pathlib import Path
 
-from reachy_mini_conversation_app.config import DEFAULT_PROFILES_DIRECTORY, config, get_default_voice_for_backend
+from robot_comic.config import DEFAULT_PROFILES_DIRECTORY, config, get_default_voice_for_backend
 
 
 logger = logging.getLogger(__name__)
