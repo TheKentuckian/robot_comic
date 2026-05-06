@@ -97,7 +97,12 @@ class GeminiTTSResponseHandler(ConversationHandler):
         """Initialise credentials and block until shutdown() is called."""
         await self._prepare_startup_credentials()
         self._stop_event.clear()
+        asyncio.create_task(self._send_startup_trigger(), name="gemini-tts-startup-trigger")
         await self._stop_event.wait()
+
+    async def _send_startup_trigger(self) -> None:
+        """Kick off the opening sequence defined in the profile instructions."""
+        await self._dispatch_completed_transcript("[conversation started]")
 
     async def shutdown(self) -> None:
         """Signal start_up to return and drain the output queue."""
