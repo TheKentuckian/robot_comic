@@ -170,11 +170,11 @@
                 <small>Uses the configured Hugging Face realtime endpoint.</small>
               </span>
             </label>
-            <label class="output-choice is-disabled" data-output-card="gemini_tts">
-              <input type="radio" name="local-stt-output" value="gemini_tts" disabled />
+            <label class="output-choice" data-output-card="gemini_tts">
+              <input type="radio" name="local-stt-output" value="gemini_tts" />
               <span>
                 <strong>Gemini Flash 3.1 TTS</strong>
-                <small>Placeholder for a future text-to-speech output route.</small>
+                <small>On-device Moonshine STT → Gemini text response → Gemini 3.1 Flash TTS. Requires <code>GEMINI_API_KEY</code>.</small>
               </span>
             </label>
           </div>
