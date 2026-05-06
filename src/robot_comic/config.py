@@ -345,7 +345,7 @@ else:
 
 
 class Config:
-    """Configuration class for the conversation app."""
+    """Configuration class for Robot Comic."""
 
     # Required (one of these depending on BACKEND_PROVIDER)
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # The key is downloaded in console.py if needed

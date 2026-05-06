@@ -1,4 +1,4 @@
-"""Entrypoint for the Reachy Mini conversation app."""
+"""Entrypoint for Robot Comic."""
 
 import os
 import sys
@@ -31,7 +31,7 @@ def update_chatbot(chatbot: List[Dict[str, Any]], response: Dict[str, Any]) -> L
 
 
 def main() -> None:
-    """Entrypoint for the Reachy Mini conversation app."""
+    """Entrypoint for Robot Comic."""
     args, _ = parse_args()
     run(args)
 
@@ -43,8 +43,8 @@ def run(
     settings_app: Optional[FastAPI] = None,
     instance_path: Optional[str] = None,
 ) -> None:
-    """Run the Reachy Mini conversation app."""
-    # Putting these dependencies here makes the dashboard faster to load when the conversation app is installed
+    """Run Robot Comic."""
+    # Putting these dependencies here makes the dashboard faster to load when Robot Comic is installed.
     from robot_comic.moves import MovementManager
     from robot_comic.config import (
         HF_BACKEND,
@@ -63,7 +63,7 @@ def run(
     )
 
     logger = setup_logger(args.debug)
-    logger.info("Starting Reachy Mini Conversation App")
+    logger.info("Starting Robot Comic")
     startup_settings = StartupSettings()
 
     if instance_path is not None:
@@ -250,7 +250,7 @@ def run(
             additional_inputs=additional_inputs,
             additional_outputs=[chatbot],
             additional_outputs_handler=update_chatbot,
-            ui_args={"title": "Talk with Reachy Mini"},
+            ui_args={"title": "Robot Comic"},
         )
         stream_manager = stream.ui
         if not settings_app:
@@ -313,13 +313,13 @@ def run(
 
 
 class RobotComic(ReachyMiniApp):  # type: ignore[misc]
-    """Reachy Mini Apps entry point for the conversation app."""
+    """Reachy Mini Apps entry point for Robot Comic."""
 
     custom_app_url = "http://0.0.0.0:7860/"
     dont_start_webserver = False
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
-        """Run the Reachy Mini conversation app."""
+        """Run Robot Comic."""
         asyncio.set_event_loop(asyncio.new_event_loop())
 
         args, _ = parse_args()

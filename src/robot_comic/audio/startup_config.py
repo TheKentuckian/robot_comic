@@ -27,7 +27,7 @@ def apply_audio_startup_config(
     verify: bool = True,
     write_settle_seconds: float = WRITE_SETTLE_SECONDS,
 ) -> bool:
-    """Apply the tuned XVF3800 audio configuration for the conversation app."""
+    """Apply the tuned XVF3800 audio configuration for Robot Comic."""
     log = logger or logging.getLogger(__name__)
     audio = getattr(getattr(robot, "media", None), "audio", None)
 

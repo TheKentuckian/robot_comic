@@ -172,7 +172,7 @@ BACKEND_PROVIDER=huggingface
 HF_REALTIME_CONNECTION_MODE=deployed
 ```
 
-Run your own realtime voice backend using [speech-to-speech](https://github.com/huggingface/speech-to-speech) on the same machine as the conversation app:
+Run your own realtime voice backend using [speech-to-speech](https://github.com/huggingface/speech-to-speech) on the same machine as Robot Comic:
 
 ```env
 BACKEND_PROVIDER=huggingface
@@ -250,7 +250,7 @@ reachy-mini-conversation-app --gradio
 ```
 
 > [!WARNING]
-> `--local-vision` is not supported when running the conversation app directly on Reachy Mini Wireless / the Raspberry Pi. For local vision, keep the daemon running on the robot and start the conversation app from your laptop or workstation instead.
+> `--local-vision` is not supported when running Robot Comic directly on Reachy Mini Wireless / the Raspberry Pi. For local vision, keep the daemon running on the robot and start Robot Comic from your laptop or workstation instead.
 
 ## LLM tools exposed to the assistant
 
@@ -289,7 +289,7 @@ Write plain-text prompts in `instructions.txt`. To reuse shared prompt pieces, a
 [passion_for_lobster_jokes]
 [identities/witty_identity]
 ```
-Each placeholder pulls the matching file under `src/reachy_mini_conversation_app/prompts/` (nested paths allowed). See `profiles/example/` for a reference layout.
+Each placeholder pulls the matching file under `src/robot_comic/prompts/` (nested paths allowed). See `profiles/example/` for a reference layout.
 
 **Enabling tools:**
 
@@ -301,12 +301,12 @@ play_emotion
 # My custom tool defined locally
 sweep_look
 ```
-Tools are resolved first from Python files in the profile folder (custom tools), then from the core library `src/reachy_mini_conversation_app/tools/` (like `dance`, `head_tracking`).
+Tools are resolved first from Python files in the profile folder (custom tools), then from the core library `src/robot_comic/tools/` (like `dance`, `head_tracking`).
 
 **Custom tools:**
 
 On top of built-in tools found in the core library, you can implement custom tools specific to your profile by adding Python files in the profile folder.
-Custom tools must subclass `reachy_mini_conversation_app.tools.core_tools.Tool` (see `profiles/example/sweep_look.py`).
+Custom tools must subclass `robot_comic.tools.core_tools.Tool` (see `profiles/example/sweep_look.py`).
 
 **Edit personalities from the UI:**
 
@@ -322,7 +322,7 @@ Note: The "Personality" panel updates the conversation instructions. Tool sets a
 <details>
 <summary><b>Locked profile mode</b></summary>
 
-To create a locked variant of the app that cannot switch profiles, edit `src/reachy_mini_conversation_app/config.py` and set the `LOCKED_PROFILE` constant to the desired profile name:
+To create a locked variant of the app that cannot switch profiles, edit `src/robot_comic/config.py` and set the `LOCKED_PROFILE` constant to the desired profile name:
 ```python
 LOCKED_PROFILE: str | None = "mars_rover"  # Lock to this profile
 ```
@@ -337,7 +337,7 @@ This is useful for creating dedicated clones of the app with a fixed personality
 You can extend the app with profiles/tools stored outside the repository defaults.
 
 - Core profiles are under `profiles/`.
-- Core tools are under `src/reachy_mini_conversation_app/tools/`.
+- Core tools are under `src/robot_comic/tools/`.
 
 **Recommended layout:**
 
@@ -367,7 +367,7 @@ REACHY_MINI_EXTERNAL_TOOLS_DIRECTORY=./external_content/external_tools
 
 **Loading behavior:**
 
-- **Default/strict mode**: `tools.txt` defines enabled tools explicitly. Every name in `tools.txt` must resolve to either a built-in tool (`src/reachy_mini_conversation_app/tools/`) or an external tool module in `REACHY_MINI_EXTERNAL_TOOLS_DIRECTORY`.
+- **Default/strict mode**: `tools.txt` defines enabled tools explicitly. Every name in `tools.txt` must resolve to either a built-in tool (`src/robot_comic/tools/`) or an external tool module in `REACHY_MINI_EXTERNAL_TOOLS_DIRECTORY`.
 - **Convenience mode** (`AUTOLOAD_EXTERNAL_TOOLS=1`): all valid `*.py` tool files in `REACHY_MINI_EXTERNAL_TOOLS_DIRECTORY` are auto-added.
 - **External profile fallback**: if the selected external profile has no `tools.txt`, the app falls back to built-in `profiles/default/tools.txt`.
 

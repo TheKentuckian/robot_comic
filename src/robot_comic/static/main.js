@@ -439,7 +439,7 @@ async function init() {
     if (requiresRestart && selectedMatchesPersisted) {
       setStatusMessage(
         backendStatusEl,
-        `Backend saved. Restart Reachy Mini Conversation from the dashboard or desktop app to use ${backendMeta(persistedBackend).label}.`,
+        `Backend saved. Restart Robot Comic from the dashboard or desktop app to use ${backendMeta(persistedBackend).label}.`,
         "warn",
       );
     } else if (!selectedMatchesPersisted) {

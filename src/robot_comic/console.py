@@ -477,7 +477,7 @@ class LocalStream:
             payload_data = _status_payload()
             message = "Backend saved."
             if payload_data["requires_restart"]:
-                message = "Backend saved. Restart Reachy Mini Conversation from the desktop app to apply it."
+                message = "Backend saved. Restart Robot Comic from the desktop app to apply it."
             return JSONResponse(
                 {
                     "ok": True,

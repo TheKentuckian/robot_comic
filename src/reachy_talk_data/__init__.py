@@ -1,1 +1,1 @@
-"""Packaged data for the Reachy Mini conversation app."""
+"""Packaged data for Robot Comic."""
