@@ -29,6 +29,7 @@ from robot_comic.config import (
     LOCKED_PROFILE,
     OPENAI_BACKEND,
     LOCAL_STT_BACKEND,
+    GEMINI_TTS_OUTPUT,
     LOCAL_STT_MODEL_ENV,
     HF_REALTIME_WS_URL_ENV,
     LOCAL_STT_LANGUAGE_ENV,
@@ -185,8 +186,11 @@ class LocalStream:
         if backend == HF_BACKEND:
             return has_hf_realtime_target()
         if backend == LOCAL_STT_BACKEND:
-            if getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND) == HF_BACKEND:
+            response_backend = getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
+            if response_backend == HF_BACKEND:
                 return has_hf_realtime_target()
+            if response_backend == GEMINI_TTS_OUTPUT:
+                return self._has_key(config.GEMINI_API_KEY)
             return self._has_key(config.OPENAI_API_KEY)
         return self._has_key(config.OPENAI_API_KEY)
 
@@ -198,8 +202,11 @@ class LocalStream:
         if backend == HF_BACKEND:
             return HF_REALTIME_WS_URL_ENV
         if backend == LOCAL_STT_BACKEND:
-            if getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND) == HF_BACKEND:
+            response_backend = getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
+            if response_backend == HF_BACKEND:
                 return HF_REALTIME_WS_URL_ENV
+            if response_backend == GEMINI_TTS_OUTPUT:
+                return "GEMINI_API_KEY"
             return "OPENAI_API_KEY"
         return "OPENAI_API_KEY"
 
@@ -513,12 +520,21 @@ class LocalStream:
                 and not self._has_key(config.OPENAI_API_KEY)
             ):
                 return JSONResponse({"ok": False, "error": "empty_key"}, status_code=400)
+            if (
+                backend == LOCAL_STT_BACKEND
+                and local_stt_response_backend == GEMINI_TTS_OUTPUT
+                and not api_key
+                and not self._has_key(config.GEMINI_API_KEY)
+            ):
+                return JSONResponse({"ok": False, "error": "empty_key"}, status_code=400)
 
             if backend == OPENAI_BACKEND and api_key:
                 self._persist_api_key(api_key)
             if backend == LOCAL_STT_BACKEND and local_stt_response_backend == OPENAI_BACKEND and api_key:
                 self._persist_api_key(api_key)
             if backend == GEMINI_BACKEND and api_key:
+                self._persist_gemini_api_key(api_key)
+            if backend == LOCAL_STT_BACKEND and local_stt_response_backend == GEMINI_TTS_OUTPUT and api_key:
                 self._persist_gemini_api_key(api_key)
             if backend == LOCAL_STT_BACKEND:
                 cache_dir = (
