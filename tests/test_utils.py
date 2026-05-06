@@ -5,6 +5,7 @@ import argparse
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
 from robot_comic.utils import (
@@ -104,6 +105,36 @@ def test_initialize_camera_and_vision_uses_mediapipe_head_tracker_in_process() -
         initialize_camera_and_vision(args, current_robot)
 
     mock_camera_worker.assert_called_once_with(current_robot, mediapipe_head_tracker)
+
+
+def test_mediapipe_head_tracker_converts_bgr_frames() -> None:
+    """The MediaPipe toolbox receives RGB frames even though app camera frames are BGR."""
+    captured = {}
+
+    class FakeToolboxTracker:
+        def get_head_position(self, img):
+            captured["frame"] = img
+            return None, None
+
+    fake_vision = ModuleType("reachy_mini_toolbox.vision")
+    fake_vision.HeadTracker = FakeToolboxTracker  # type: ignore[attr-defined]
+    fake_toolbox = ModuleType("reachy_mini_toolbox")
+    fake_toolbox.vision = fake_vision  # type: ignore[attr-defined]
+
+    with patch.dict(
+        sys.modules,
+        {
+            "reachy_mini_toolbox": fake_toolbox,
+            "reachy_mini_toolbox.vision": fake_vision,
+        },
+    ):
+        from robot_comic.vision.head_tracking.mediapipe import MediapipeHeadTracker
+
+        tracker = MediapipeHeadTracker()
+        tracker.get_head_position(np.array([[[0, 0, 255]]], dtype=np.uint8))
+
+    assert np.array_equal(captured["frame"], np.array([[[255, 0, 0]]], dtype=np.uint8))
+    assert captured["frame"].flags.c_contiguous
 
 
 def test_initialize_camera_and_vision_uses_env_head_tracker(monkeypatch: pytest.MonkeyPatch) -> None:
