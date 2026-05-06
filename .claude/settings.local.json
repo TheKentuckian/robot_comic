@@ -30,7 +30,9 @@
       "Bash(git checkout *)",
       "Bash(git rebase *)",
       "WebFetch(domain:ai.google.dev)",
-      "Bash(rtk proxy *)"
+      "Bash(rtk proxy *)",
+      "Bash(rtk wc *)",
+      "Bash(git *)"
     ]
   }
 }
