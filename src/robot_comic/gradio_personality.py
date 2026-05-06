@@ -42,6 +42,7 @@ class PersonalityUI:
         self.new_personality_btn: gr.Button
         self.available_tools_cg: gr.CheckboxGroup
         self.save_btn: gr.Button
+        self.speed_slider: gr.Slider
 
     # ---------- Filesystem helpers ----------
     def _list_personalities(self) -> list[str]:
@@ -175,6 +176,14 @@ class PersonalityUI:
             interactive=not is_locked,
         )
         self.save_btn = gr.Button("Save personality (instructions + tools)", interactive=not is_locked)
+        self.speed_slider = gr.Slider(
+            minimum=0.1,
+            maximum=2.0,
+            step=0.05,
+            value=0.6,
+            label="Movement Speed (0.1 = slow/quiet, 1.0 = normal, 2.0 = fast)",
+            interactive=True,
+        )
 
     def additional_inputs_ordered(self) -> list[Any]:
         """Return the additional inputs in the expected order for Stream."""
@@ -190,6 +199,7 @@ class PersonalityUI:
             self.voice_dropdown,
             self.available_tools_cg,
             self.save_btn,
+            self.speed_slider,
         ]
 
     # ---------- Event wiring ----------
@@ -352,4 +362,17 @@ class PersonalityUI:
                 fn=_apply_personality,
                 inputs=[self.personalities_dropdown],
                 outputs=[self.status_md, self.preview_md],
+            )
+
+            def _on_speed_change(value: float) -> None:
+                mm = getattr(handler, "deps", None)
+                if mm is not None:
+                    movement_manager = getattr(mm, "movement_manager", None)
+                    if movement_manager is not None and hasattr(movement_manager, "set_speed_factor"):
+                        movement_manager.set_speed_factor(value)
+
+            self.speed_slider.change(
+                fn=_on_speed_change,
+                inputs=[self.speed_slider],
+                outputs=[],
             )
