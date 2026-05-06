@@ -19,11 +19,16 @@ from google import genai
 from google.genai import types
 
 from robot_comic.config import (
+    GEMINI_AVAILABLE_VOICES,
     GEMINI_TTS_AVAILABLE_VOICES,
     GEMINI_TTS_DEFAULT_VOICE,
     config,
     set_custom_profile,
 )
+
+# Voices shared with Gemini Live may have been persisted for that backend.
+# Only restore startup_voice if it is TTS-exclusive (not in the Live voice list).
+_TTS_EXCLUSIVE_VOICES: frozenset[str] = frozenset(GEMINI_TTS_AVAILABLE_VOICES) - frozenset(GEMINI_AVAILABLE_VOICES)
 from robot_comic.conversation_handler import ConversationHandler
 from robot_comic.gemini_live import _openai_tool_specs_to_gemini
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
@@ -59,7 +64,10 @@ class GeminiTTSResponseHandler(ConversationHandler):
         self.deps = deps
         self.gradio_mode = gradio_mode
         self.instance_path = instance_path
-        self._voice_override: str | None = startup_voice
+        # Only restore voices that are TTS-exclusive. Shared Live/TTS voices
+        # (Kore, Aoede, etc.) may have been persisted for Gemini Live — ignore them
+        # and default to GEMINI_TTS_DEFAULT_VOICE (Algenib) instead.
+        self._voice_override: str | None = startup_voice if startup_voice in _TTS_EXCLUSIVE_VOICES else None
         self._client: genai.Client | None = None
         self._stop_event: asyncio.Event = asyncio.Event()
         self._conversation_history: list[dict[str, Any]] = []
