@@ -33,8 +33,11 @@ def update_chatbot(chatbot: List[Dict[str, Any]], response: Dict[str, Any]) -> L
 
 def main() -> None:
     """Entrypoint for Robot Comic."""
-    args, _ = parse_args()
-    run(args)
+    app = RobotComic()
+    try:
+        app.wrapped_run()
+    except KeyboardInterrupt:
+        app.stop()
 
 
 def run(
