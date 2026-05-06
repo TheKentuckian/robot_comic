@@ -281,6 +281,11 @@ class GeminiTTSResponseHandler(ConversationHandler):
         assert self._client is not None, "Client not initialised"
 
         tts_config = types.GenerateContentConfig(
+            system_instruction=(
+                "Deliver this text at a fast, clipped Brooklyn pace — "
+                "rapid-fire on the insults, short crisp pauses only where marked. "
+                "Never drawl or over-enunciate. Keep the energy sharp."
+            ),
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(

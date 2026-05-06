@@ -141,3 +141,37 @@ async def test_apply_personality_clears_history() -> None:
         await handler.apply_personality("don_rickles")
 
     assert handler._conversation_history == []
+
+
+@pytest.mark.asyncio
+async def test_tts_call_includes_speed_system_instruction() -> None:
+    """_call_tts_with_retry must pass a fast-delivery system_instruction to TTS."""
+    handler = _make_handler()
+
+    captured_configs = []
+
+    async def fake_generate(model, contents, config):
+        captured_configs.append(config)
+        fake_data = b"\x00" * 4800
+        import base64
+        encoded = base64.b64encode(fake_data).decode()
+        part = MagicMock()
+        part.inline_data.data = encoded
+        candidate = MagicMock()
+        candidate.content.parts = [part]
+        response = MagicMock()
+        response.candidates = [candidate]
+        return response
+
+    handler._client.aio = MagicMock()
+    handler._client.aio.models = MagicMock()
+    handler._client.aio.models.generate_content = fake_generate
+
+    result = await handler._call_tts_with_retry("You hockey puck!")
+
+    assert result is not None
+    assert len(captured_configs) == 1
+    cfg = captured_configs[0]
+    assert cfg.system_instruction is not None
+    instruction_text = cfg.system_instruction.lower()
+    assert "fast" in instruction_text or "brooklyn" in instruction_text or "pace" in instruction_text
