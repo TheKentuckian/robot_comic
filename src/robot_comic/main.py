@@ -1,5 +1,12 @@
 """Entrypoint for Robot Comic."""
 
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    module="google.protobuf.symbol_database",
+)
+
 import os
 import sys
 import time

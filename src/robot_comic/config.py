@@ -230,6 +230,22 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return default
 
 
+def _env_float_clamped(name: str, default: float, lo: float, hi: float) -> float:
+    """Parse a float env var, clamping to [lo, hi]."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        logger.warning("Invalid float for %s=%r, using default=%.2f", name, raw, default)
+        return default
+    clamped = max(lo, min(hi, value))
+    if clamped != value:
+        logger.warning("%s=%.2f clamped to %.2f", name, value, clamped)
+    return clamped
+
+
 def _normalize_hf_connection_mode(value: str | None) -> str | None:
     """Normalize the Hugging Face connection mode, if explicitly configured."""
     candidate = (value or "").strip().lower()
@@ -472,6 +488,10 @@ class Config:
     LOCAL_STT_LANGUAGE = _normalize_local_stt_language(os.getenv(LOCAL_STT_LANGUAGE_ENV))
     LOCAL_STT_MODEL = _normalize_local_stt_model(os.getenv(LOCAL_STT_MODEL_ENV))
     LOCAL_STT_UPDATE_INTERVAL = _normalize_local_stt_update_interval(os.getenv(LOCAL_STT_UPDATE_INTERVAL_ENV))
+
+    GEMINI_LIVE_VIDEO_STREAMING = _env_flag("GEMINI_LIVE_VIDEO_STREAMING", default=False)
+    MOVEMENT_SPEED_FACTOR = _env_float_clamped("MOVEMENT_SPEED_FACTOR", default=0.6, lo=0.1, hi=2.0)
+    MOONSHINE_HEARTBEAT = _env_flag("MOONSHINE_HEARTBEAT", default=False)
 
     logger.debug(
         "Backend provider: %s, Model: %s, HF mode: %s, HF session URL set: %s, HF direct URL set: %s, HF_HOME: %s, Vision Model: %s, Local STT: %s/%s/%s response=%s cache=%s",
