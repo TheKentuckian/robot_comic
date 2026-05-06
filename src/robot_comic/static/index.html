@@ -57,38 +57,58 @@
           <span id="backend-chip" class="chip">Required</span>
         </div>
         <p id="backend-note" class="muted backend-note">
-          OpenAI Realtime needs your own <code>OPENAI_API_KEY</code>. Gemini Live needs your own <code>GEMINI_API_KEY</code>. Hugging Face uses either the built-in server or a direct realtime websocket endpoint.
+          Pick a complete provider journey, or split audio input and output with local Moonshine speech recognition.
         </p>
         <p class="muted backend-note">
           Backend changes are saved here, then applied after you restart Robot Comic from the dashboard or desktop app.
         </p>
-        <div class="backend-choice-grid" role="radiogroup" aria-label="Robot Comic backend">
+        <div class="journey-map" aria-label="Selected audio journey">
+          <div class="journey-stage">
+            <span class="stage-kicker">Audio input</span>
+            <strong id="journey-input-label">Provider realtime audio</strong>
+            <span id="journey-input-copy">Speech is streamed to the selected provider.</span>
+          </div>
+          <div class="journey-connector" aria-hidden="true"></div>
+          <div class="journey-stage">
+            <span class="stage-kicker">Reasoning + tools</span>
+            <strong id="journey-brain-label">Selected provider</strong>
+            <span id="journey-brain-copy">Robot Comic keeps the same personality and tool layer.</span>
+          </div>
+          <div class="journey-connector" aria-hidden="true"></div>
+          <div class="journey-stage">
+            <span class="stage-kicker">Audio output</span>
+            <strong id="journey-output-label">Provider voice</strong>
+            <span id="journey-output-copy">Speech comes back from the selected voice backend.</span>
+          </div>
+        </div>
+
+        <div class="backend-choice-grid" role="radiogroup" aria-label="Robot Comic audio journey">
           <label class="backend-choice" data-backend-card="huggingface">
             <input type="radio" name="backend" value="huggingface" />
             <span class="backend-choice-body">
               <span class="backend-choice-title">Hugging Face</span>
-              <span class="backend-choice-copy">Use the built-in Hugging Face server or your own local endpoint.</span>
+              <span class="backend-choice-copy">End-to-end realtime audio through the built-in server or your own endpoint.</span>
             </span>
           </label>
           <label class="backend-choice" data-backend-card="local_stt">
             <input type="radio" name="backend" value="local_stt" />
             <span class="backend-choice-body">
-              <span class="backend-choice-title">Local STT</span>
-              <span class="backend-choice-copy">Run Moonshine speech recognition on-device, then use OpenAI for voice.</span>
+              <span class="backend-choice-title">Custom audio path</span>
+              <span class="backend-choice-copy">Use Moonshine for speech input, then choose a separate voice output backend.</span>
             </span>
           </label>
           <label class="backend-choice is-selected" data-backend-card="openai">
             <input type="radio" name="backend" value="openai" checked />
             <span class="backend-choice-body">
               <span class="backend-choice-title">OpenAI Realtime</span>
-              <span class="backend-choice-copy">Bring your own <code>OPENAI_API_KEY</code> to use OpenAI Realtime.</span>
+              <span class="backend-choice-copy">End-to-end OpenAI Realtime audio with your own <code>OPENAI_API_KEY</code>.</span>
             </span>
           </label>
           <label class="backend-choice" data-backend-card="gemini">
             <input type="radio" name="backend" value="gemini" />
             <span class="backend-choice-body">
               <span class="backend-choice-title">Gemini Live</span>
-              <span class="backend-choice-copy">Bring your own <code>GEMINI_API_KEY</code> to try Gemini.</span>
+              <span class="backend-choice-copy">End-to-end Gemini Live audio with your own <code>GEMINI_API_KEY</code>.</span>
             </span>
           </label>
         </div>
@@ -126,8 +146,39 @@
           <label for="local-stt-cache">Model cache</label>
           <input id="local-stt-cache" type="text" value="./cache/moonshine_voice" placeholder="./cache/moonshine_voice" autocomplete="off" />
 
-          <label for="local-stt-response">Response voice backend</label>
-          <select id="local-stt-response">
+          <div class="audio-path-card">
+            <div>
+              <span class="stage-kicker">Audio input model</span>
+              <strong>Moonshine STT</strong>
+              <p class="muted small">Speech is transcribed locally before any response backend sees it.</p>
+            </div>
+          </div>
+
+          <label>Audio output backend</label>
+          <div class="output-choice-grid" role="radiogroup" aria-label="Local STT audio output backend">
+            <label class="output-choice" data-output-card="openai">
+              <input type="radio" name="local-stt-output" value="openai" />
+              <span>
+                <strong>OpenAI Realtime voice</strong>
+                <small>Uses OpenAI text-in, audio-out response generation.</small>
+              </span>
+            </label>
+            <label class="output-choice" data-output-card="huggingface">
+              <input type="radio" name="local-stt-output" value="huggingface" />
+              <span>
+                <strong>Hugging Face voice</strong>
+                <small>Uses the configured Hugging Face realtime endpoint.</small>
+              </span>
+            </label>
+            <label class="output-choice is-disabled" data-output-card="gemini_tts">
+              <input type="radio" name="local-stt-output" value="gemini_tts" disabled />
+              <span>
+                <strong>Gemini Flash 3.1 TTS</strong>
+                <small>Placeholder for a future text-to-speech output route.</small>
+              </span>
+            </label>
+          </div>
+          <select id="local-stt-response" class="sr-only" aria-hidden="true" tabindex="-1">
             <option value="openai">OpenAI Realtime</option>
             <option value="huggingface">Hugging Face</option>
           </select>

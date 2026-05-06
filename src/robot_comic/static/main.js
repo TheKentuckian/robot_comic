@@ -53,10 +53,44 @@ const BACKEND_META = {
     saveButton: "Save local STT",
     changeButton: "Edit local STT",
     readyTitle: "Local STT ready",
-    readyCopy: "Moonshine will transcribe speech on-device, then OpenAI will generate the spoken response.",
-    formCopy: "Choose a local Moonshine model and provide an OpenAI key for response audio.",
-    requiredCredentialsCopy: "Local STT still needs OPENAI_API_KEY for response generation and speech.",
-    note: "Local STT keeps speech recognition on-device, then sends text to OpenAI for the spoken response.",
+    readyCopy: "Moonshine will transcribe speech on-device, then the selected output backend will generate the spoken response.",
+    formCopy: "Choose a local Moonshine model and a separate voice output backend.",
+    requiredCredentialsCopy: "Local STT needs credentials or connection details for the selected output backend.",
+    note: "Local STT keeps speech recognition on-device, then sends text to the selected voice output backend.",
+  },
+};
+const JOURNEY_META = {
+  [HF_BACKEND]: {
+    inputLabel: "Hugging Face realtime audio",
+    inputCopy: "Speech streams to the Hugging Face voice backend.",
+    brainLabel: "Hugging Face response model",
+    brainCopy: "The configured endpoint handles speech understanding, tools, and replies.",
+    outputLabel: "Hugging Face voice",
+    outputCopy: "Audio returns from the built-in server or your direct endpoint.",
+  },
+  [OPENAI_BACKEND]: {
+    inputLabel: "OpenAI Realtime audio",
+    inputCopy: "Microphone audio streams directly to OpenAI.",
+    brainLabel: "OpenAI Realtime",
+    brainCopy: "Realtime handles understanding, personality, tools, and response timing.",
+    outputLabel: "OpenAI voice",
+    outputCopy: "Speech comes back through the selected OpenAI voice.",
+  },
+  [GEMINI_BACKEND]: {
+    inputLabel: "Gemini Live audio",
+    inputCopy: "Microphone audio streams directly to Gemini Live.",
+    brainLabel: "Gemini Live",
+    brainCopy: "Gemini handles understanding, personality, tools, and response timing.",
+    outputLabel: "Gemini Live voice",
+    outputCopy: "Speech comes back through the selected Gemini voice.",
+  },
+  [LOCAL_STT_BACKEND]: {
+    inputLabel: "Moonshine STT",
+    inputCopy: "Speech recognition runs locally on the robot.",
+    brainLabel: "Text response backend",
+    brainCopy: "Robot Comic sends transcripts to the selected output backend.",
+    outputLabel: "OpenAI voice",
+    outputCopy: "Choose OpenAI or Hugging Face today; Gemini Flash 3.1 TTS is reserved as a future route.",
   },
 };
 
@@ -90,6 +124,22 @@ function backendCanProceed(status, backend) {
 
 function backendMeta(backend) {
   return BACKEND_META[backend] || BACKEND_META[DEFAULT_BACKEND];
+}
+
+function journeyMeta(backend, outputBackend = OPENAI_BACKEND) {
+  const meta = { ...(JOURNEY_META[backend] || JOURNEY_META[DEFAULT_BACKEND]) };
+  if (backend === LOCAL_STT_BACKEND) {
+    if (outputBackend === HF_BACKEND) {
+      meta.brainLabel = "Hugging Face response backend";
+      meta.outputLabel = "Hugging Face voice";
+      meta.outputCopy = "Speech comes back through the configured Hugging Face endpoint.";
+    } else {
+      meta.brainLabel = "OpenAI response backend";
+      meta.outputLabel = "OpenAI voice";
+      meta.outputCopy = "Speech comes back through OpenAI text-in, audio-out realtime.";
+    }
+  }
+  return meta;
 }
 
 function formatBackendNote(text) {
@@ -335,6 +385,12 @@ async function init() {
   const backendSaveBtn = document.getElementById("save-backend-btn");
   const backendInputs = Array.from(document.querySelectorAll('input[name="backend"]'));
   const backendCards = Array.from(document.querySelectorAll("[data-backend-card]"));
+  const journeyInputLabel = document.getElementById("journey-input-label");
+  const journeyInputCopy = document.getElementById("journey-input-copy");
+  const journeyBrainLabel = document.getElementById("journey-brain-label");
+  const journeyBrainCopy = document.getElementById("journey-brain-copy");
+  const journeyOutputLabel = document.getElementById("journey-output-label");
+  const journeyOutputCopy = document.getElementById("journey-output-copy");
   const statusEl = document.getElementById("status");
   const formPanel = document.getElementById("form-panel");
   const configuredPanel = document.getElementById("configured");
@@ -362,6 +418,8 @@ async function init() {
   const localSttResponse = document.getElementById("local-stt-response");
   const localSttModel = document.getElementById("local-stt-model");
   const localSttUpdate = document.getElementById("local-stt-update");
+  const localSttOutputInputs = Array.from(document.querySelectorAll('input[name="local-stt-output"]'));
+  const localSttOutputCards = Array.from(document.querySelectorAll("[data-output-card]"));
 
   // Personality elements
   const pSelect = document.getElementById("personality-select");
@@ -439,6 +497,7 @@ async function init() {
     }
     localSttModel.value = choices.includes(status.local_stt_model) ? status.local_stt_model : choices[0];
     localSttUpdate.value = String(status.local_stt_update_interval || 0.35);
+    setSelectedLocalSTTOutput(localSttResponse.value || OPENAI_BACKEND);
   }
 
   function setSelectedBackend(backend) {
@@ -451,6 +510,27 @@ async function init() {
     backendCards.forEach((card) => {
       card.classList.toggle("is-selected", card.dataset.backendCard === selectedBackend);
     });
+  }
+
+  function setSelectedLocalSTTOutput(outputBackend) {
+    const normalized = outputBackend === HF_BACKEND ? HF_BACKEND : OPENAI_BACKEND;
+    localSttResponse.value = normalized;
+    localSttOutputInputs.forEach((radio) => {
+      radio.checked = radio.value === normalized;
+    });
+    localSttOutputCards.forEach((card) => {
+      card.classList.toggle("is-selected", card.dataset.outputCard === normalized);
+    });
+  }
+
+  function renderJourneyMap() {
+    const meta = journeyMeta(selectedBackend, localSttResponse.value || OPENAI_BACKEND);
+    journeyInputLabel.textContent = meta.inputLabel;
+    journeyInputCopy.textContent = meta.inputCopy;
+    journeyBrainLabel.textContent = meta.brainLabel;
+    journeyBrainCopy.textContent = meta.brainCopy;
+    journeyOutputLabel.textContent = meta.outputLabel;
+    journeyOutputCopy.textContent = meta.outputCopy;
   }
 
   function renderCredentialPanels(status) {
@@ -472,6 +552,7 @@ async function init() {
     const usesLocalSTTForm = selectedBackend === LOCAL_STT_BACKEND;
     const supportsForm = usesApiKeyForm || usesHFForm || usesLocalSTTForm;
 
+    renderJourneyMap();
     backendChip.textContent = selectedBackend === persistedBackend ? "Saved" : "Selected";
     backendNote.innerHTML = formatBackendNote(meta.note);
 
@@ -597,7 +678,17 @@ async function init() {
   localSttResponse.addEventListener("change", () => {
     editingCredentials = false;
     setStatusMessage(statusEl, "");
+    setSelectedLocalSTTOutput(localSttResponse.value);
     renderCredentialPanels(st);
+  });
+  localSttOutputInputs.forEach((radio) => {
+    radio.addEventListener("change", () => {
+      if (radio.disabled) return;
+      editingCredentials = false;
+      setSelectedLocalSTTOutput(radio.value);
+      setStatusMessage(statusEl, "");
+      renderCredentialPanels(st);
+    });
   });
 
   backendInputs.forEach((radio) => {
