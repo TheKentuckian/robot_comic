@@ -68,7 +68,7 @@ class CrowdWork(Tool):
     def _load_recent_session(self) -> None:
         if not self._session_dir.exists():
             return
-        cutoff = datetime.now() - timedelta(hours=SESSION_WINDOW_HOURS)
+        cutoff = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         candidates = sorted(
             self._session_dir.glob("session_*.json"),
             key=lambda p: p.stat().st_mtime,
@@ -94,7 +94,7 @@ class CrowdWork(Tool):
             loop = asyncio.get_running_loop()
             loop.create_task(asyncio.to_thread(self._write_session))
         except RuntimeError:
-            pass
+            logger.warning("No running event loop — session write skipped")
 
     def _build_callbacks(self) -> list[str]:
         hints: list[str] = []
