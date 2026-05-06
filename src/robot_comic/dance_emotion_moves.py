@@ -22,23 +22,22 @@ logger = logging.getLogger(__name__)
 class DanceQueueMove(Move):  # type: ignore
     """Wrapper for dance moves to work with the movement queue system."""
 
-    def __init__(self, move_name: str):
+    def __init__(self, move_name: str, speed_factor: float = 1.0):
         """Initialize a DanceQueueMove."""
         self.dance_move = DanceMove(move_name)
         self.move_name = move_name
+        self.speed_factor = max(0.1, speed_factor)
 
     @property
     def duration(self) -> float:
         """Duration property required by official Move interface."""
-        return float(self.dance_move.duration)
+        return float(self.dance_move.duration) / self.speed_factor
 
     def evaluate(self, t: float) -> tuple[NDArray[np.float64] | None, NDArray[np.float64] | None, float | None]:
         """Evaluate dance move at time t."""
         try:
-            # Get the pose from the dance move
-            head_pose, antennas, body_yaw = self.dance_move.evaluate(t)
+            head_pose, antennas, body_yaw = self.dance_move.evaluate(t * self.speed_factor)
 
-            # Convert to numpy array if antennas is tuple and return in official Move format
             if isinstance(antennas, tuple):
                 antennas = np.array([antennas[0], antennas[1]])
 
@@ -46,7 +45,6 @@ class DanceQueueMove(Move):  # type: ignore
 
         except Exception as e:
             logger.error(f"Error evaluating dance move '{self.move_name}' at t={t}: {e}")
-            # Return neutral pose on error
             from reachy_mini.utils import create_head_pose
 
             neutral_head_pose = create_head_pose(0, 0, 0, 0, 0, 0, degrees=True)
@@ -56,23 +54,22 @@ class DanceQueueMove(Move):  # type: ignore
 class EmotionQueueMove(Move):  # type: ignore
     """Wrapper for emotion moves to work with the movement queue system."""
 
-    def __init__(self, emotion_name: str, recorded_moves: RecordedMoves):
+    def __init__(self, emotion_name: str, recorded_moves: RecordedMoves, speed_factor: float = 1.0):
         """Initialize an EmotionQueueMove."""
         self.emotion_move = recorded_moves.get(emotion_name)
         self.emotion_name = emotion_name
+        self.speed_factor = max(0.1, speed_factor)
 
     @property
     def duration(self) -> float:
         """Duration property required by official Move interface."""
-        return float(self.emotion_move.duration)
+        return float(self.emotion_move.duration) / self.speed_factor
 
     def evaluate(self, t: float) -> tuple[NDArray[np.float64] | None, NDArray[np.float64] | None, float | None]:
         """Evaluate emotion move at time t."""
         try:
-            # Get the pose from the emotion move
-            head_pose, antennas, body_yaw = self.emotion_move.evaluate(t)
+            head_pose, antennas, body_yaw = self.emotion_move.evaluate(t * self.speed_factor)
 
-            # Convert to numpy array if antennas is tuple and return in official Move format
             if isinstance(antennas, tuple):
                 antennas = np.array([antennas[0], antennas[1]])
 
@@ -80,7 +77,6 @@ class EmotionQueueMove(Move):  # type: ignore
 
         except Exception as e:
             logger.error(f"Error evaluating emotion '{self.emotion_name}' at t={t}: {e}")
-            # Return neutral pose on error
             from reachy_mini.utils import create_head_pose
 
             neutral_head_pose = create_head_pose(0, 0, 0, 0, 0, 0, degrees=True)

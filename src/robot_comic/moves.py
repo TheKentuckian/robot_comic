@@ -286,6 +286,13 @@ class MovementManager:
         self._cached_secondary_offsets: tuple[float, ...] = ()  # force miss on first call
         self._cached_secondary_pose: FullBodyPose = (np.eye(4, dtype=np.float32), (0.0, 0.0), 0.0)
 
+        # Move playback speed multiplier
+        try:
+            from robot_comic.config import config as _cfg
+            self.speed_factor: float = _cfg.MOVEMENT_SPEED_FACTOR
+        except Exception:
+            self.speed_factor: float = 0.6
+
         # Cross-thread signalling
         self._command_queue: "Queue[Tuple[str, Any]]" = Queue()
         self._speech_offsets_lock = threading.Lock()
@@ -349,6 +356,10 @@ class MovementManager:
         aware of manual motions. Thread-safe via the command queue.
         """
         self._command_queue.put(("set_moving_state", duration))
+
+    def set_speed_factor(self, value: float) -> None:
+        """Set move playback speed multiplier (0.1–2.0). Thread-safe under CPython GIL."""
+        self.speed_factor = max(0.1, min(2.0, value))
 
     def is_idle(self) -> bool:
         """Return True when the robot has been inactive longer than the idle delay."""

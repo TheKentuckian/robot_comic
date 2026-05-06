@@ -79,8 +79,9 @@ class Dance(Tool):
 
         # Add dance moves to queue
         movement_manager = deps.movement_manager
+        speed = getattr(deps.movement_manager, "speed_factor", 1.0)
         for _ in range(repeat):
-            dance_move = DanceQueueMove(move_name)
+            dance_move = DanceQueueMove(move_name, speed_factor=speed)
             movement_manager.queue_move(dance_move)
 
         return {"status": "queued", "move": move_name, "repeat": repeat}

@@ -83,7 +83,8 @@ class PlayEmotion(Tool):
 
             # Add emotion to queue
             movement_manager = deps.movement_manager
-            emotion_move = EmotionQueueMove(emotion_name, RECORDED_MOVES)
+            speed = getattr(deps.movement_manager, "speed_factor", 1.0)
+            emotion_move = EmotionQueueMove(emotion_name, RECORDED_MOVES, speed_factor=speed)
             movement_manager.queue_move(emotion_move)
 
             return {"status": "queued", "emotion": emotion_name}
