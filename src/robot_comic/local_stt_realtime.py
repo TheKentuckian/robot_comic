@@ -58,16 +58,24 @@ class _MoonshineListener:  # base class is attached dynamically in _build_local_
         self.handler = handler
 
     def on_line_started(self, event: Any) -> None:
-        self.handler._schedule_local_stt_event("started", self._text_from_event(event))
+        text = self._text_from_event(event)
+        self.handler._heartbeat.update({"state": "speech_started", "last_event": "started", "last_text": text, "last_event_at": time.monotonic()})
+        self.handler._schedule_local_stt_event("started", text)
 
     def on_line_updated(self, event: Any) -> None:
-        self.handler._schedule_local_stt_event("partial", self._text_from_event(event))
+        text = self._text_from_event(event)
+        self.handler._heartbeat.update({"state": "partial", "last_event": "partial", "last_text": text, "last_event_at": time.monotonic()})
+        self.handler._schedule_local_stt_event("partial", text)
 
     def on_line_text_changed(self, event: Any) -> None:
-        self.handler._schedule_local_stt_event("partial", self._text_from_event(event))
+        text = self._text_from_event(event)
+        self.handler._heartbeat.update({"state": "partial", "last_event": "partial", "last_text": text, "last_event_at": time.monotonic()})
+        self.handler._schedule_local_stt_event("partial", text)
 
     def on_line_completed(self, event: Any) -> None:
-        self.handler._schedule_local_stt_event("completed", self._text_from_event(event))
+        text = self._text_from_event(event)
+        self.handler._heartbeat.update({"state": "completed", "last_event": "completed", "last_text": text, "last_event_at": time.monotonic()})
+        self.handler._schedule_local_stt_event("completed", text)
 
     def on_error(self, event: Any) -> None:
         logger.warning("Local STT error: %s", getattr(event, "error", event))
@@ -98,6 +106,14 @@ class LocalSTTInputMixin:
         self._local_loop: asyncio.AbstractEventLoop | None = None
         self._last_completed_transcript: str = ""
         self._last_completed_at: float = 0.0
+        self._heartbeat: dict = {
+            "state": "idle",
+            "last_event": None,
+            "last_text": "",
+            "last_event_at": time.monotonic(),
+            "audio_frames": 0,
+        }
+        self._heartbeat_future: "asyncio.Future | None" = None
 
     def copy(self) -> "LocalSTTInputMixin":
         """Create a copy of the handler."""
@@ -163,6 +179,11 @@ class LocalSTTInputMixin:
         self._local_stt_transcriber = transcriber
         self._local_stt_stream = stream
         self._local_stt_listener = listener
+
+        if config.MOONSHINE_HEARTBEAT and self._local_loop is not None:
+            self._heartbeat_future = asyncio.run_coroutine_threadsafe(
+                self._moonshine_heartbeat_loop(), self._local_loop
+            )
 
     def _schedule_local_stt_event(self, kind: str, text: str) -> None:
         """Schedule a local STT event onto the handler event loop."""
@@ -233,6 +254,32 @@ class LocalSTTInputMixin:
             ),
         )
 
+    def _log_heartbeat(self) -> None:
+        """Emit one heartbeat log line with current Moonshine state."""
+        h = self._heartbeat
+        age = time.monotonic() - h["last_event_at"]
+        text_snippet = (h["last_text"] or "")[:40]
+        logger.info(
+            "[Moonshine] state=%s  last_event=%s  age=%.1fs  frames=%d  text=%r",
+            h["state"],
+            h["last_event"],
+            age,
+            h["audio_frames"],
+            text_snippet,
+        )
+        if h["state"] == "idle" and age > 10.0 and h["audio_frames"] > 0:
+            logger.warning(
+                "[Moonshine] idle for %.1fs with %d audio frames received — possible thread-lock or model stall",
+                age,
+                h["audio_frames"],
+            )
+
+    async def _moonshine_heartbeat_loop(self) -> None:
+        """Log Moonshine state every second while the stream is active."""
+        while self._local_stt_stream is not None and config.MOONSHINE_HEARTBEAT:
+            self._log_heartbeat()
+            await asyncio.sleep(1.0)
+
     async def receive(self, frame: Tuple[int, NDArray[np.int16]]) -> None:
         """Feed microphone audio into the local STT stream."""
         if self._local_stt_stream is None:
@@ -254,11 +301,15 @@ class LocalSTTInputMixin:
             ).astype(np.float32, copy=False)
         try:
             self._local_stt_stream.add_audio(audio_float.tolist(), self.local_stt_sample_rate)
+            self._heartbeat["audio_frames"] += 1
         except Exception as e:
             logger.debug("Dropping local STT audio frame: %s", e)
 
     async def shutdown(self) -> None:
         """Shutdown realtime and local STT resources."""
+        if self._heartbeat_future is not None:
+            self._heartbeat_future.cancel()
+            self._heartbeat_future = None
         await super().shutdown()  # type: ignore[misc]
         stream = self._local_stt_stream
         transcriber = self._local_stt_transcriber
