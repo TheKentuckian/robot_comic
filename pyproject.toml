@@ -75,6 +75,7 @@ dev = [
 reachy-mini-conversation-app = "reachy_mini_conversation_app.main:main"
 
 [tool.uv]
+torch-backend = "cu124"
 dependency-metadata = [
     # Upstream metadata currently marks `gstreamer-msvc-runtime` as unconditional.
     # It should only be required on Windows. Temp fix.
