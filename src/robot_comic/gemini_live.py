@@ -8,6 +8,7 @@ Audio formats (per Gemini Live API spec):
   Output: 16-bit PCM, 24 kHz, mono
 """
 
+import re
 import json
 import uuid
 import base64
@@ -111,6 +112,31 @@ def _convert_schema_types(schema: Any) -> Any:
         result.pop(unsupported_key, None)
 
     return result
+
+
+_TTS_DELIVERY_TAG_NAMES = (
+    "fast", "slow", "short pause", "long pause",
+    "amusement", "annoyance", "aggression", "enthusiasm",
+)
+_TTS_SECTION_RE = re.compile(
+    r"## GEMINI TTS DELIVERY TAGS\b.*?(?=\n##|\Z)",
+    re.DOTALL,
+)
+_TTS_TAG_RE = re.compile(
+    r"\[(?:" + "|".join(re.escape(t) for t in _TTS_DELIVERY_TAG_NAMES) + r")\]"
+)
+
+
+def _strip_tts_delivery_tags(instructions: str) -> str:
+    """Remove Gemini-TTS-specific delivery tags from system instructions.
+
+    Strips the entire GEMINI TTS DELIVERY TAGS section and any residual
+    inline [tag] patterns so Gemini Live does not read them aloud.
+    """
+    result = _TTS_SECTION_RE.sub("", instructions)
+    result = _TTS_TAG_RE.sub("", result)
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip()
 
 
 def _resolve_gemini_voice(profile_voice: str) -> str:
@@ -400,7 +426,7 @@ class GeminiLiveHandler(ConversationHandler):
 
     def _build_live_config(self) -> types.LiveConnectConfig:
         """Build the LiveConnectConfig for a Gemini Live session."""
-        instructions = get_session_instructions()
+        instructions = _strip_tts_delivery_tags(get_session_instructions())
         voice = _resolve_gemini_voice(self._voice_override or get_session_voice())
 
         # Convert OpenAI-style tool specs to Gemini function declarations

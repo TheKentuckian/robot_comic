@@ -12,7 +12,7 @@ from fastrtc import AdditionalOutputs
 
 import robot_comic.gemini_live as gemini_mod
 import robot_comic.tools.core_tools as ct_mod
-from robot_comic.gemini_live import GeminiLiveHandler
+from robot_comic.gemini_live import GeminiLiveHandler, _strip_tts_delivery_tags
 from robot_comic.tools.core_tools import ToolDependencies
 from robot_comic.tools.tool_constants import ToolState
 from robot_comic.tools.background_tool_manager import ToolNotification
@@ -424,3 +424,46 @@ async def test_video_task_not_started_when_streaming_disabled(monkeypatch):
     await handler._run_live_session()
 
     assert video_sender_calls == [], "Video sender must not start when flag is False"
+
+
+def test_strip_tts_delivery_tags_removes_section():
+    instructions = """\
+## IDENTITY
+You are a robot.
+
+## GEMINI TTS DELIVERY TAGS
+Use [fast] for speed.
+- [slow] — drag it out
+- [amusement] — love your own jokes
+
+## GUARDRAILS
+Be safe.
+"""
+    result = _strip_tts_delivery_tags(instructions)
+    assert "GEMINI TTS DELIVERY TAGS" not in result
+    assert "[fast]" not in result
+    assert "[amusement]" not in result
+    assert "IDENTITY" in result
+    assert "GUARDRAILS" in result
+
+
+def test_strip_tts_delivery_tags_removes_stray_tags():
+    instructions = "Say [fast] this [amusement] line [slow] clearly."
+    result = _strip_tts_delivery_tags(instructions)
+    assert "[fast]" not in result
+    assert "[amusement]" not in result
+    assert "[slow]" not in result
+    assert "Say" in result
+    assert "this" in result
+
+
+def test_strip_tts_delivery_tags_leaves_unrelated_brackets():
+    instructions = "See section [PHYSICAL BEATS] for moves."
+    result = _strip_tts_delivery_tags(instructions)
+    assert "[PHYSICAL BEATS]" in result
+
+
+def test_strip_tts_delivery_tags_no_section_is_noop():
+    instructions = "## IDENTITY\nYou are a robot.\n"
+    result = _strip_tts_delivery_tags(instructions)
+    assert result == instructions.strip()
