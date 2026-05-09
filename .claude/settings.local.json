@@ -32,7 +32,12 @@
       "WebFetch(domain:ai.google.dev)",
       "Bash(rtk proxy *)",
       "Bash(rtk wc *)",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(Get-ChildItem -Path \"D:\\\\Projects\\\\robot_comic\" -Force)",
+      "Bash(Select-Object Name, PSIsContainer)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(rtk find *)",
+      "WebSearch"
     ]
   }
 }
