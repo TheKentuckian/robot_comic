@@ -83,17 +83,54 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             startup_voice=self._voice_override,
         )
 
+    def _load_profile_params(self) -> dict[str, str]:
+        """Read profiles/<name>/chatterbox.txt as key=value pairs, if present."""
+        profile = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
+        if not profile:
+            return {}
+        try:
+            path = config.PROFILES_DIRECTORY / profile / "chatterbox.txt"
+            if not path.exists():
+                return {}
+            params: dict[str, str] = {}
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line and "=" in line and not line.startswith("#"):
+                    k, _, v = line.partition("=")
+                    params[k.strip()] = v.strip()
+            return params
+        except Exception as exc:
+            logger.warning("Could not read chatterbox.txt for profile %r: %s", profile, exc)
+            return {}
+
     @property
     def _chatterbox_url(self) -> str:
         return getattr(config, "CHATTERBOX_URL", CHATTERBOX_DEFAULT_URL)
 
     @property
     def _chatterbox_voice(self) -> str:
-        return self._voice_override or getattr(config, "CHATTERBOX_VOICE", CHATTERBOX_DEFAULT_VOICE)
+        if self._voice_override:
+            return self._voice_override
+        params = self._load_profile_params()
+        return params.get("voice") or getattr(config, "CHATTERBOX_VOICE", CHATTERBOX_DEFAULT_VOICE)
+
+    @property
+    def _exaggeration(self) -> float:
+        params = self._load_profile_params()
+        return float(params.get("exaggeration", getattr(config, "CHATTERBOX_EXAGGERATION", CHATTERBOX_DEFAULT_EXAGGERATION)))
+
+    @property
+    def _cfg_weight(self) -> float:
+        params = self._load_profile_params()
+        return float(params.get("cfg_weight", getattr(config, "CHATTERBOX_CFG_WEIGHT", CHATTERBOX_DEFAULT_CFG_WEIGHT)))
+
+    @property
+    def _temperature(self) -> float:
+        params = self._load_profile_params()
+        return float(params.get("temperature", getattr(config, "CHATTERBOX_TEMPERATURE", CHATTERBOX_DEFAULT_TEMPERATURE)))
 
     @property
     def _ollama_base_url(self) -> str:
-        # Derive Ollama URL from CHATTERBOX_URL host (they share the same laptop).
         import urllib.parse
         parsed = urllib.parse.urlparse(self._chatterbox_url)
         return f"{parsed.scheme}://{parsed.hostname}:11434"
@@ -101,10 +138,13 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
     async def _prepare_startup_credentials(self) -> None:
         self._http = httpx.AsyncClient(timeout=60.0)
         logger.info(
-            "ChatterboxTTS handler initialised: llm=%s/v1 tts=%s voice=%s",
+            "ChatterboxTTS handler initialised: llm=%s/v1 tts=%s voice=%s exag=%.2f cfg=%.2f temp=%.2f",
             self._ollama_base_url,
             self._chatterbox_url,
             self._chatterbox_voice,
+            self._exaggeration,
+            self._cfg_weight,
+            self._temperature,
         )
 
     async def start_up(self) -> None:
@@ -218,16 +258,16 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
     async def _call_chatterbox_tts(self, text: str) -> bytes | None:
         """POST to Chatterbox /tts in clone mode; return raw WAV bytes."""
         assert self._http is not None
+        voice = self._chatterbox_voice
+        ref_file = voice if voice.endswith(".wav") else f"{voice}.wav"
         payload = {
             "text": text,
             "voice_mode": "clone",
-            "reference_audio_filename": f"{self._chatterbox_voice}.wav"
-            if not self._chatterbox_voice.endswith(".wav")
-            else self._chatterbox_voice,
+            "reference_audio_filename": ref_file,
             "output_format": "wav",
-            "exaggeration": getattr(config, "CHATTERBOX_EXAGGERATION", CHATTERBOX_DEFAULT_EXAGGERATION),
-            "cfg_weight": getattr(config, "CHATTERBOX_CFG_WEIGHT", CHATTERBOX_DEFAULT_CFG_WEIGHT),
-            "temperature": getattr(config, "CHATTERBOX_TEMPERATURE", CHATTERBOX_DEFAULT_TEMPERATURE),
+            "exaggeration": self._exaggeration,
+            "cfg_weight": self._cfg_weight,
+            "temperature": self._temperature,
         }
 
         for attempt in range(_TTS_MAX_RETRIES):

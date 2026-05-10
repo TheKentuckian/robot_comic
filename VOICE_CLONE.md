@@ -150,7 +150,7 @@ Leaves ~1.5 GB headroom. Both processes can be co-resident.
 - [x] `config.yaml` confirmed: `host: 0.0.0.0`, `port: 8004` — no changes needed
 - [ ] **Test from Pi** (when Pi is available — Task 7 prereq):
   ```bash
-  curl http://comedy-laptop.local:8004/v1/audio/speech \
+  curl http://astralplane.lan:8004/v1/audio/speech \
     -H "Content-Type: application/json" \
     -d '{"model":"tts-1","input":"Hello from the Pi","voice":"Michael.wav"}' \
     --output test.wav
@@ -183,9 +183,9 @@ Leaves ~1.5 GB headroom. Both processes can be co-resident.
 ### Task 7: Configure Network Discovery ⏳ Deferred
 
 - [ ] On router: assign static DHCP lease for the laptop's MAC
-- [ ] On Pi: add to `/etc/hosts`: `<laptop-ip>  comedy-laptop comedy-laptop.local`
-- [ ] On Pi: verify Ollama reachable: `curl http://comedy-laptop.local:11434/api/tags`
-- [ ] On Pi: verify Chatterbox reachable: `curl http://comedy-laptop.local:8004/health`
+- [ ] On Pi: add to `/etc/hosts`: `<laptop-ip>  astralplane.lan`
+- [ ] On Pi: verify Ollama reachable: `curl http://astralplane.lan:11434/api/tags`
+- [ ] On Pi: verify Chatterbox reachable: `curl http://astralplane.lan:8004/health`
 
 ### Task 8: Enable Wake-on-LAN ⏳ Deferred
 
@@ -256,12 +256,12 @@ Leaves ~1.5 GB headroom. Both processes can be co-resident.
 
 - [ ] In `src/robot_comic/config.py`: add:
   ```python
-  CHATTERBOX_URL: str = os.getenv("CHATTERBOX_URL", "http://comedy-laptop.local:8004")
+  CHATTERBOX_URL: str = os.getenv("CHATTERBOX_URL", "http://astralplane.lan:8004")
   CHATTERBOX_VOICE: str = os.getenv("CHATTERBOX_VOICE", "don_rickles")
   ```
 - [ ] Add to Pi `.env`:
   ```
-  CHATTERBOX_URL=http://comedy-laptop.local:8004
+  CHATTERBOX_URL=http://astralplane.lan:8004
   CHATTERBOX_VOICE=don_rickles
   ```
 - [ ] End-to-end test: speech → STT → LLM → Chatterbox Rickles voice → playback
