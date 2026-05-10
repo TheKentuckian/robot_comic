@@ -319,22 +319,36 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             except Exception as exc:
                 logger.warning("Failed to dispatch tool %s: %s", tool_name, exc)
 
+    @staticmethod
+    def _trim_tool_spec(s: dict[str, Any]) -> dict[str, Any]:
+        """Strip verbose parameter descriptions so the tools payload stays under ~1500 prompt tokens.
+
+        Hermes3 8B ignores its system-prompt persona when the combined prompt exceeds ~2500
+        tokens — it reverts to its baked-in "I am Hermes" identity. The play_emotion spec
+        alone contributes ~1500 tokens of prose that duplicates what the system prompt already
+        says. Keeping only the enum list (not the per-value prose) cuts this to <100 tokens.
+        """
+        import copy
+        params = copy.deepcopy(s.get("parameters", {}))
+        for prop in params.get("properties", {}).values():
+            desc = prop.get("description", "")
+            if len(desc) > 120:
+                prop["description"] = desc[:120]
+        return {
+            "type": "function",
+            "function": {
+                "name": s["name"],
+                "description": s["description"][:200],
+                "parameters": params,
+            },
+        }
+
     async def _call_llm(self) -> tuple[str, list[dict[str, Any]]]:
         """Call Ollama /api/chat with tool specs; returns (text, tool_calls)."""
         assert self._http is not None
         system_prompt = get_session_instructions()
         tool_specs = get_active_tool_specs(self.deps)
-        ollama_tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": s["name"],
-                    "description": s["description"],
-                    "parameters": s["parameters"],
-                },
-            }
-            for s in tool_specs
-        ]
+        ollama_tools = [self._trim_tool_spec(s) for s in tool_specs]
         messages = [{"role": "system", "content": system_prompt}] + self._conversation_history
         logger.debug(
             "_call_llm: model=%s tools=%d sys_prompt_chars=%d sys_prompt_head=%r",
