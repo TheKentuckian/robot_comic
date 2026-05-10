@@ -458,3 +458,129 @@ async def test_call_llm_injects_tool_use_addendum() -> None:
     system_msg = next((m for m in messages if m["role"] == "system"), None)
     assert system_msg is not None, "No system message found in LLM payload"
     assert _TOOL_USE_ADDENDUM in system_msg["content"]
+
+
+# ---------------------------------------------------------------------------
+# Retry-with-nudge
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_nudge_fires_on_empty_response() -> None:
+    """When LLM returns empty text and no tool calls, a nudge is sent and its tool call returned."""
+    handler = _make_handler()
+    nudge_detected = False
+
+    async def fake_post(url, *, json=None, **kwargs):
+        nonlocal nudge_detected
+        msgs = json.get("messages", [])
+        if any(m.get("content") == "Please use a tool call now." for m in msgs):
+            nudge_detected = True
+            resp_data = {
+                "message": {
+                    "content": "",
+                    "tool_calls": [{"function": {"name": "greet", "arguments": {"action": "scan"}}}],
+                }
+            }
+        else:
+            resp_data = {"message": {"content": "", "tool_calls": []}}
+        fake_resp = MagicMock()
+        fake_resp.raise_for_status = MagicMock()
+        fake_resp.json.return_value = resp_data
+        return fake_resp
+
+    handler._http.post = fake_post  # type: ignore[method-assign]
+    text, tool_calls = await handler._call_llm()
+
+    assert nudge_detected
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "greet"
+
+
+@pytest.mark.asyncio
+async def test_nudge_fires_at_most_once() -> None:
+    """Even if nudge response is also empty, only one nudge is sent."""
+    handler = _make_handler()
+    nudge_count = 0
+
+    async def fake_post(url, *, json=None, **kwargs):
+        nonlocal nudge_count
+        msgs = json.get("messages", [])
+        if any(m.get("content") == "Please use a tool call now." for m in msgs):
+            nudge_count += 1
+        fake_resp = MagicMock()
+        fake_resp.raise_for_status = MagicMock()
+        fake_resp.json.return_value = {"message": {"content": "", "tool_calls": []}}
+        return fake_resp
+
+    handler._http.post = fake_post  # type: ignore[method-assign]
+    text, tool_calls = await handler._call_llm()
+
+    assert nudge_count == 1
+    assert text == ""
+    assert tool_calls == []
+
+
+@pytest.mark.asyncio
+async def test_nudge_not_fired_when_text_present() -> None:
+    """No nudge when the response contains meaningful text."""
+    handler = _make_handler()
+    call_count = 0
+
+    async def fake_post(url, *, json=None, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        fake_resp = MagicMock()
+        fake_resp.raise_for_status = MagicMock()
+        fake_resp.json.return_value = {"message": {"content": "Hello there!", "tool_calls": []}}
+        return fake_resp
+
+    handler._http.post = fake_post  # type: ignore[method-assign]
+    text, tool_calls = await handler._call_llm()
+
+    assert call_count == 1
+    assert text == "Hello there!"
+
+
+@pytest.mark.asyncio
+async def test_nudge_not_fired_when_tool_calls_present() -> None:
+    """No nudge when the response already contains tool calls."""
+    handler = _make_handler()
+    call_count = 0
+
+    async def fake_post(url, *, json=None, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        fake_resp = MagicMock()
+        fake_resp.raise_for_status = MagicMock()
+        fake_resp.json.return_value = {
+            "message": {
+                "content": "",
+                "tool_calls": [{"function": {"name": "greet", "arguments": {}}}],
+            }
+        }
+        return fake_resp
+
+    handler._http.post = fake_post  # type: ignore[method-assign]
+    _, tool_calls = await handler._call_llm()
+
+    assert call_count == 1
+    assert len(tool_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_nudge_does_not_modify_conversation_history() -> None:
+    """The nudge message is ephemeral — not saved to _conversation_history."""
+    handler = _make_handler()
+    handler._conversation_history = [{"role": "user", "content": "hello"}]
+    history_before = list(handler._conversation_history)
+
+    async def fake_post(url, *, json=None, **kwargs):
+        fake_resp = MagicMock()
+        fake_resp.raise_for_status = MagicMock()
+        fake_resp.json.return_value = {"message": {"content": "", "tool_calls": []}}
+        return fake_resp
+
+    handler._http.post = fake_post  # type: ignore[method-assign]
+    await handler._call_llm()
+
+    assert handler._conversation_history == history_before

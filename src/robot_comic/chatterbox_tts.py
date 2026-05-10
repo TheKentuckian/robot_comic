@@ -430,6 +430,8 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             "stream": False,
         }
 
+        nudge_attempted = False
+
         delay = _LLM_RETRY_BASE_DELAY
         for attempt in range(_LLM_MAX_RETRIES):
             try:
@@ -468,6 +470,11 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                         )
                         text = ""
 
+                if not tool_calls and not text and not nudge_attempted:
+                    nudge_attempted = True
+                    logger.info("Hermes3 returned empty response — attempting nudge")
+                    text, tool_calls = await self._nudge_llm(messages, payload)
+
                 return text, tool_calls
             except Exception as exc:
                 if attempt == _LLM_MAX_RETRIES - 1:
@@ -477,6 +484,60 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                 await asyncio.sleep(delay)
                 delay *= 2
         return "", []
+
+    async def _nudge_llm(
+        self,
+        original_messages: list[dict[str, Any]],
+        payload: dict[str, Any],
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """One ephemeral retry with a tool-use nudge appended to the conversation.
+
+        The nudge messages are not saved to _conversation_history.
+        Applies the same text-format and JSON-in-content detection as _call_llm().
+        """
+        assert self._http is not None
+        nudge_messages = original_messages + [
+            {"role": "assistant", "content": ""},
+            {"role": "user", "content": "Please use a tool call now."},
+        ]
+        try:
+            r = await self._http.post(
+                f"{self._ollama_base_url}/api/chat",
+                json={**payload, "messages": nudge_messages},
+            )
+            r.raise_for_status()
+            data = r.json()
+            msg = data.get("message", {})
+            text = (msg.get("content") or "").strip()
+            tool_calls: list[dict[str, Any]] = msg.get("tool_calls") or []
+
+            if not tool_calls and text:
+                m = _TEXT_TOOL_CALL_RE.match(text)
+                if m:
+                    fn_name = m.group(1)
+                    args = _parse_text_tool_args(m.group(2) or "")
+                    tool_calls = [{"function": {"name": fn_name, "arguments": args}}]
+                    text = ""
+
+            if not tool_calls and text:
+                json_tc = _parse_json_content_tool_call(text)
+                if json_tc is not None:
+                    fn_name, args = json_tc
+                    tool_calls = [{"function": {"name": fn_name, "arguments": args}}]
+                    text = ""
+
+            if not tool_calls and not text:
+                logger.warning("Hermes3 still empty after nudge — skipping turn")
+            else:
+                logger.info(
+                    "Nudge recovered: text=%r tool_calls=%d",
+                    text[:60] if text else "",
+                    len(tool_calls),
+                )
+            return text, tool_calls
+        except Exception as exc:
+            logger.warning("Nudge LLM call failed: %s", exc)
+            return "", []
 
     async def _call_chatterbox_tts(
         self,
