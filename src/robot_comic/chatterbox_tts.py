@@ -58,9 +58,21 @@ _TEXT_TOOL_CALL_RE = re.compile(
 )
 
 
-def _parse_text_tool_args(kv_str: str) -> dict[str, str]:
-    """Parse unquoted key:value pairs from a Hermes3 text-format tool call."""
-    args: dict[str, str] = {}
+def _parse_text_tool_args(kv_str: str) -> dict[str, Any]:
+    """Parse args from a Hermes3 text-format tool call.
+
+    Tries json.loads() first (handles quoted values and commas in values),
+    then falls back to bare key:value comma-split.
+    """
+    kv_str = kv_str.strip()
+    if kv_str:
+        try:
+            parsed = json.loads(kv_str)
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+    args: dict[str, Any] = {}
     for pair in kv_str.split(","):
         pair = pair.strip()
         if ":" in pair:

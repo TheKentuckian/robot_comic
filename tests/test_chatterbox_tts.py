@@ -315,3 +315,36 @@ async def test_handler_applies_chatterbox_gain_from_config() -> None:
     assert pcm is not None
     out = np.frombuffer(pcm, dtype=np.int16)
     assert np.all(out == 16000)
+
+
+# ---------------------------------------------------------------------------
+# _parse_text_tool_args
+# ---------------------------------------------------------------------------
+
+
+def test_parse_text_tool_args_json_dict() -> None:
+    from robot_comic.chatterbox_tts import _parse_text_tool_args
+
+    result = _parse_text_tool_args('{"action": "scan", "name": "Alice"}')
+    assert result == {"action": "scan", "name": "Alice"}
+
+
+def test_parse_text_tool_args_value_with_comma() -> None:
+    from robot_comic.chatterbox_tts import _parse_text_tool_args
+
+    result = _parse_text_tool_args('{"message": "hello, world"}')
+    assert result == {"message": "hello, world"}
+
+
+def test_parse_text_tool_args_bare_kv_fallback() -> None:
+    from robot_comic.chatterbox_tts import _parse_text_tool_args
+
+    result = _parse_text_tool_args("action: scan")
+    assert result == {"action": "scan"}
+
+
+def test_parse_text_tool_args_empty_string() -> None:
+    from robot_comic.chatterbox_tts import _parse_text_tool_args
+
+    result = _parse_text_tool_args("")
+    assert result == {}
