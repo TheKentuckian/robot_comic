@@ -1,13 +1,14 @@
 """Chatterbox TTS response handler for the local-STT audio path.
 
 Receives transcripts from Moonshine STT (via LocalSTTInputMixin), calls an
-OpenAI-compatible LLM (Ollama by default) for text generation, then synthesises
+Ollama LLM via /api/chat for text generation and tool dispatch, then synthesises
 audio with the Chatterbox TTS server's /tts endpoint (voice cloning mode).
 
 Audio output: 24 kHz, mono, 16-bit PCM — matches the existing pipeline.
-Tool call support is deferred; see GitHub issue #39.
 """
 
+import json
+import uuid
 import asyncio
 import logging
 from typing import Any, Optional
@@ -17,21 +18,23 @@ import numpy as np
 from fastrtc import AdditionalOutputs, wait_for_item
 from scipy.signal import resample
 
-from robot_comic.chatterbox_tag_translator import translate
 from robot_comic.config import (
-    CHATTERBOX_DEFAULT_CFG_WEIGHT,
-    CHATTERBOX_DEFAULT_EXAGGERATION,
-    CHATTERBOX_DEFAULT_TEMPERATURE,
+    CHATTERBOX_OUTPUT,
     CHATTERBOX_DEFAULT_URL,
     CHATTERBOX_DEFAULT_VOICE,
-    CHATTERBOX_OUTPUT,
+    CHATTERBOX_DEFAULT_CFG_WEIGHT,
+    CHATTERBOX_DEFAULT_TEMPERATURE,
+    CHATTERBOX_DEFAULT_EXAGGERATION,
     config,
     set_custom_profile,
 )
-from robot_comic.conversation_handler import ConversationHandler
-from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.prompts import get_session_instructions
-from robot_comic.tools.core_tools import ToolDependencies
+from robot_comic.tools.core_tools import ToolDependencies, get_active_tool_specs
+from robot_comic.local_stt_realtime import LocalSTTInputMixin
+from robot_comic.conversation_handler import ConversationHandler
+from robot_comic.chatterbox_tag_translator import translate
+from robot_comic.tools.background_tool_manager import ToolCallRoutine, ToolNotification, BackgroundToolManager
+
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +48,7 @@ _TTS_RETRY_DELAY = 0.5
 
 
 class ChatterboxTTSResponseHandler(ConversationHandler):
-    """OpenAI-compatible LLM + Chatterbox TTS voice output (text-only, no tools)."""
+    """Ollama LLM + Chatterbox TTS voice output with tool dispatch."""
 
     def __init__(
         self,
@@ -66,7 +69,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         self._http: httpx.AsyncClient | None = None
         self._stop_event: asyncio.Event = asyncio.Event()
         self._conversation_history: list[dict[str, Any]] = []
-        self._llm_context: list[int] | None = None  # Ollama context tokens
+        self.tool_manager = BackgroundToolManager()
         self.output_queue: asyncio.Queue = asyncio.Queue()
 
         # Attributes referenced by LocalSTTInputMixin
@@ -141,8 +144,9 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         self._http = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0)
         )
+        self.tool_manager.start_up(tool_callbacks=[self._handle_tool_notification])
         logger.info(
-            "ChatterboxTTS handler initialised: llm=%s/api/generate tts=%s voice=%s exag=%.2f cfg=%.2f temp=%.2f",
+            "ChatterboxTTS handler initialised: llm=%s/api/chat tts=%s voice=%s exag=%.2f cfg=%.2f temp=%.2f",
             self._ollama_base_url,
             self._chatterbox_url,
             self._chatterbox_voice,
@@ -162,6 +166,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
 
     async def shutdown(self) -> None:
         self._stop_event.set()
+        await self.tool_manager.shutdown()
         if self._http is not None:
             await self._http.aclose()
             self._http = None
@@ -181,7 +186,6 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         try:
             set_custom_profile(profile)
             self._conversation_history.clear()
-            self._llm_context = None
             return f"Applied personality {profile!r}. Conversation history reset."
         except Exception as exc:
             logger.error("Error applying personality %r: %s", profile, exc)
@@ -209,20 +213,30 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
     # Response cycle                                                       #
     # ------------------------------------------------------------------ #
 
+    async def _handle_tool_notification(self, notification: ToolNotification) -> None:
+        logger.info("Tool %s finished: status=%s", notification.tool_name, notification.status.value)
+
     async def _dispatch_completed_transcript(self, transcript: str) -> None:
-        """LLM → TTS → PCM frames."""
+        """LLM → tool dispatch → TTS → PCM frames."""
         self._conversation_history.append({"role": "user", "content": transcript})
 
         try:
-            response_text = await self._call_llm()
+            response_text, tool_calls = await self._call_llm()
         except Exception as exc:
             logger.warning("LLM call failed: %s", exc)
             return
 
         self._conversation_history.append({"role": "assistant", "content": response_text})
+
+        if tool_calls:
+            await self._dispatch_tool_calls(tool_calls)
+
         await self.output_queue.put(
             AdditionalOutputs({"role": "assistant", "content": response_text})
         )
+
+        if not response_text:
+            return
 
         persona = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None) or "default"
         segments = translate(response_text, persona=persona, use_turbo=False)
@@ -248,32 +262,65 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         for frame in self._pcm_to_frames(b"".join(pcm_parts)):
             await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
 
-    async def _call_llm(self) -> str:
-        """Call Ollama /api/generate; maintain conversation via context tokens."""
+    async def _dispatch_tool_calls(self, tool_calls: list[dict[str, Any]]) -> None:
+        for tc in tool_calls:
+            fn = tc.get("function", {})
+            tool_name = fn.get("name", "")
+            args = fn.get("arguments", {})
+            args_json = json.dumps(args) if isinstance(args, dict) else str(args)
+            call_id = uuid.uuid4().hex[:8]
+            try:
+                await self.tool_manager.start_tool(
+                    call_id=call_id,
+                    tool_call_routine=ToolCallRoutine(
+                        tool_name=tool_name,
+                        args_json_str=args_json,
+                        deps=self.deps,
+                    ),
+                    is_idle_tool_call=False,
+                )
+                logger.info("Dispatched tool: %s (call_id=%s)", tool_name, call_id)
+            except Exception as exc:
+                logger.warning("Failed to dispatch tool %s: %s", tool_name, exc)
+
+    async def _call_llm(self) -> tuple[str, list[dict[str, Any]]]:
+        """Call Ollama /api/chat with tool specs; returns (text, tool_calls)."""
         assert self._http is not None
         system_prompt = get_session_instructions()
-        latest_user_msg = self._conversation_history[-1]["content"]
+        tool_specs = get_active_tool_specs(self.deps)
+        ollama_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": s["name"],
+                    "description": s["description"],
+                    "parameters": s["parameters"],
+                },
+            }
+            for s in tool_specs
+        ]
+        messages = [{"role": "system", "content": system_prompt}] + self._conversation_history
 
         payload: dict[str, Any] = {
             "model": getattr(config, "OLLAMA_MODEL", "hermes3:8b-llama3.1-q4_K_M"),
-            "system": system_prompt,
-            "prompt": latest_user_msg,
+            "messages": messages,
+            "tools": ollama_tools,
             "stream": False,
         }
-        if self._llm_context:
-            payload["context"] = self._llm_context
 
         delay = _LLM_RETRY_BASE_DELAY
         for attempt in range(_LLM_MAX_RETRIES):
             try:
                 r = await self._http.post(
-                    f"{self._ollama_base_url}/api/generate",
+                    f"{self._ollama_base_url}/api/chat",
                     json=payload,
                 )
                 r.raise_for_status()
                 data = r.json()
-                self._llm_context = data.get("context")
-                return data["response"].strip()
+                msg = data.get("message", {})
+                text = (msg.get("content") or "").strip()
+                tool_calls: list[dict[str, Any]] = msg.get("tool_calls") or []
+                return text, tool_calls
             except Exception as exc:
                 if attempt == _LLM_MAX_RETRIES - 1:
                     raise
@@ -281,7 +328,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                                attempt + 1, _LLM_MAX_RETRIES, type(exc).__name__, exc, delay)
                 await asyncio.sleep(delay)
                 delay *= 2
-        return ""
+        return "", []
 
     async def _call_chatterbox_tts(
         self,
@@ -323,7 +370,8 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
     @staticmethod
     def _wav_to_pcm(wav_bytes: bytes) -> bytes:
         """Strip WAV header and resample to 24 kHz mono int16 PCM."""
-        import wave, io
+        import io
+        import wave
         with wave.open(io.BytesIO(wav_bytes)) as wf:
             src_rate = wf.getframerate()
             n_channels = wf.getnchannels()
