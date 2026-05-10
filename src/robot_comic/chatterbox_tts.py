@@ -66,6 +66,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         self._http: httpx.AsyncClient | None = None
         self._stop_event: asyncio.Event = asyncio.Event()
         self._conversation_history: list[dict[str, Any]] = []
+        self._llm_context: list[int] | None = None  # Ollama context tokens
         self.output_queue: asyncio.Queue = asyncio.Queue()
 
         # Attributes referenced by LocalSTTInputMixin
@@ -141,7 +142,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0)
         )
         logger.info(
-            "ChatterboxTTS handler initialised: llm=%s/api/chat tts=%s voice=%s exag=%.2f cfg=%.2f temp=%.2f",
+            "ChatterboxTTS handler initialised: llm=%s/api/generate tts=%s voice=%s exag=%.2f cfg=%.2f temp=%.2f",
             self._ollama_base_url,
             self._chatterbox_url,
             self._chatterbox_voice,
@@ -180,6 +181,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         try:
             set_custom_profile(profile)
             self._conversation_history.clear()
+            self._llm_context = None
             return f"Applied personality {profile!r}. Conversation history reset."
         except Exception as exc:
             logger.error("Error applying personality %r: %s", profile, exc)
@@ -247,22 +249,31 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
 
     async def _call_llm(self) -> str:
-        """Call Ollama /api/chat with conversation history."""
+        """Call Ollama /api/generate; maintain conversation via context tokens."""
         assert self._http is not None
         system_prompt = get_session_instructions()
-        messages = [{"role": "system", "content": system_prompt}] + self._conversation_history
+        latest_user_msg = self._conversation_history[-1]["content"]
+
+        payload: dict[str, Any] = {
+            "model": getattr(config, "MODEL_NAME", "hermes3:8b-llama3.1-q4_K_M"),
+            "system": system_prompt,
+            "prompt": latest_user_msg,
+            "stream": False,
+        }
+        if self._llm_context:
+            payload["context"] = self._llm_context
 
         delay = _LLM_RETRY_BASE_DELAY
         for attempt in range(_LLM_MAX_RETRIES):
             try:
                 r = await self._http.post(
-                    f"{self._ollama_base_url}/api/chat",
-                    json={"model": getattr(config, "MODEL_NAME", "hermes3:8b-llama3.1-q4_K_M"),
-                          "messages": messages,
-                          "stream": False},
+                    f"{self._ollama_base_url}/api/generate",
+                    json=payload,
                 )
                 r.raise_for_status()
-                return r.json()["message"]["content"].strip()
+                data = r.json()
+                self._llm_context = data.get("context")
+                return data["response"].strip()
             except Exception as exc:
                 if attempt == _LLM_MAX_RETRIES - 1:
                     raise
