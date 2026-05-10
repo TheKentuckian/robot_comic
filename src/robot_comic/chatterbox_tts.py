@@ -26,6 +26,7 @@ from robot_comic.config import (
     CHATTERBOX_DEFAULT_CFG_WEIGHT,
     CHATTERBOX_DEFAULT_TEMPERATURE,
     CHATTERBOX_DEFAULT_EXAGGERATION,
+    CHATTERBOX_DEFAULT_GAIN,
     config,
     set_custom_profile,
 )
@@ -145,6 +146,11 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
     def _temperature(self) -> float:
         params = self._load_profile_params()
         return float(params.get("temperature", getattr(config, "CHATTERBOX_TEMPERATURE", CHATTERBOX_DEFAULT_TEMPERATURE)))
+
+    @property
+    def _gain(self) -> float:
+        params = self._load_profile_params()
+        return float(params.get("gain", getattr(config, "CHATTERBOX_GAIN", CHATTERBOX_DEFAULT_GAIN)))
 
     @property
     def _ollama_base_url(self) -> str:
@@ -369,7 +375,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             try:
                 r = await self._http.post(f"{self._chatterbox_url}/tts", json=payload)
                 r.raise_for_status()
-                return self._wav_to_pcm(r.content)
+                return self._wav_to_pcm(r.content, gain=self._gain)
             except Exception as exc:
                 logger.warning("TTS attempt %d/%d failed: %s: %s", attempt + 1, _TTS_MAX_RETRIES, type(exc).__name__, exc)
                 if attempt < _TTS_MAX_RETRIES - 1:
@@ -382,8 +388,8 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         return np.zeros(n_samples, dtype=np.int16).tobytes()
 
     @staticmethod
-    def _wav_to_pcm(wav_bytes: bytes) -> bytes:
-        """Strip WAV header and resample to 24 kHz mono int16 PCM."""
+    def _wav_to_pcm(wav_bytes: bytes, gain: float = 1.0) -> bytes:
+        """Strip WAV header, resample to 24 kHz mono int16 PCM, and apply gain."""
         import io
         import wave
         with wave.open(io.BytesIO(wav_bytes)) as wf:
@@ -397,6 +403,8 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         if src_rate != _OUTPUT_SAMPLE_RATE:
             target_len = int(len(audio) * _OUTPUT_SAMPLE_RATE / src_rate)
             audio = resample(audio, target_len)
+        if gain != 1.0:
+            audio = audio * gain
         return np.clip(audio, -32768, 32767).astype(np.int16).tobytes()
 
     @staticmethod

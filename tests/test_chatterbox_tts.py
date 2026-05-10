@@ -222,3 +222,96 @@ def _drain_queue(q: asyncio.Queue) -> list:
         except asyncio.QueueEmpty:
             break
     return items
+
+
+# ---------------------------------------------------------------------------
+# _wav_to_pcm gain parameter
+# ---------------------------------------------------------------------------
+
+
+def _make_wav_bytes(samples: np.ndarray, sample_rate: int = 24000) -> bytes:
+    import io, wave
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(samples.astype(np.int16).tobytes())
+    return buf.getvalue()
+
+
+def test_wav_to_pcm_gain_doubles_amplitude() -> None:
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
+
+    samples = np.full(100, 1000, dtype=np.int16)
+    wav = _make_wav_bytes(samples)
+
+    pcm = ChatterboxTTSResponseHandler._wav_to_pcm(wav, gain=2.0)
+    out = np.frombuffer(pcm, dtype=np.int16)
+
+    assert np.all(out == 2000)
+
+
+def test_wav_to_pcm_gain_clips_at_int16_max() -> None:
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
+
+    samples = np.full(100, 20000, dtype=np.int16)
+    wav = _make_wav_bytes(samples)
+
+    pcm = ChatterboxTTSResponseHandler._wav_to_pcm(wav, gain=2.0)
+    out = np.frombuffer(pcm, dtype=np.int16)
+
+    assert np.all(out == 32767)
+
+
+def test_wav_to_pcm_default_gain_is_one() -> None:
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
+
+    samples = np.full(100, 5000, dtype=np.int16)
+    wav = _make_wav_bytes(samples)
+
+    pcm = ChatterboxTTSResponseHandler._wav_to_pcm(wav)
+    out = np.frombuffer(pcm, dtype=np.int16)
+
+    assert np.all(out == 5000)
+
+
+@pytest.mark.asyncio
+async def test_handler_applies_chatterbox_gain_from_config() -> None:
+    """Handler reads CHATTERBOX_GAIN from config and passes it to _wav_to_pcm."""
+    import io, wave
+    from unittest.mock import patch
+
+    handler = _make_handler()
+
+    samples = np.full(2400, 8000, dtype=np.int16)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(24000)
+        wf.writeframes(samples.tobytes())
+    wav_bytes = buf.getvalue()
+
+    import httpx
+    fake_response = MagicMock(spec=httpx.Response)
+    fake_response.raise_for_status = MagicMock()
+    fake_response.content = wav_bytes
+
+    async def fake_post(url, *, json=None, **kwargs):
+        return fake_response
+
+    handler._http.post = fake_post  # type: ignore[method-assign]
+
+    with patch("robot_comic.chatterbox_tts.config") as mock_cfg:
+        mock_cfg.CHATTERBOX_GAIN = 2.0
+        mock_cfg.CHATTERBOX_VOICE = "don_rickles"
+        mock_cfg.CHATTERBOX_EXAGGERATION = 1.0
+        mock_cfg.CHATTERBOX_CFG_WEIGHT = 0.5
+        mock_cfg.CHATTERBOX_TEMPERATURE = 0.6
+        mock_cfg.CHATTERBOX_URL = "http://localhost:8004"
+        pcm = await handler._call_chatterbox_tts("Hello")
+
+    assert pcm is not None
+    out = np.frombuffer(pcm, dtype=np.int16)
+    assert np.all(out == 16000)
