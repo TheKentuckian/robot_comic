@@ -240,6 +240,37 @@ async def test_call_llm_returns_raw_message() -> None:
     assert "content" in raw_message
 
 
+@pytest.mark.asyncio
+async def test_start_tool_calls_returns_bg_tools() -> None:
+    """_start_tool_calls returns (call_id, BackgroundTool) pairs, one per tool call."""
+    from robot_comic.tools.background_tool_manager import BackgroundTool, ToolState
+
+    handler = _make_handler()
+
+    async def fake_start_tool(call_id, tool_call_routine, is_idle_tool_call):
+        bg = BackgroundTool(
+            id=call_id,
+            tool_name=tool_call_routine.tool_name,
+            is_idle_tool_call=False,
+            status=ToolState.RUNNING,
+        )
+        return bg
+
+    object.__setattr__(handler.tool_manager, "start_tool", fake_start_tool)  # type: ignore[misc]
+
+    tool_calls = [
+        {"function": {"name": "dance", "arguments": {"style": "wave"}}},
+        {"function": {"name": "play_emotion", "arguments": {"emotion": "happy1"}}},
+    ]
+    result = await handler._start_tool_calls(tool_calls)
+
+    assert len(result) == 2
+    for call_id, bg_tool in result:
+        assert isinstance(call_id, str) and len(call_id) == 8
+        assert isinstance(bg_tool, BackgroundTool)
+    assert {bg.tool_name for _, bg in result} == {"dance", "play_emotion"}
+
+
 def _drain_queue(q: asyncio.Queue) -> list:
     items = []
     while not q.empty():

@@ -332,7 +332,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         self._conversation_history.append(raw_message)
 
         if tool_calls:
-            await self._dispatch_tool_calls(tool_calls)
+            await self._start_tool_calls(tool_calls)
 
         await self.output_queue.put(
             AdditionalOutputs({"role": "assistant", "content": response_text})
@@ -366,7 +366,12 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                 AdditionalOutputs({"role": "assistant", "content": "[TTS error]"})
             )
 
-    async def _dispatch_tool_calls(self, tool_calls: list[dict[str, Any]]) -> None:
+    async def _start_tool_calls(
+        self, tool_calls: list[dict[str, Any]]
+    ) -> "list[tuple[str, BackgroundTool]]":
+        """Dispatch tool calls; return (call_id, BackgroundTool) pairs."""
+        from robot_comic.tools.background_tool_manager import BackgroundTool
+        results: list[tuple[str, BackgroundTool]] = []
         for tc in tool_calls:
             fn = tc.get("function", {})
             tool_name = fn.get("name", "")
@@ -374,7 +379,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             args_json = json.dumps(args) if isinstance(args, dict) else str(args)
             call_id = uuid.uuid4().hex[:8]
             try:
-                await self.tool_manager.start_tool(
+                bg_tool = await self.tool_manager.start_tool(
                     call_id=call_id,
                     tool_call_routine=ToolCallRoutine(
                         tool_name=tool_name,
@@ -383,9 +388,11 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                     ),
                     is_idle_tool_call=False,
                 )
+                results.append((call_id, bg_tool))
                 logger.info("Dispatched tool: %s (call_id=%s)", tool_name, call_id)
             except Exception as exc:
                 logger.warning("Failed to dispatch tool %s: %s", tool_name, exc)
+        return results
 
     # Maximum enum values to keep per parameter. Larger enums (e.g. 81 emotions) dominate
     # the tools payload and push the combined prompt past Hermes3 8B's effective persona
