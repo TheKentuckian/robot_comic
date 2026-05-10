@@ -394,6 +394,31 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                 logger.warning("Failed to dispatch tool %s: %s", tool_name, exc)
         return results
 
+    async def _await_tool_results(
+        self,
+        bg_tools: "list[tuple[str, BackgroundTool]]",
+        timeout: float = _TOOL_RESULT_TIMEOUT,
+    ) -> dict[str, dict[str, Any]]:
+        """Await all tool tasks concurrently; return results that arrived within timeout.
+
+        asyncio.shield prevents task cancellation on timeout — tool continues in background.
+        """
+        from robot_comic.tools.background_tool_manager import BackgroundTool
+
+        async def _wait_one(
+            call_id: str, bg_tool: BackgroundTool
+        ) -> tuple[str, dict[str, Any] | None]:
+            if bg_tool._task is None:
+                return call_id, None
+            try:
+                await asyncio.wait_for(asyncio.shield(bg_tool._task), timeout=timeout)
+                return call_id, bg_tool.result
+            except Exception:
+                return call_id, None
+
+        pairs = await asyncio.gather(*(_wait_one(cid, bt) for cid, bt in bg_tools))
+        return {cid: result for cid, result in pairs if result is not None}
+
     # Maximum enum values to keep per parameter. Larger enums (e.g. 81 emotions) dominate
     # the tools payload and push the combined prompt past Hermes3 8B's effective persona
     # range (~2500 tokens), causing it to ignore the system-prompt character entirely.
@@ -427,6 +452,13 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                 "parameters": params,
             },
         }
+
+    @staticmethod
+    def _is_meaningful_result(result: dict[str, Any]) -> bool:
+        return any(
+            isinstance(v, str) and len(v) > _MEANINGFUL_RESULT_MIN_LEN
+            for v in result.values()
+        )
 
     @staticmethod
     def _coerce_text_tool_call(

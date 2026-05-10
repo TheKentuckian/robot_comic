@@ -761,3 +761,86 @@ def test_trim_tool_spec_no_enum_untouched() -> None:
     result = ChatterboxTTSResponseHandler._trim_tool_spec(spec)
     prop = result["function"]["parameters"]["properties"]["param"]
     assert "enum" not in prop
+
+
+# ---------------------------------------------------------------------------
+# _is_meaningful_result
+# ---------------------------------------------------------------------------
+
+def test_meaningful_result_camera_passes() -> None:
+    """A result with a long string value passes the meaningful filter."""
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
+
+    result = {
+        "description": "A person is standing in the center of the frame, looking directly at the camera."
+    }
+    assert ChatterboxTTSResponseHandler._is_meaningful_result(result) is True
+
+
+def test_meaningful_result_action_filtered() -> None:
+    """Empty dict or short-value dict does not pass the meaningful filter."""
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
+
+    assert ChatterboxTTSResponseHandler._is_meaningful_result({}) is False
+    assert ChatterboxTTSResponseHandler._is_meaningful_result({"status": "ok"}) is False
+    assert ChatterboxTTSResponseHandler._is_meaningful_result({"status": "done", "count": 3}) is False
+
+
+# ---------------------------------------------------------------------------
+# _await_tool_results
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_await_tool_results_returns_completed() -> None:
+    """Completed tool tasks have their results returned."""
+    from robot_comic.tools.background_tool_manager import BackgroundTool, ToolState
+
+    handler = _make_handler()
+    expected_result = {
+        "description": "A smiling person stands before a plain background, facing the camera."
+    }
+
+    async def instant_task() -> None:
+        pass
+
+    bg_tool = BackgroundTool(
+        id="abc123",
+        tool_name="camera",
+        is_idle_tool_call=False,
+        status=ToolState.COMPLETED,
+        result=expected_result,
+    )
+    bg_tool._task = asyncio.create_task(instant_task())
+
+    results = await handler._await_tool_results([("abc123", bg_tool)], timeout=1.0)
+
+    assert results == {"abc123": expected_result}
+
+
+@pytest.mark.asyncio
+async def test_await_tool_results_timeout_excluded() -> None:
+    """A tool that doesn't finish within the timeout is excluded from results."""
+    from robot_comic.tools.background_tool_manager import BackgroundTool, ToolState
+
+    handler = _make_handler()
+
+    async def never_finishes() -> None:
+        await asyncio.sleep(9999)
+
+    bg_tool = BackgroundTool(
+        id="slow1",
+        tool_name="camera",
+        is_idle_tool_call=False,
+        status=ToolState.RUNNING,
+    )
+    bg_tool._task = asyncio.create_task(never_finishes())
+
+    results = await handler._await_tool_results([("slow1", bg_tool)], timeout=0.05)
+
+    assert results == {}
+
+    bg_tool._task.cancel()
+    try:
+        await bg_tool._task
+    except (asyncio.CancelledError, Exception):
+        pass
