@@ -122,7 +122,7 @@ def _parse_json_content_tool_call(text: str) -> tuple[str, dict[str, Any]] | Non
 
     # Flat-style: {"name": "...", "arguments": {...}}
     name = data.get("name")
-    if name and isinstance(name, str):
+    if name and isinstance(name, str) and "arguments" in data:
         args = data.get("arguments") or {}
         if isinstance(args, str):
             try:
@@ -408,6 +408,35 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             },
         }
 
+    @staticmethod
+    def _coerce_text_tool_call(
+        text: str,
+        tool_calls: list[dict[str, Any]],
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Apply text-format and JSON-in-content fallback detection in one place."""
+        if not tool_calls and text:
+            m = _TEXT_TOOL_CALL_RE.match(text)
+            if m:
+                fn_name = m.group(1)
+                args = _parse_text_tool_args(m.group(2) or "")
+                tool_calls = [{"function": {"name": fn_name, "arguments": args}}]
+                logger.warning(
+                    "Hermes3 text-format tool call in content field: %s(%r) — dispatching and suppressing TTS",
+                    fn_name, args,
+                )
+                text = ""
+        if not tool_calls and text:
+            json_tc = _parse_json_content_tool_call(text)
+            if json_tc is not None:
+                fn_name, args = json_tc
+                tool_calls = [{"function": {"name": fn_name, "arguments": args}}]
+                logger.warning(
+                    "Hermes3 JSON-format tool call in content field: %s(%r) — dispatching and suppressing TTS",
+                    fn_name, args,
+                )
+                text = ""
+        return text, tool_calls
+
     async def _call_llm(self) -> tuple[str, list[dict[str, Any]]]:
         """Call Ollama /api/chat with tool specs; returns (text, tool_calls)."""
         assert self._http is not None
@@ -445,30 +474,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                 text = (msg.get("content") or "").strip()
                 tool_calls: list[dict[str, Any]] = msg.get("tool_calls") or []
 
-                # Hermes3 sometimes puts tool calls as plain text instead of tool_calls
-                if not tool_calls and text:
-                    m = _TEXT_TOOL_CALL_RE.match(text)
-                    if m:
-                        fn_name = m.group(1)
-                        args = _parse_text_tool_args(m.group(2) or "")
-                        tool_calls = [{"function": {"name": fn_name, "arguments": args}}]
-                        logger.warning(
-                            "Hermes3 text-format tool call in content field: %s(%r) — dispatching and suppressing TTS",
-                            fn_name, args,
-                        )
-                        text = ""
-
-                # Hermes3 may also emit JSON-format tool calls in the content field
-                if not tool_calls and text:
-                    json_tc = _parse_json_content_tool_call(text)
-                    if json_tc is not None:
-                        fn_name, args = json_tc
-                        tool_calls = [{"function": {"name": fn_name, "arguments": args}}]
-                        logger.warning(
-                            "Hermes3 JSON-format tool call in content field: %s(%r) — dispatching and suppressing TTS",
-                            fn_name, args,
-                        )
-                        text = ""
+                text, tool_calls = self._coerce_text_tool_call(text, tool_calls)
 
                 if not tool_calls and not text and not nudge_attempted:
                     nudge_attempted = True
@@ -513,20 +519,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             text = (msg.get("content") or "").strip()
             tool_calls: list[dict[str, Any]] = msg.get("tool_calls") or []
 
-            if not tool_calls and text:
-                m = _TEXT_TOOL_CALL_RE.match(text)
-                if m:
-                    fn_name = m.group(1)
-                    args = _parse_text_tool_args(m.group(2) or "")
-                    tool_calls = [{"function": {"name": fn_name, "arguments": args}}]
-                    text = ""
-
-            if not tool_calls and text:
-                json_tc = _parse_json_content_tool_call(text)
-                if json_tc is not None:
-                    fn_name, args = json_tc
-                    tool_calls = [{"function": {"name": fn_name, "arguments": args}}]
-                    text = ""
+            text, tool_calls = self._coerce_text_tool_call(text, tool_calls)
 
             if not tool_calls and not text:
                 logger.warning("Hermes3 still empty after nudge — skipping turn")

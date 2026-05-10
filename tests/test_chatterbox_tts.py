@@ -374,10 +374,17 @@ def test_parse_json_content_flat_style() -> None:
 def test_parse_json_content_flat_style_no_arguments_key() -> None:
     from robot_comic.chatterbox_tts import _parse_json_content_tool_call
 
-    # {"name": "greet"} with no arguments key — returns empty dict for args
+    # {"name": "greet"} with no arguments key — not a tool call after guard fix
     text = '{"name": "greet"}'
     result = _parse_json_content_tool_call(text)
-    assert result == ("greet", {})
+    assert result is None
+
+
+def test_parse_json_content_returns_none_for_json_with_name_but_no_arguments() -> None:
+    from robot_comic.chatterbox_tts import _parse_json_content_tool_call
+
+    # A JSON object with "name" but no "arguments" key is not a tool call
+    assert _parse_json_content_tool_call('{"name": "Rick", "age": 65}') is None
 
 
 def test_parse_json_content_returns_none_for_plain_text() -> None:
@@ -586,3 +593,51 @@ async def test_nudge_does_not_modify_conversation_history() -> None:
 
     assert handler._conversation_history is history_ref
     assert handler._conversation_history == history_before
+
+
+@pytest.mark.asyncio
+async def test_nudge_recovers_text_format_tool_call() -> None:
+    """Nudge response containing a text-format tool call is correctly parsed."""
+    handler = _make_handler()
+
+    async def fake_post(url, *, json=None, **kwargs):
+        msgs = json.get("messages", [])
+        if any(m.get("content") == "Please use a tool call now." for m in msgs):
+            content = "{function:dance}"
+        else:
+            content = ""
+        fake_resp = MagicMock()
+        fake_resp.raise_for_status = MagicMock()
+        fake_resp.json.return_value = {"message": {"content": content, "tool_calls": []}}
+        return fake_resp
+
+    handler._http.post = fake_post  # type: ignore[method-assign]
+    text, tool_calls = await handler._call_llm()
+
+    assert text == ""
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "dance"
+
+
+@pytest.mark.asyncio
+async def test_nudge_recovers_json_content_tool_call() -> None:
+    """Nudge response containing a JSON-format tool call in content is correctly parsed."""
+    handler = _make_handler()
+
+    async def fake_post(url, *, json=None, **kwargs):
+        msgs = json.get("messages", [])
+        if any(m.get("content") == "Please use a tool call now." for m in msgs):
+            content = '{"name": "play_emotion", "arguments": {"emotion": "laughing1"}}'
+        else:
+            content = ""
+        fake_resp = MagicMock()
+        fake_resp.raise_for_status = MagicMock()
+        fake_resp.json.return_value = {"message": {"content": content, "tool_calls": []}}
+        return fake_resp
+
+    handler._http.post = fake_post  # type: ignore[method-assign]
+    text, tool_calls = await handler._call_llm()
+
+    assert text == ""
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "play_emotion"
