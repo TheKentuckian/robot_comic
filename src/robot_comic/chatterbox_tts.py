@@ -35,7 +35,12 @@ from robot_comic.tools.core_tools import ToolDependencies, get_active_tool_specs
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.conversation_handler import ConversationHandler
 from robot_comic.chatterbox_tag_translator import translate
-from robot_comic.tools.background_tool_manager import ToolCallRoutine, ToolNotification, BackgroundToolManager
+from robot_comic.tools.background_tool_manager import (
+    BackgroundTool,
+    ToolCallRoutine,
+    ToolNotification,
+    BackgroundToolManager,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -348,8 +353,6 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
 
     async def _dispatch_completed_transcript(self, transcript: str) -> None:
         """LLM → tool dispatch → TTS → PCM frames (two-phase with query-tool feedback)."""
-        from robot_comic.tools.background_tool_manager import BackgroundTool
-
         self._conversation_history.append({"role": "user", "content": transcript})
 
         try:
@@ -402,9 +405,8 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
 
     async def _start_tool_calls(
         self, tool_calls: list[dict[str, Any]]
-    ) -> "list[tuple[str, BackgroundTool]]":
+    ) -> list[tuple[str, BackgroundTool]]:
         """Dispatch tool calls; return (call_id, BackgroundTool) pairs."""
-        from robot_comic.tools.background_tool_manager import BackgroundTool
         results: list[tuple[str, BackgroundTool]] = []
         for tc in tool_calls:
             fn = tc.get("function", {})
@@ -430,15 +432,13 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
 
     async def _await_tool_results(
         self,
-        bg_tools: "list[tuple[str, BackgroundTool]]",
+        bg_tools: list[tuple[str, BackgroundTool]],
         timeout: float = _TOOL_RESULT_TIMEOUT,
     ) -> dict[str, dict[str, Any]]:
         """Await all tool tasks concurrently; return results that arrived within timeout.
 
         asyncio.shield prevents task cancellation on timeout — tool continues in background.
         """
-        from robot_comic.tools.background_tool_manager import BackgroundTool
-
         async def _wait_one(
             call_id: str, bg_tool: BackgroundTool
         ) -> tuple[str, dict[str, Any] | None]:
