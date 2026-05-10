@@ -455,5 +455,6 @@ async def test_call_llm_injects_tool_use_addendum() -> None:
 
     assert captured_payloads, "No LLM call was made"
     messages = captured_payloads[0]["messages"]
-    system_content = next(m["content"] for m in messages if m["role"] == "system")
-    assert _TOOL_USE_ADDENDUM in system_content
+    system_msg = next((m for m in messages if m["role"] == "system"), None)
+    assert system_msg is not None, "No system message found in LLM payload"
+    assert _TOOL_USE_ADDENDUM in system_msg["content"]
