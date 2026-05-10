@@ -2,23 +2,46 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Environment
+
+This project uses the **central `/venvs/apps_venv`** shared with
+`reachy_mini_conversation_app`. There is no local `.venv`. The package is
+installed editable, so source changes in `src/` take effect immediately.
+
+Set this once in your shell (or add to `~/.bashrc`):
+
+```bash
+export UV_PROJECT_ENVIRONMENT=/venvs/apps_venv
+```
+
+See `DEVELOPMENT.md` for the full uv workflow and venv rationale.
+
 ## Commands
 
 ```bash
-uv sync                          # Install dependencies
-uv sync --extra all_vision       # Include vision extras (MediaPipe, SmolVLM2, YOLO)
+# Dependencies — use uv pip, NOT uv sync (shared venv)
+uv pip install -e .                  # Reinstall after editing pyproject.toml
+uv pip install -e .[local_stt]       # Add local STT (Moonshine) — required on-robot
+uv pip install -e .[all_vision]      # Add all vision extras
+uv lock                              # Update the lock file
 
-uv run ruff check . --fix        # Lint and auto-fix
-uv run ruff format .             # Format code
-uv run mypy --pretty --show-error-codes  # Type check
+# Lint / format / type-check
+ruff check . --fix                   # Lint and auto-fix
+ruff format .                        # Format code
+mypy --pretty --show-error-codes     # Type check
 
-uv run pytest tests/ -v          # Run all tests
-uv run pytest tests/test_openai_realtime.py -v  # Run a single test file
-uv run pytest tests/ -k "test_name" -v          # Run a specific test by name
+# Tests
+/venvs/apps_venv/bin/python -m pytest tests/ -v
+/venvs/apps_venv/bin/python -m pytest tests/test_openai_realtime.py -v
+/venvs/apps_venv/bin/python -m pytest tests/ -k "test_name" -v
 
-reachy-mini-conversation-app     # Run the app (console/headless mode)
-reachy-mini-conversation-app --gradio  # Run with Gradio web UI
-reachy-mini-conversation-app --debug   # Verbose logging
+# Run the app
+python -m robot_comic.main           # Console/headless mode
+python -m robot_comic.main --gradio  # Gradio web UI
+python -m robot_comic.main --debug   # Verbose logging
+
+# On-robot logs
+journalctl -u reachy-app-autostart -f   # Live app log
 ```
 
 ## Architecture
