@@ -398,6 +398,15 @@ def test_parse_json_content_returns_none_for_json_without_name() -> None:
     assert _parse_json_content_tool_call('{"foo": "bar"}') is None
 
 
+def test_parse_json_content_string_serialized_arguments() -> None:
+    from robot_comic.chatterbox_tts import _parse_json_content_tool_call
+
+    # Hermes3 sometimes serializes arguments as a JSON string instead of a dict
+    text = '{"function": {"name": "greet", "arguments": "{\\"action\\": \\"scan\\"}"}}'
+    result = _parse_json_content_tool_call(text)
+    assert result == ("greet", {"action": "scan"})
+
+
 @pytest.mark.asyncio
 async def test_call_llm_detects_json_content_tool_call() -> None:
     """_call_llm dispatches a JSON-format tool call found in the content field."""

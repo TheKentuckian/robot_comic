@@ -106,12 +106,22 @@ def _parse_json_content_tool_call(text: str) -> tuple[str, dict[str, Any]] | Non
         name = fn.get("name")
         if name and isinstance(name, str):
             args = fn.get("arguments") or {}
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except (json.JSONDecodeError, ValueError):
+                    args = {}
             return name, args if isinstance(args, dict) else {}
 
     # Flat-style: {"name": "...", "arguments": {...}}
     name = data.get("name")
     if name and isinstance(name, str):
         args = data.get("arguments") or {}
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except (json.JSONDecodeError, ValueError):
+                args = {}
         return name, args if isinstance(args, dict) else {}
 
     return None
