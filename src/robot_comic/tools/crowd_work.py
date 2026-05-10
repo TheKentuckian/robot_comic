@@ -1,4 +1,4 @@
-"""Session state tool for Don Rickles crowd-work — accumulates person profile and surfaces callback hints."""
+"""Session state tool for crowd-work — accumulates person profile and surfaces callback hints."""
 
 from __future__ import annotations
 import json
@@ -13,12 +13,12 @@ from robot_comic.tools.core_tools import Tool, ToolDependencies
 
 logger = logging.getLogger(__name__)
 
-SESSION_DIR = Path(".rickles_sessions")
+SESSION_DIR = Path(".comedy_sessions")
 SESSION_WINDOW_HOURS = 24
 
 
 class CrowdWork(Tool):
-    """Accumulate a session profile of the person and surface callback hints for roasting."""
+    """Accumulate a session profile of the person and surface callback hints for the routine."""
 
     name = "crowd_work"
     description = (

@@ -15,7 +15,7 @@ from robot_comic.tools.core_tools import Tool, ToolDependencies
 
 logger = logging.getLogger(__name__)
 
-SESSION_DIR = Path(".rickles_sessions")
+SESSION_DIR = Path(".comedy_sessions")
 SESSION_WINDOW_DAYS = 30
 MATCH_THRESHOLD = 0.75
 SWEEP_POSITIONS = ["left", "up", "right", "front"]
