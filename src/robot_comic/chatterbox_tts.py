@@ -506,7 +506,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                                attempt + 1, _LLM_MAX_RETRIES, type(exc).__name__, exc, delay)
                 await asyncio.sleep(delay)
                 delay *= 2
-        return "", [], {}
+        return "", [], {"role": "assistant", "content": ""}
 
     async def _nudge_llm(
         self,
