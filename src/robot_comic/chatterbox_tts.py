@@ -51,6 +51,23 @@ _TTS_RETRY_DELAY = 0.5
 # Split at whitespace that follows a sentence-ending punctuation mark.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
+# Hermes3 sometimes emits tool calls as plain text: {function:name, key:val, ...}
+_TEXT_TOOL_CALL_RE = re.compile(
+    r"^\s*\{\s*function\s*:\s*(\w+)\s*(?:,\s*(.*?))?\s*\}\s*$",
+    re.DOTALL,
+)
+
+
+def _parse_text_tool_args(kv_str: str) -> dict[str, str]:
+    """Parse unquoted key:value pairs from a Hermes3 text-format tool call."""
+    args: dict[str, str] = {}
+    for pair in kv_str.split(","):
+        pair = pair.strip()
+        if ":" in pair:
+            k, _, v = pair.partition(":")
+            args[k.strip()] = v.strip()
+    return args
+
 
 def _split_sentences(text: str) -> list[str]:
     """Split text at sentence boundaries for per-sentence TTS pipelining."""
@@ -339,6 +356,20 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                 msg = data.get("message", {})
                 text = (msg.get("content") or "").strip()
                 tool_calls: list[dict[str, Any]] = msg.get("tool_calls") or []
+
+                # Hermes3 sometimes puts tool calls as plain text instead of tool_calls
+                if not tool_calls and text:
+                    m = _TEXT_TOOL_CALL_RE.match(text)
+                    if m:
+                        fn_name = m.group(1)
+                        args = _parse_text_tool_args(m.group(2) or "")
+                        tool_calls = [{"function": {"name": fn_name, "arguments": args}}]
+                        logger.warning(
+                            "Hermes3 text-format tool call in content field: %s(%r) — dispatching and suppressing TTS",
+                            fn_name, args,
+                        )
+                        text = ""
+
                 return text, tool_calls
             except Exception as exc:
                 if attempt == _LLM_MAX_RETRIES - 1:
