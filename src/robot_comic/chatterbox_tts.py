@@ -494,6 +494,8 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
 
         The nudge messages are not saved to _conversation_history.
         Applies the same text-format and JSON-in-content detection as _call_llm().
+        If the nudge HTTP call itself fails, returns ("", []) and the turn is silently
+        dropped — the caller's retry loop is not re-entered after a nudge attempt.
         """
         assert self._http is not None
         nudge_messages = original_messages + [

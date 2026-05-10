@@ -580,7 +580,9 @@ async def test_nudge_does_not_modify_conversation_history() -> None:
         fake_resp.json.return_value = {"message": {"content": "", "tool_calls": []}}
         return fake_resp
 
+    history_ref = handler._conversation_history
     handler._http.post = fake_post  # type: ignore[method-assign]
     await handler._call_llm()
 
+    assert handler._conversation_history is history_ref
     assert handler._conversation_history == history_before
