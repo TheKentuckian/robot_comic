@@ -7,6 +7,7 @@ audio with the Chatterbox TTS server's /tts endpoint (voice cloning mode).
 Audio output: 24 kHz, mono, 16-bit PCM — matches the existing pipeline.
 """
 
+import re
 import json
 import uuid
 import asyncio
@@ -45,6 +46,17 @@ _LLM_MAX_RETRIES = 3
 _LLM_RETRY_BASE_DELAY = 1.0
 _TTS_MAX_RETRIES = 3
 _TTS_RETRY_DELAY = 0.5
+
+# Split at whitespace that follows a sentence-ending punctuation mark.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _split_sentences(text: str) -> list[str]:
+    """Split text at sentence boundaries for per-sentence TTS pipelining."""
+    text = text.strip()
+    if not text:
+        return []
+    return [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
 
 
 class ChatterboxTTSResponseHandler(ConversationHandler):
@@ -241,26 +253,27 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         persona = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None) or "default"
         segments = translate(response_text, persona=persona, use_turbo=False)
 
-        pcm_parts: list[bytes] = []
+        any_audio = False
         for seg in segments:
             if seg.silence_ms:
-                pcm_parts.append(self._silence_pcm(seg.silence_ms))
+                for frame in self._pcm_to_frames(self._silence_pcm(seg.silence_ms)):
+                    await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
+                any_audio = True
             else:
                 text = f"{seg.turbo_insert} {seg.text}" if seg.turbo_insert else seg.text
-                pcm = await self._call_chatterbox_tts(
-                    text, exaggeration=seg.exaggeration, cfg_weight=seg.cfg_weight
-                )
-                if pcm:
-                    pcm_parts.append(pcm)
+                for sentence in _split_sentences(text):
+                    pcm = await self._call_chatterbox_tts(
+                        sentence, exaggeration=seg.exaggeration, cfg_weight=seg.cfg_weight
+                    )
+                    if pcm:
+                        for frame in self._pcm_to_frames(pcm):
+                            await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
+                        any_audio = True
 
-        if not pcm_parts:
+        if not any_audio:
             await self.output_queue.put(
                 AdditionalOutputs({"role": "assistant", "content": "[TTS error]"})
             )
-            return
-
-        for frame in self._pcm_to_frames(b"".join(pcm_parts)):
-            await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
 
     async def _dispatch_tool_calls(self, tool_calls: list[dict[str, Any]]) -> None:
         for tc in tool_calls:
@@ -346,6 +359,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             "voice_mode": "clone",
             "reference_audio_filename": ref_file,
             "output_format": "wav",
+            "split_text": False,
             "exaggeration": exaggeration if exaggeration is not None else self._exaggeration,
             "cfg_weight": cfg_weight if cfg_weight is not None else self._cfg_weight,
             "temperature": self._temperature,
