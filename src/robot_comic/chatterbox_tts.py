@@ -64,6 +64,9 @@ _TOOL_USE_ADDENDUM = (
     "Never write {function: name, ...} or any text representation of a tool call."
 )
 
+_TOOL_RESULT_TIMEOUT: float = 5.0
+_MEANINGFUL_RESULT_MIN_LEN: int = 20
+
 
 def _parse_text_tool_args(kv_str: str) -> dict[str, Any]:
     """Parse args from a Hermes3 text-format tool call.
@@ -321,12 +324,12 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         self._conversation_history.append({"role": "user", "content": transcript})
 
         try:
-            response_text, tool_calls = await self._call_llm()
+            response_text, tool_calls, raw_message = await self._call_llm()
         except Exception as exc:
             logger.warning("LLM call failed: %s", exc)
             return
 
-        self._conversation_history.append({"role": "assistant", "content": response_text})
+        self._conversation_history.append(raw_message)
 
         if tool_calls:
             await self._dispatch_tool_calls(tool_calls)
@@ -447,8 +450,8 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                 text = ""
         return text, tool_calls
 
-    async def _call_llm(self) -> tuple[str, list[dict[str, Any]]]:
-        """Call Ollama /api/chat with tool specs; returns (text, tool_calls)."""
+    async def _call_llm(self) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+        """Call Ollama /api/chat with tool specs; returns (text, tool_calls, raw_message)."""
         assert self._http is not None
         system_prompt = get_session_instructions() + _TOOL_USE_ADDENDUM
         tool_specs = get_active_tool_specs(self.deps)
@@ -492,7 +495,10 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                     logger.info("Hermes3 returned empty response — attempting nudge")
                     text, tool_calls = await self._nudge_llm(messages, payload)
 
-                return text, tool_calls
+                raw_msg: dict[str, Any] = {"role": "assistant", "content": text}
+                if tool_calls:
+                    raw_msg["tool_calls"] = tool_calls
+                return text, tool_calls, raw_msg
             except Exception as exc:
                 if attempt == _LLM_MAX_RETRIES - 1:
                     raise
@@ -500,7 +506,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                                attempt + 1, _LLM_MAX_RETRIES, type(exc).__name__, exc, delay)
                 await asyncio.sleep(delay)
                 delay *= 2
-        return "", []
+        return "", [], {}
 
     async def _nudge_llm(
         self,

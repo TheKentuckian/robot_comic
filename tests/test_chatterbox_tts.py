@@ -79,8 +79,8 @@ async def test_tts_called_once_per_sentence() -> None:
 
     tts_texts: list[str] = []
 
-    async def fake_llm() -> tuple[str, list]:
-        return "Hello! How are you today?", []
+    async def fake_llm() -> tuple[str, list, dict]:
+        return "Hello! How are you today?", [], {}
 
     async def fake_tts(text: str, *, exaggeration=None, cfg_weight=None) -> bytes:
         tts_texts.append(text)
@@ -105,8 +105,8 @@ async def test_frames_emitted_per_sentence_not_buffered() -> None:
     tts_call_order: list[str] = []
     queue_snapshots: dict[str, int] = {}
 
-    async def fake_llm() -> tuple[str, list]:
-        return "First sentence. Second sentence.", []
+    async def fake_llm() -> tuple[str, list, dict]:
+        return "First sentence. Second sentence.", [], {}
 
     async def fake_tts(text: str, *, exaggeration=None, cfg_weight=None) -> bytes:
         tts_call_order.append(text)
@@ -131,8 +131,8 @@ async def test_single_sentence_still_produces_audio() -> None:
     """A response with no sentence boundary still generates audio frames."""
     handler = _make_handler()
 
-    async def fake_llm() -> tuple[str, list]:
-        return "Hiya!", []
+    async def fake_llm() -> tuple[str, list, dict]:
+        return "Hiya!", [], {}
 
     async def fake_tts(text: str, *, exaggeration=None, cfg_weight=None) -> bytes:
         return _pcm_bytes(4800)
@@ -153,8 +153,8 @@ async def test_tts_error_on_all_sentences_pushes_error_output() -> None:
     """When every TTS call returns None, an error AdditionalOutputs is queued."""
     handler = _make_handler()
 
-    async def fake_llm() -> tuple[str, list]:
-        return "Hello. World.", []
+    async def fake_llm() -> tuple[str, list, dict]:
+        return "Hello. World.", [], {}
 
     async def failing_tts(text: str, *, exaggeration=None, cfg_weight=None) -> None:
         return None
@@ -178,8 +178,8 @@ async def test_split_text_disabled_in_tts_payload() -> None:
     handler = _make_handler()
     captured_payloads: list[dict] = []
 
-    async def fake_llm() -> tuple[str, list]:
-        return "Hello. World.", []
+    async def fake_llm() -> tuple[str, list, dict]:
+        return "Hello. World.", [], {}
 
     # Intercept the actual HTTP call to inspect the payload
     import httpx
@@ -212,6 +212,32 @@ async def test_split_text_disabled_in_tts_payload() -> None:
     assert len(captured_payloads) >= 1
     for payload in captured_payloads:
         assert payload.get("split_text") is False
+
+
+@pytest.mark.asyncio
+async def test_call_llm_returns_raw_message() -> None:
+    """_call_llm returns a 3-tuple; the third element is the raw assistant message dict."""
+    import httpx
+    handler = _make_handler()
+
+    fake_resp = MagicMock(spec=httpx.Response)
+    fake_resp.raise_for_status = MagicMock()
+    fake_resp.json.return_value = {
+        "message": {
+            "role": "assistant",
+            "content": "Hey there!",
+            "tool_calls": [],
+        }
+    }
+    handler._http.post = AsyncMock(return_value=fake_resp)
+
+    result = await handler._call_llm()
+
+    assert len(result) == 3
+    text, tool_calls, raw_message = result
+    assert text == "Hey there!"
+    assert raw_message["role"] == "assistant"
+    assert "content" in raw_message
 
 
 def _drain_queue(q: asyncio.Queue) -> list:
@@ -431,7 +457,7 @@ async def test_call_llm_detects_json_content_tool_call() -> None:
     }
     handler._http.post = AsyncMock(return_value=fake_resp)
 
-    text, tool_calls = await handler._call_llm()
+    text, tool_calls, _ = await handler._call_llm()
 
     assert text == ""
     assert len(tool_calls) == 1
@@ -496,7 +522,7 @@ async def test_nudge_fires_on_empty_response() -> None:
         return fake_resp
 
     handler._http.post = fake_post  # type: ignore[method-assign]
-    text, tool_calls = await handler._call_llm()
+    text, tool_calls, _ = await handler._call_llm()
 
     assert nudge_detected
     assert len(tool_calls) == 1
@@ -520,7 +546,7 @@ async def test_nudge_fires_at_most_once() -> None:
         return fake_resp
 
     handler._http.post = fake_post  # type: ignore[method-assign]
-    text, tool_calls = await handler._call_llm()
+    text, tool_calls, _ = await handler._call_llm()
 
     assert nudge_count == 1
     assert text == ""
@@ -542,7 +568,7 @@ async def test_nudge_not_fired_when_text_present() -> None:
         return fake_resp
 
     handler._http.post = fake_post  # type: ignore[method-assign]
-    text, tool_calls = await handler._call_llm()
+    text, tool_calls, _ = await handler._call_llm()
 
     assert call_count == 1
     assert text == "Hello there!"
@@ -568,7 +594,7 @@ async def test_nudge_not_fired_when_tool_calls_present() -> None:
         return fake_resp
 
     handler._http.post = fake_post  # type: ignore[method-assign]
-    _, tool_calls = await handler._call_llm()
+    _, tool_calls, _raw = await handler._call_llm()
 
     assert call_count == 1
     assert len(tool_calls) == 1
@@ -612,7 +638,7 @@ async def test_nudge_recovers_text_format_tool_call() -> None:
         return fake_resp
 
     handler._http.post = fake_post  # type: ignore[method-assign]
-    text, tool_calls = await handler._call_llm()
+    text, tool_calls, _ = await handler._call_llm()
 
     assert text == ""
     assert len(tool_calls) == 1
@@ -636,7 +662,7 @@ async def test_nudge_recovers_json_content_tool_call() -> None:
         return fake_resp
 
     handler._http.post = fake_post  # type: ignore[method-assign]
-    text, tool_calls = await handler._call_llm()
+    text, tool_calls, _ = await handler._call_llm()
 
     assert text == ""
     assert len(tool_calls) == 1
