@@ -137,7 +137,9 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         return f"{parsed.scheme}://{parsed.hostname}:11434"
 
     async def _prepare_startup_credentials(self) -> None:
-        self._http = httpx.AsyncClient(timeout=60.0)
+        self._http = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0)
+        )
         logger.info(
             "ChatterboxTTS handler initialised: llm=%s/v1 tts=%s voice=%s exag=%.2f cfg=%.2f temp=%.2f",
             self._ollama_base_url,
@@ -264,8 +266,8 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             except Exception as exc:
                 if attempt == _LLM_MAX_RETRIES - 1:
                     raise
-                logger.warning("LLM attempt %d/%d failed: %s; retrying in %.1fs",
-                               attempt + 1, _LLM_MAX_RETRIES, exc, delay)
+                logger.warning("LLM attempt %d/%d failed: %s: %s; retrying in %.1fs",
+                               attempt + 1, _LLM_MAX_RETRIES, type(exc).__name__, exc, delay)
                 await asyncio.sleep(delay)
                 delay *= 2
         return ""
@@ -297,7 +299,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                 r.raise_for_status()
                 return self._wav_to_pcm(r.content)
             except Exception as exc:
-                logger.warning("TTS attempt %d/%d failed: %s", attempt + 1, _TTS_MAX_RETRIES, exc)
+                logger.warning("TTS attempt %d/%d failed: %s: %s", attempt + 1, _TTS_MAX_RETRIES, type(exc).__name__, exc)
                 if attempt < _TTS_MAX_RETRIES - 1:
                     await asyncio.sleep(_TTS_RETRY_DELAY)
         return None
