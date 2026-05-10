@@ -336,6 +336,13 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             for s in tool_specs
         ]
         messages = [{"role": "system", "content": system_prompt}] + self._conversation_history
+        logger.debug(
+            "_call_llm: model=%s tools=%d sys_prompt_chars=%d sys_prompt_head=%r",
+            getattr(config, "OLLAMA_MODEL", "hermes3:8b-llama3.1-q4_K_M"),
+            len(ollama_tools),
+            len(system_prompt),
+            system_prompt[:120],
+        )
 
         payload: dict[str, Any] = {
             "model": getattr(config, "OLLAMA_MODEL", "hermes3:8b-llama3.1-q4_K_M"),

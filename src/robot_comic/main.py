@@ -77,7 +77,14 @@ def run(
     )
 
     logger = setup_logger(args.debug)
-    logger.info("Starting Robot Comic")
+    try:
+        import subprocess
+        _git_hash = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        _git_hash = "unknown"
+    logger.info("Starting Robot Comic (git: %s)", _git_hash)
     startup_settings = StartupSettings()
 
     if instance_path is not None:
