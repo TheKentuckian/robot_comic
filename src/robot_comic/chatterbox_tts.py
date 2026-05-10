@@ -454,13 +454,6 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         }
 
     @staticmethod
-    def _is_meaningful_result(result: dict[str, Any]) -> bool:
-        return any(
-            isinstance(v, str) and len(v) > _MEANINGFUL_RESULT_MIN_LEN
-            for v in result.values()
-        )
-
-    @staticmethod
     def _coerce_text_tool_call(
         text: str,
         tool_calls: list[dict[str, Any]],
@@ -488,6 +481,13 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                 )
                 text = ""
         return text, tool_calls
+
+    @staticmethod
+    def _is_meaningful_result(result: dict[str, Any]) -> bool:
+        return any(
+            isinstance(v, str) and len(v) > _MEANINGFUL_RESULT_MIN_LEN
+            for v in result.values()
+        )
 
     async def _call_llm(self) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
         """Call Ollama /api/chat with tool specs; returns (text, tool_calls, raw_message)."""
