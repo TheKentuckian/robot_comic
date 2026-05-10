@@ -141,7 +141,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0)
         )
         logger.info(
-            "ChatterboxTTS handler initialised: llm=%s/v1 tts=%s voice=%s exag=%.2f cfg=%.2f temp=%.2f",
+            "ChatterboxTTS handler initialised: llm=%s/api/chat tts=%s voice=%s exag=%.2f cfg=%.2f temp=%.2f",
             self._ollama_base_url,
             self._chatterbox_url,
             self._chatterbox_voice,
@@ -247,7 +247,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
 
     async def _call_llm(self) -> str:
-        """Call Ollama /v1/chat/completions with conversation history."""
+        """Call Ollama /api/chat with conversation history."""
         assert self._http is not None
         system_prompt = get_session_instructions()
         messages = [{"role": "system", "content": system_prompt}] + self._conversation_history
@@ -256,13 +256,13 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         for attempt in range(_LLM_MAX_RETRIES):
             try:
                 r = await self._http.post(
-                    f"{self._ollama_base_url}/v1/chat/completions",
+                    f"{self._ollama_base_url}/api/chat",
                     json={"model": getattr(config, "MODEL_NAME", "hermes3:8b-llama3.1-q4_K_M"),
                           "messages": messages,
                           "stream": False},
                 )
                 r.raise_for_status()
-                return r.json()["choices"][0]["message"]["content"].strip()
+                return r.json()["message"]["content"].strip()
             except Exception as exc:
                 if attempt == _LLM_MAX_RETRIES - 1:
                     raise
