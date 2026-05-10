@@ -830,6 +830,14 @@ class MovementManager:
         """
         logger.debug("Starting enhanced movement control loop (100Hz)")
 
+        # Motors start in compliant mode after power-on; stiffen them so that
+        # subsequent set_target() calls have a physical effect.
+        try:
+            self.current_robot.enable_motors()
+            logger.debug("Motors enabled")
+        except Exception as e:
+            logger.warning("Could not enable motors at startup: %s", e)
+
         loop_count = 0
         prev_loop_start = self._now()
         print_interval_loops = max(1, int(self.target_frequency * 2))
