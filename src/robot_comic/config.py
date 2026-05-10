@@ -144,6 +144,7 @@ CHATTERBOX_DEFAULT_VOICE = "don_rickles"
 CHATTERBOX_DEFAULT_EXAGGERATION = 0.75
 CHATTERBOX_DEFAULT_CFG_WEIGHT = 0.30
 CHATTERBOX_DEFAULT_TEMPERATURE = 0.6
+OLLAMA_MODEL_DEFAULT = "hermes3:8b-llama3.1-q4_K_M"
 
 LOCAL_STT_OUTPUT_LABELS = {
     OPENAI_BACKEND: "Local STT + OpenAI voice",
@@ -509,6 +510,7 @@ class Config:
     CHATTERBOX_EXAGGERATION = float(os.getenv("CHATTERBOX_EXAGGERATION", str(CHATTERBOX_DEFAULT_EXAGGERATION)))
     CHATTERBOX_CFG_WEIGHT = float(os.getenv("CHATTERBOX_CFG_WEIGHT", str(CHATTERBOX_DEFAULT_CFG_WEIGHT)))
     CHATTERBOX_TEMPERATURE = float(os.getenv("CHATTERBOX_TEMPERATURE", str(CHATTERBOX_DEFAULT_TEMPERATURE)))
+    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", OLLAMA_MODEL_DEFAULT)
 
     logger.debug(
         "Backend provider: %s, Model: %s, HF mode: %s, HF session URL set: %s, HF direct URL set: %s, HF_HOME: %s, Vision Model: %s, Local STT: %s/%s/%s response=%s cache=%s",
@@ -632,6 +634,7 @@ def refresh_runtime_config_from_env() -> None:
     config.CHATTERBOX_EXAGGERATION = float(os.getenv("CHATTERBOX_EXAGGERATION", str(CHATTERBOX_DEFAULT_EXAGGERATION)))
     config.CHATTERBOX_CFG_WEIGHT = float(os.getenv("CHATTERBOX_CFG_WEIGHT", str(CHATTERBOX_DEFAULT_CFG_WEIGHT)))
     config.CHATTERBOX_TEMPERATURE = float(os.getenv("CHATTERBOX_TEMPERATURE", str(CHATTERBOX_DEFAULT_TEMPERATURE)))
+    config.OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", OLLAMA_MODEL_DEFAULT)
 
 
 def get_backend_choice(model_name: str | None = None) -> str:

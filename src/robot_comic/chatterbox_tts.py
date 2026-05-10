@@ -255,7 +255,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         latest_user_msg = self._conversation_history[-1]["content"]
 
         payload: dict[str, Any] = {
-            "model": getattr(config, "MODEL_NAME", "hermes3:8b-llama3.1-q4_K_M"),
+            "model": getattr(config, "OLLAMA_MODEL", "hermes3:8b-llama3.1-q4_K_M"),
             "system": system_prompt,
             "prompt": latest_user_msg,
             "stream": False,
