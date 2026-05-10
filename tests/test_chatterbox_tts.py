@@ -430,3 +430,30 @@ async def test_call_llm_detects_json_content_tool_call() -> None:
     assert len(tool_calls) == 1
     assert tool_calls[0]["function"]["name"] == "greet"
     assert tool_calls[0]["function"]["arguments"] == {"action": "scan"}
+
+
+@pytest.mark.asyncio
+async def test_call_llm_injects_tool_use_addendum() -> None:
+    """The system message sent to Ollama includes the tool-use addendum."""
+    import httpx
+    from robot_comic.chatterbox_tts import _TOOL_USE_ADDENDUM
+
+    handler = _make_handler()
+    captured_payloads: list[dict] = []
+
+    fake_resp = MagicMock(spec=httpx.Response)
+    fake_resp.raise_for_status = MagicMock()
+    fake_resp.json.return_value = {"message": {"content": "Hi!", "tool_calls": []}}
+
+    async def capturing_post(url, *, json=None, **kwargs):
+        captured_payloads.append(json or {})
+        return fake_resp
+
+    handler._http.post = capturing_post  # type: ignore[method-assign]
+
+    await handler._call_llm()
+
+    assert captured_payloads, "No LLM call was made"
+    messages = captured_payloads[0]["messages"]
+    system_content = next(m["content"] for m in messages if m["role"] == "system")
+    assert _TOOL_USE_ADDENDUM in system_content

@@ -57,6 +57,13 @@ _TEXT_TOOL_CALL_RE = re.compile(
     re.DOTALL,
 )
 
+_TOOL_USE_ADDENDUM = (
+    "\n\n## TOOL CALL RULES\n"
+    "Always invoke tools using the structured tool_calls mechanism — never embed tool calls as text.\n"
+    "When a tool call is required, emit only the tool call; do not add explanatory prose alongside it.\n"
+    "Never write {function: name, ...} or any text representation of a tool call."
+)
+
 
 def _parse_text_tool_args(kv_str: str) -> dict[str, Any]:
     """Parse args from a Hermes3 text-format tool call.
@@ -404,7 +411,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
     async def _call_llm(self) -> tuple[str, list[dict[str, Any]]]:
         """Call Ollama /api/chat with tool specs; returns (text, tool_calls)."""
         assert self._http is not None
-        system_prompt = get_session_instructions()
+        system_prompt = get_session_instructions() + _TOOL_USE_ADDENDUM
         tool_specs = get_active_tool_specs(self.deps)
         ollama_tools = [self._trim_tool_spec(s) for s in tool_specs]
         messages = [{"role": "system", "content": system_prompt}] + self._conversation_history
