@@ -62,6 +62,7 @@ def run(
         GEMINI_BACKEND,
         OPENAI_BACKEND,
         LOCAL_STT_BACKEND,
+        CHATTERBOX_OUTPUT,
         GEMINI_TTS_OUTPUT,
         HF_LOCAL_CONNECTION_MODE,
         config,
@@ -223,6 +224,7 @@ def run(
             startup_voice=startup_settings.voice,
         )  # type: ignore[assignment]
     elif config.BACKEND_PROVIDER == LOCAL_STT_BACKEND:
+        from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
         from robot_comic.gemini_tts import LocalSTTGeminiTTSHandler
         from robot_comic.local_stt_realtime import (
             LocalSTTHuggingFaceRealtimeHandler,
@@ -236,6 +238,8 @@ def run(
             handler_class = LocalSTTHuggingFaceRealtimeHandler
         elif local_stt_response_backend == GEMINI_TTS_OUTPUT:
             handler_class = LocalSTTGeminiTTSHandler
+        elif local_stt_response_backend == CHATTERBOX_OUTPUT:
+            handler_class = LocalSTTChatterboxHandler
         else:
             handler_class = LocalSTTOpenAIRealtimeHandler
 

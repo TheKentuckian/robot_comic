@@ -152,9 +152,12 @@ Leaves ~1.5 GB headroom. Both processes can be co-resident.
   ```bash
   curl http://comedy-laptop.local:8004/v1/audio/speech \
     -H "Content-Type: application/json" \
-    -d '{"model":"tts-1","input":"Hello from the Pi","voice":"default"}' \
+    -d '{"model":"tts-1","input":"Hello from the Pi","voice":"Michael.wav"}' \
     --output test.wav
   ```
+  Note: `voice` must be a predefined voice filename (e.g., `Michael.wav`), not `"default"`.
+  Check available voices: `GET http://localhost:8004/get_predefined_voices`
+  Check model status: `GET http://localhost:8004/api/model-info` (no `/health` endpoint)
 
 ### Task 4: Create Start/Stop Scripts with Desktop Shortcuts ✅
 
@@ -233,11 +236,18 @@ Leaves ~1.5 GB headroom. Both processes can be co-resident.
 
 - [ ] Copy `rickles_ref.wav` into `D:\Projects\chatterbox-tts\reference_audio\don_rickles.wav`
   (the server's `reference_audio_path` config serves files from this directory)
-- [ ] Test via OpenAI-compatible endpoint:
+- [ ] Test via OpenAI-compatible endpoint (voice = filename in `predefined_voices/` dir):
   ```powershell
   curl http://localhost:8004/v1/audio/speech `
     -H "Content-Type: application/json" `
-    -d '{"model":"tts-1","input":"You are a hockey puck!","voice":"don_rickles"}' `
+    -d '{"model":"tts-1","input":"You are a hockey puck!","voice":"don_rickles.wav"}' `
+    --output rickles_api_test.wav
+  ```
+  Alternative via custom /tts endpoint (voice cloning mode):
+  ```powershell
+  curl http://localhost:8004/tts `
+    -H "Content-Type: application/json" `
+    -d '{"text":"You are a hockey puck!","voice_mode":"clone","reference_audio_filename":"don_rickles.wav"}' `
     --output rickles_api_test.wav
   ```
 - [ ] Confirm audio plays back with Rickles voice
