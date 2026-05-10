@@ -193,12 +193,27 @@
                 <small>On-device Moonshine STT → Gemini text response → Gemini 3.1 Flash TTS. Requires <code>GEMINI_API_KEY</code>.</small>
               </span>
             </label>
+            <label class="output-choice" data-output-card="chatterbox">
+              <input type="radio" name="local-stt-output" value="chatterbox" />
+              <span>
+                <strong>Chatterbox TTS</strong>
+                <small>On-device Moonshine STT → Ollama LLM → Chatterbox voice-clone TTS. No API key needed.</small>
+              </span>
+            </label>
           </div>
           <select id="local-stt-response" class="sr-only" aria-hidden="true" tabindex="-1">
             <option value="openai">OpenAI Realtime</option>
             <option value="huggingface">Hugging Face</option>
             <option value="gemini_tts">Gemini Flash 3.1 TTS</option>
+            <option value="chatterbox">Chatterbox TTS</option>
           </select>
+
+          <div id="chatterbox-fields" style="display:none">
+            <label for="chatterbox-url">Chatterbox server URL</label>
+            <input id="chatterbox-url" type="text" placeholder="http://astralplane.lan:8004" autocomplete="off" />
+            <label for="chatterbox-voice">Voice name</label>
+            <input id="chatterbox-voice" type="text" placeholder="don_rickles" autocomplete="off" />
+          </div>
 
           <label for="local-stt-model">Local STT model</label>
           <select id="local-stt-model">

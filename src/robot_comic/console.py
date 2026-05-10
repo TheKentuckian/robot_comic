@@ -30,6 +30,11 @@ from robot_comic.config import (
     OPENAI_BACKEND,
     LOCAL_STT_BACKEND,
     GEMINI_TTS_OUTPUT,
+    CHATTERBOX_OUTPUT,
+    CHATTERBOX_URL_ENV,
+    CHATTERBOX_VOICE_ENV,
+    CHATTERBOX_DEFAULT_URL,
+    CHATTERBOX_DEFAULT_VOICE,
     LOCAL_STT_MODEL_ENV,
     HF_REALTIME_WS_URL_ENV,
     LOCAL_STT_LANGUAGE_ENV,
@@ -192,6 +197,8 @@ class LocalStream:
                 return has_hf_realtime_target()
             if response_backend == GEMINI_TTS_OUTPUT:
                 return self._has_key(config.GEMINI_API_KEY)
+            if response_backend == CHATTERBOX_OUTPUT:
+                return True  # no API key needed; server URL has a usable default
             return self._has_key(config.OPENAI_API_KEY)
         return self._has_key(config.OPENAI_API_KEY)
 
@@ -316,18 +323,23 @@ class LocalStream:
         language: str,
         model: str,
         update_interval: float,
+        chatterbox_url: Optional[str] = None,
+        chatterbox_voice: Optional[str] = None,
     ) -> None:
         """Persist local STT settings to environment and instance `.env`."""
-        self._persist_env_values(
-            {
-                LOCAL_STT_PROVIDER_ENV: "moonshine",
-                LOCAL_STT_RESPONSE_BACKEND_ENV: response_backend,
-                LOCAL_STT_CACHE_DIR_ENV: cache_dir,
-                LOCAL_STT_LANGUAGE_ENV: language,
-                LOCAL_STT_MODEL_ENV: model,
-                LOCAL_STT_UPDATE_INTERVAL_ENV: f"{update_interval:.2f}",
-            }
-        )
+        values: dict[str, str] = {
+            LOCAL_STT_PROVIDER_ENV: "moonshine",
+            LOCAL_STT_RESPONSE_BACKEND_ENV: response_backend,
+            LOCAL_STT_CACHE_DIR_ENV: cache_dir,
+            LOCAL_STT_LANGUAGE_ENV: language,
+            LOCAL_STT_MODEL_ENV: model,
+            LOCAL_STT_UPDATE_INTERVAL_ENV: f"{update_interval:.2f}",
+        }
+        if chatterbox_url is not None:
+            values[CHATTERBOX_URL_ENV] = chatterbox_url
+        if chatterbox_voice is not None:
+            values[CHATTERBOX_VOICE_ENV] = chatterbox_voice
+        self._persist_env_values(values)
 
     def _persist_backend_choice(self, backend: str) -> None:
         """Persist the selected backend without clobbering explicit model overrides."""
@@ -452,6 +464,8 @@ class LocalStream:
             local_stt_language: Optional[str] = None
             local_stt_model: Optional[str] = None
             local_stt_update_interval: Optional[float] = None
+            chatterbox_url: Optional[str] = None
+            chatterbox_voice: Optional[str] = None
 
         def _status_payload() -> dict[str, object]:
             backend_provider = get_backend_choice()
@@ -471,6 +485,7 @@ class LocalStream:
             can_proceed_with_gemini = has_gemini_key
             can_proceed_with_hf = has_hf_connection
             can_proceed_with_local_stt = has_local_stt_key
+            can_proceed_with_chatterbox = True  # no API key required
             can_proceed = self._has_required_key(active_backend)
             requires_restart = backend_provider != active_backend
             return {
@@ -494,11 +509,14 @@ class LocalStream:
                 "local_stt_model": getattr(config, "LOCAL_STT_MODEL", "tiny_streaming"),
                 "local_stt_update_interval": getattr(config, "LOCAL_STT_UPDATE_INTERVAL", 0.35),
                 "local_stt_model_choices": list(LOCAL_STT_MODEL_CHOICES),
+                "chatterbox_url": getattr(config, "CHATTERBOX_URL", CHATTERBOX_DEFAULT_URL),
+                "chatterbox_voice": getattr(config, "CHATTERBOX_VOICE", CHATTERBOX_DEFAULT_VOICE),
                 "can_proceed": can_proceed,
                 "can_proceed_with_openai": can_proceed_with_openai,
                 "can_proceed_with_gemini": can_proceed_with_gemini,
                 "can_proceed_with_hf": can_proceed_with_hf,
                 "can_proceed_with_local_stt": can_proceed_with_local_stt,
+                "can_proceed_with_chatterbox": can_proceed_with_chatterbox,
                 "requires_restart": requires_restart,
                 **self._crowd_history_status(),
             }
@@ -574,6 +592,7 @@ class LocalStream:
                 and not self._has_key(config.GEMINI_API_KEY)
             ):
                 return JSONResponse({"ok": False, "error": "empty_key"}, status_code=400)
+            # Chatterbox needs no API key — always allowed
 
             if backend == OPENAI_BACKEND and api_key:
                 self._persist_api_key(api_key)
@@ -610,12 +629,16 @@ class LocalStream:
                 if update_interval < 0.1 or update_interval > 2.0:
                     return JSONResponse({"ok": False, "error": "invalid_local_stt_update_interval"}, status_code=400)
 
+                chatterbox_url_val = (payload.chatterbox_url or "").strip() or None
+                chatterbox_voice_val = (payload.chatterbox_voice or "").strip() or None
                 self._persist_local_stt_settings(
                     response_backend=local_stt_response_backend,
                     cache_dir=cache_dir,
                     language=language.lower(),
                     model=model,
                     update_interval=update_interval,
+                    chatterbox_url=chatterbox_url_val if local_stt_response_backend == CHATTERBOX_OUTPUT else None,
+                    chatterbox_voice=chatterbox_voice_val if local_stt_response_backend == CHATTERBOX_OUTPUT else None,
                 )
             if backend == HF_BACKEND or (backend == LOCAL_STT_BACKEND and local_stt_response_backend == HF_BACKEND):
                 hf_selection = get_hf_connection_selection()

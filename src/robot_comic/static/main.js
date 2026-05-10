@@ -3,6 +3,7 @@ const GEMINI_BACKEND = "gemini";
 const HF_BACKEND = "huggingface";
 const LOCAL_STT_BACKEND = "local_stt";
 const GEMINI_TTS_OUTPUT = "gemini_tts";
+const CHATTERBOX_OUTPUT = "chatterbox";
 const DEFAULT_BACKEND = HF_BACKEND;
 const HF_DEFAULT_HOST = "localhost";
 const HF_DEFAULT_PORT = 8765;
@@ -138,6 +139,10 @@ function journeyMeta(backend, outputBackend = OPENAI_BACKEND) {
       meta.brainLabel = "Gemini Flash response backend";
       meta.outputLabel = "Gemini Flash 3.1 TTS";
       meta.outputCopy = "Speech comes back through Gemini 3.1 Flash TTS with the Algenib voice.";
+    } else if (outputBackend === CHATTERBOX_OUTPUT) {
+      meta.brainLabel = "Ollama LLM (local)";
+      meta.outputLabel = "Chatterbox TTS";
+      meta.outputCopy = "Text goes to the local Ollama model, then to Chatterbox voice-clone TTS.";
     } else {
       meta.brainLabel = "OpenAI response backend";
       meta.outputLabel = "OpenAI voice";
@@ -233,6 +238,12 @@ async function saveBackendConfig(backend, { key = "", hfMode = "", hfHost = "", 
     body.local_stt_model = modelEl?.value || "tiny_streaming";
     const updateInterval = Number.parseFloat((updateEl?.value || "0.35").trim());
     if (Number.isFinite(updateInterval)) body.local_stt_update_interval = updateInterval;
+    if (responseEl?.value === CHATTERBOX_OUTPUT) {
+      const urlEl = document.getElementById("chatterbox-url");
+      const voiceEl = document.getElementById("chatterbox-voice");
+      if (urlEl?.value.trim()) body.chatterbox_url = urlEl.value.trim();
+      if (voiceEl?.value.trim()) body.chatterbox_voice = voiceEl.value.trim();
+    }
   }
   const resp = await fetch("/backend_config", {
     method: "POST",
@@ -515,6 +526,10 @@ async function init() {
     }
     localSttModel.value = choices.includes(status.local_stt_model) ? status.local_stt_model : choices[0];
     localSttUpdate.value = String(status.local_stt_update_interval || 0.35);
+    const chatterboxUrl = document.getElementById("chatterbox-url");
+    const chatterboxVoice = document.getElementById("chatterbox-voice");
+    if (chatterboxUrl) chatterboxUrl.value = status.chatterbox_url || "http://astralplane.lan:8004";
+    if (chatterboxVoice) chatterboxVoice.value = status.chatterbox_voice || "don_rickles";
     setSelectedLocalSTTOutput(localSttResponse.value || OPENAI_BACKEND);
   }
 
@@ -544,7 +559,9 @@ async function init() {
       ? HF_BACKEND
       : outputBackend === GEMINI_TTS_OUTPUT
         ? GEMINI_TTS_OUTPUT
-        : OPENAI_BACKEND;
+        : outputBackend === CHATTERBOX_OUTPUT
+          ? CHATTERBOX_OUTPUT
+          : OPENAI_BACKEND;
     localSttResponse.value = normalized;
     localSttOutputInputs.forEach((radio) => {
       radio.checked = radio.value === normalized;
@@ -552,6 +569,8 @@ async function init() {
     localSttOutputCards.forEach((card) => {
       card.classList.toggle("is-selected", card.dataset.outputCard === normalized);
     });
+    const chatterboxFields = document.getElementById("chatterbox-fields");
+    if (chatterboxFields) chatterboxFields.style.display = normalized === CHATTERBOX_OUTPUT ? "" : "none";
   }
 
   function renderJourneyMap() {
@@ -573,14 +592,17 @@ async function init() {
     const selectedMatchesActive = selectedBackend === activeBackend;
     const localSttUsesHF = selectedBackend === LOCAL_STT_BACKEND && localSttResponse.value === HF_BACKEND;
     const localSttUsesGeminiTTS = selectedBackend === LOCAL_STT_BACKEND && localSttResponse.value === GEMINI_TTS_OUTPUT;
-    const localSttUsesOpenAI = selectedBackend === LOCAL_STT_BACKEND && !localSttUsesHF && !localSttUsesGeminiTTS;
+    const localSttUsesChatterbox = selectedBackend === LOCAL_STT_BACKEND && localSttResponse.value === CHATTERBOX_OUTPUT;
+    const localSttUsesOpenAI = selectedBackend === LOCAL_STT_BACKEND && !localSttUsesHF && !localSttUsesGeminiTTS && !localSttUsesChatterbox;
     const canProceedWithSelectedBackend = localSttUsesHF
       ? backendCanProceed(status, HF_BACKEND)
       : localSttUsesGeminiTTS
         ? backendCanProceed(status, GEMINI_BACKEND)
-        : localSttUsesOpenAI
-          ? backendCanProceed(status, OPENAI_BACKEND)
-          : backendCanProceed(status, selectedBackend);
+        : localSttUsesChatterbox
+          ? !!(status.can_proceed_with_chatterbox ?? true)
+          : localSttUsesOpenAI
+            ? backendCanProceed(status, OPENAI_BACKEND)
+            : backendCanProceed(status, selectedBackend);
     const usesApiKeyForm = selectedBackend === OPENAI_BACKEND || selectedBackend === GEMINI_BACKEND || localSttUsesOpenAI || localSttUsesGeminiTTS;
     const usesHFForm = selectedBackend === HF_BACKEND || localSttUsesHF;
     const usesLocalSTTForm = selectedBackend === LOCAL_STT_BACKEND;
@@ -841,6 +863,19 @@ async function init() {
         setStatusMessage(statusEl, "Use an update interval from 0.1 to 2.0 seconds.", "warn");
         return;
       }
+    }
+
+    // Chatterbox needs no API key — save directly
+    if (selectedBackend === LOCAL_STT_BACKEND && localSttResponse.value === CHATTERBOX_OUTPUT) {
+      setStatusMessage(statusEl, "Saving Chatterbox config...");
+      try {
+        await saveBackendConfig(selectedBackend, {});
+        setStatusMessage(statusEl, "Saved. Reloading…", "ok");
+        window.location.reload();
+      } catch (e) {
+        setStatusMessage(statusEl, "Failed to save Chatterbox config. Please try again.", "error");
+      }
+      return;
     }
 
     const key = input.value.trim();
