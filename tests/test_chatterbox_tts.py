@@ -348,3 +348,76 @@ def test_parse_text_tool_args_empty_string() -> None:
 
     result = _parse_text_tool_args("")
     assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# _parse_json_content_tool_call
+# ---------------------------------------------------------------------------
+
+
+def test_parse_json_content_openai_style() -> None:
+    from robot_comic.chatterbox_tts import _parse_json_content_tool_call
+
+    text = '{"function": {"name": "greet", "arguments": {"action": "scan"}}}'
+    result = _parse_json_content_tool_call(text)
+    assert result == ("greet", {"action": "scan"})
+
+
+def test_parse_json_content_flat_style() -> None:
+    from robot_comic.chatterbox_tts import _parse_json_content_tool_call
+
+    text = '{"name": "play_emotion", "arguments": {"emotion": "laughing1"}}'
+    result = _parse_json_content_tool_call(text)
+    assert result == ("play_emotion", {"emotion": "laughing1"})
+
+
+def test_parse_json_content_flat_style_no_arguments_key() -> None:
+    from robot_comic.chatterbox_tts import _parse_json_content_tool_call
+
+    # {"name": "greet"} with no arguments key — returns empty dict for args
+    text = '{"name": "greet"}'
+    result = _parse_json_content_tool_call(text)
+    assert result == ("greet", {})
+
+
+def test_parse_json_content_returns_none_for_plain_text() -> None:
+    from robot_comic.chatterbox_tts import _parse_json_content_tool_call
+
+    assert _parse_json_content_tool_call("Hello, how are you?") is None
+
+
+def test_parse_json_content_returns_none_for_invalid_json() -> None:
+    from robot_comic.chatterbox_tts import _parse_json_content_tool_call
+
+    assert _parse_json_content_tool_call("{not valid json}") is None
+
+
+def test_parse_json_content_returns_none_for_json_without_name() -> None:
+    from robot_comic.chatterbox_tts import _parse_json_content_tool_call
+
+    assert _parse_json_content_tool_call('{"foo": "bar"}') is None
+
+
+@pytest.mark.asyncio
+async def test_call_llm_detects_json_content_tool_call() -> None:
+    """_call_llm dispatches a JSON-format tool call found in the content field."""
+    import httpx
+
+    handler = _make_handler()
+
+    fake_resp = MagicMock(spec=httpx.Response)
+    fake_resp.raise_for_status = MagicMock()
+    fake_resp.json.return_value = {
+        "message": {
+            "content": '{"function": {"name": "greet", "arguments": {"action": "scan"}}}',
+            "tool_calls": [],
+        }
+    }
+    handler._http.post = AsyncMock(return_value=fake_resp)
+
+    text, tool_calls = await handler._call_llm()
+
+    assert text == ""
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "greet"
+    assert tool_calls[0]["function"]["arguments"] == {"action": "scan"}

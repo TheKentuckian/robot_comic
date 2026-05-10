@@ -81,6 +81,42 @@ def _parse_text_tool_args(kv_str: str) -> dict[str, Any]:
     return args
 
 
+def _parse_json_content_tool_call(text: str) -> tuple[str, dict[str, Any]] | None:
+    """Try to extract a tool call from JSON-formatted content text.
+
+    Handles two shapes Hermes3 may emit:
+      OpenAI-style: {"function": {"name": "...", "arguments": {...}}}
+      Flat-style:   {"name": "...", "arguments": {...}}
+
+    Returns (fn_name, args) or None if the text is not a recognisable tool call.
+    """
+    text = text.strip()
+    if not text.startswith("{"):
+        return None
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    # OpenAI-style: {"function": {"name": "...", "arguments": {...}}}
+    fn = data.get("function")
+    if isinstance(fn, dict):
+        name = fn.get("name")
+        if name and isinstance(name, str):
+            args = fn.get("arguments") or {}
+            return name, args if isinstance(args, dict) else {}
+
+    # Flat-style: {"name": "...", "arguments": {...}}
+    name = data.get("name")
+    if name and isinstance(name, str):
+        args = data.get("arguments") or {}
+        return name, args if isinstance(args, dict) else {}
+
+    return None
+
+
 def _split_sentences(text: str) -> list[str]:
     """Split text at sentence boundaries for per-sentence TTS pipelining."""
     text = text.strip()
@@ -399,6 +435,18 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                         tool_calls = [{"function": {"name": fn_name, "arguments": args}}]
                         logger.warning(
                             "Hermes3 text-format tool call in content field: %s(%r) — dispatching and suppressing TTS",
+                            fn_name, args,
+                        )
+                        text = ""
+
+                # Hermes3 may also emit JSON-format tool calls in the content field
+                if not tool_calls and text:
+                    json_tc = _parse_json_content_tool_call(text)
+                    if json_tc is not None:
+                        fn_name, args = json_tc
+                        tool_calls = [{"function": {"name": fn_name, "arguments": args}}]
+                        logger.warning(
+                            "Hermes3 JSON-format tool call in content field: %s(%r) — dispatching and suppressing TTS",
                             fn_name, args,
                         )
                         text = ""
