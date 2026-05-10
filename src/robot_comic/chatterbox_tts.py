@@ -17,6 +17,7 @@ import numpy as np
 from fastrtc import AdditionalOutputs, wait_for_item
 from scipy.signal import resample
 
+from robot_comic.chatterbox_tag_translator import translate
 from robot_comic.config import (
     CHATTERBOX_DEFAULT_CFG_WEIGHT,
     CHATTERBOX_DEFAULT_EXAGGERATION,
@@ -219,14 +220,28 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             AdditionalOutputs({"role": "assistant", "content": response_text})
         )
 
-        pcm = await self._call_chatterbox_tts(response_text)
-        if pcm is None:
+        persona = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None) or "default"
+        segments = translate(response_text, persona=persona, use_turbo=False)
+
+        pcm_parts: list[bytes] = []
+        for seg in segments:
+            if seg.silence_ms:
+                pcm_parts.append(self._silence_pcm(seg.silence_ms))
+            else:
+                text = f"{seg.turbo_insert} {seg.text}" if seg.turbo_insert else seg.text
+                pcm = await self._call_chatterbox_tts(
+                    text, exaggeration=seg.exaggeration, cfg_weight=seg.cfg_weight
+                )
+                if pcm:
+                    pcm_parts.append(pcm)
+
+        if not pcm_parts:
             await self.output_queue.put(
                 AdditionalOutputs({"role": "assistant", "content": "[TTS error]"})
             )
             return
 
-        for frame in self._pcm_to_frames(pcm):
+        for frame in self._pcm_to_frames(b"".join(pcm_parts)):
             await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
 
     async def _call_llm(self) -> str:
@@ -255,7 +270,13 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                 delay *= 2
         return ""
 
-    async def _call_chatterbox_tts(self, text: str) -> bytes | None:
+    async def _call_chatterbox_tts(
+        self,
+        text: str,
+        *,
+        exaggeration: float | None = None,
+        cfg_weight: float | None = None,
+    ) -> bytes | None:
         """POST to Chatterbox /tts in clone mode; return raw WAV bytes."""
         assert self._http is not None
         voice = self._chatterbox_voice
@@ -265,8 +286,8 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             "voice_mode": "clone",
             "reference_audio_filename": ref_file,
             "output_format": "wav",
-            "exaggeration": self._exaggeration,
-            "cfg_weight": self._cfg_weight,
+            "exaggeration": exaggeration if exaggeration is not None else self._exaggeration,
+            "cfg_weight": cfg_weight if cfg_weight is not None else self._cfg_weight,
             "temperature": self._temperature,
         }
 
@@ -280,6 +301,11 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                 if attempt < _TTS_MAX_RETRIES - 1:
                     await asyncio.sleep(_TTS_RETRY_DELAY)
         return None
+
+    @staticmethod
+    def _silence_pcm(duration_ms: int) -> bytes:
+        n_samples = int(_OUTPUT_SAMPLE_RATE * duration_ms / 1000)
+        return np.zeros(n_samples, dtype=np.int16).tobytes()
 
     @staticmethod
     def _wav_to_pcm(wav_bytes: bytes) -> bytes:

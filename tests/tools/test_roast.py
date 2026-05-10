@@ -12,7 +12,7 @@ import pytest
 from robot_comic.tools.core_tools import ToolDependencies
 
 
-_PROFILE_PATH = Path(__file__).parents[2] / "profiles" / "don_rickles" / "roast.py"
+_PROFILE_PATH = Path(__file__).parents[2] / "src" / "robot_comic" / "tools" / "roast.py"
 
 
 def _load_roast_module():

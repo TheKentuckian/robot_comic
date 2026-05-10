@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 import pytest
 
 
-# Load CrowdWork from its profile path (not on sys.path)
-_PROFILE_PATH = Path(__file__).parents[2] / "profiles" / "don_rickles" / "crowd_work.py"
+# Load CrowdWork from its package path (moved from profiles/don_rickles/ to tools/)
+_PROFILE_PATH = Path(__file__).parents[2] / "src" / "robot_comic" / "tools" / "crowd_work.py"
 
 
 def _load_crowd_work():

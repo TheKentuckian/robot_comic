@@ -12,11 +12,11 @@ import numpy as np
 import pytest
 
 
-_PROFILE_PATH = Path(__file__).parents[2] / "profiles" / "don_rickles" / "greet.py"
+_PROFILE_PATH = Path(__file__).parents[2] / "src" / "robot_comic" / "tools" / "greet.py"
 
 
 def _load_greet_module():
-    """Load greet.py from its profile path using importlib."""
+    """Load greet.py from its package path using importlib."""
     spec = importlib.util.spec_from_file_location("don_rickles_greet", _PROFILE_PATH)
     assert spec and spec.loader, f"Cannot load module from {_PROFILE_PATH}"
     mod = importlib.util.module_from_spec(spec)
