@@ -319,31 +319,12 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
     async def _handle_tool_notification(self, notification: ToolNotification) -> None:
         logger.info("Tool %s finished: status=%s", notification.tool_name, notification.status.value)
 
-    async def _dispatch_completed_transcript(self, transcript: str) -> None:
-        """LLM → tool dispatch → TTS → PCM frames."""
-        self._conversation_history.append({"role": "user", "content": transcript})
-
-        try:
-            response_text, tool_calls, raw_message = await self._call_llm()
-        except Exception as exc:
-            logger.warning("LLM call failed: %s", exc)
-            return
-
-        self._conversation_history.append(raw_message)
-
-        if tool_calls:
-            await self._start_tool_calls(tool_calls)
-
-        await self.output_queue.put(
-            AdditionalOutputs({"role": "assistant", "content": response_text})
-        )
-
+    async def _synthesize_and_enqueue(self, response_text: str) -> None:
+        """Translate response_text to TTS segments and enqueue PCM frames."""
         if not response_text:
             return
-
         persona = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None) or "default"
         segments = translate(response_text, persona=persona, use_turbo=False)
-
         any_audio = False
         for seg in segments:
             if seg.silence_ms:
@@ -360,11 +341,64 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                         for frame in self._pcm_to_frames(pcm):
                             await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
                         any_audio = True
-
         if not any_audio:
             await self.output_queue.put(
                 AdditionalOutputs({"role": "assistant", "content": "[TTS error]"})
             )
+
+    async def _dispatch_completed_transcript(self, transcript: str) -> None:
+        """LLM → tool dispatch → TTS → PCM frames (two-phase with query-tool feedback)."""
+        from robot_comic.tools.background_tool_manager import BackgroundTool
+
+        self._conversation_history.append({"role": "user", "content": transcript})
+
+        try:
+            response_text, tool_calls, raw_message = await self._call_llm()
+        except Exception as exc:
+            logger.warning("LLM call failed: %s", exc)
+            return
+
+        self._conversation_history.append(raw_message)
+
+        bg_tools: list[tuple[str, BackgroundTool]] = []
+        if tool_calls:
+            bg_tools = await self._start_tool_calls(tool_calls)
+
+        await self.output_queue.put(
+            AdditionalOutputs({"role": "assistant", "content": response_text})
+        )
+        await self._synthesize_and_enqueue(response_text)
+
+        if not bg_tools:
+            return
+
+        tool_results = await self._await_tool_results(bg_tools)
+        meaningful = {
+            cid: result
+            for cid, result in tool_results.items()
+            if self._is_meaningful_result(result)
+        }
+        if not meaningful:
+            return
+
+        for call_id, result in meaningful.items():
+            self._conversation_history.append({
+                "role": "tool",
+                "content": json.dumps(result),
+                "tool_call_id": call_id,
+            })
+
+        try:
+            follow_up_text, _, _ = await self._call_llm()
+        except Exception as exc:
+            logger.warning("Phase-2 LLM call failed: %s", exc)
+            return
+
+        self._conversation_history.append({"role": "assistant", "content": follow_up_text})
+        await self.output_queue.put(
+            AdditionalOutputs({"role": "assistant", "content": follow_up_text})
+        )
+        await self._synthesize_and_enqueue(follow_up_text)
 
     async def _start_tool_calls(
         self, tool_calls: list[dict[str, Any]]

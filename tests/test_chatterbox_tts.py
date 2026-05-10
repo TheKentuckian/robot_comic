@@ -271,6 +271,193 @@ async def test_start_tool_calls_returns_bg_tools() -> None:
     assert {bg.tool_name for _, bg in result} == {"dance", "play_emotion"}
 
 
+# ---------------------------------------------------------------------------
+# Two-phase tool result feedback (end-to-end)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_second_llm_pass_fires_on_meaningful_result() -> None:
+    """Camera returns a long description → two LLM calls, two TTS calls."""
+    from robot_comic.tools.background_tool_manager import BackgroundTool, ToolState
+
+    handler = _make_handler()
+    tts_texts: list[str] = []
+    camera_result = {
+        "description": "A young woman with curly red hair stands close to the camera, grinning wide."
+    }
+
+    async def instant_task() -> None:
+        pass
+
+    bg_tool = BackgroundTool(
+        id="cam1",
+        tool_name="camera",
+        is_idle_tool_call=False,
+        status=ToolState.COMPLETED,
+        result=camera_result,
+    )
+    bg_tool._task = asyncio.create_task(instant_task())
+
+    call_count = 0
+
+    async def patched_llm():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return (
+                "Let me take a look!",
+                [{"function": {"name": "camera", "arguments": {}}}],
+                {"role": "assistant", "content": "Let me take a look!",
+                 "tool_calls": [{"function": {"name": "camera", "arguments": {}}}]},
+            )
+        return "Oh yeah, I see a grinning woman!", [], {"role": "assistant", "content": "Oh yeah, I see a grinning woman!"}
+
+    async def fake_tts(text: str, *, exaggeration=None, cfg_weight=None) -> bytes:
+        tts_texts.append(text)
+        return _pcm_bytes(2400)
+
+    async def fake_start_tool_calls(tool_calls):
+        return [("cam1", bg_tool)]
+
+    handler._call_llm = patched_llm  # type: ignore[method-assign]
+    handler._call_chatterbox_tts = fake_tts  # type: ignore[method-assign]
+    handler._start_tool_calls = fake_start_tool_calls  # type: ignore[method-assign]
+
+    await handler._dispatch_completed_transcript("what do you see?")
+
+    assert call_count == 2, f"Expected 2 LLM calls, got {call_count}"
+    assert len(tts_texts) >= 2
+
+
+@pytest.mark.asyncio
+async def test_no_second_pass_for_action_tools() -> None:
+    """Dance returns {} → only one LLM call is made."""
+    from robot_comic.tools.background_tool_manager import BackgroundTool, ToolState
+
+    handler = _make_handler()
+    llm_call_count = 0
+
+    async def instant_task() -> None:
+        pass
+
+    bg_tool = BackgroundTool(
+        id="dance1",
+        tool_name="dance",
+        is_idle_tool_call=False,
+        status=ToolState.COMPLETED,
+        result={},
+    )
+    bg_tool._task = asyncio.create_task(instant_task())
+
+    async def patched_llm():
+        nonlocal llm_call_count
+        llm_call_count += 1
+        return (
+            "I'll dance for you!",
+            [{"function": {"name": "dance", "arguments": {}}}],
+            {"role": "assistant", "content": "I'll dance for you!",
+             "tool_calls": [{"function": {"name": "dance", "arguments": {}}}]},
+        )
+
+    async def fake_tts(text: str, *, exaggeration=None, cfg_weight=None) -> bytes:
+        return _pcm_bytes(2400)
+
+    async def fake_start_tool_calls(tool_calls):
+        return [("dance1", bg_tool)]
+
+    handler._call_llm = patched_llm  # type: ignore[method-assign]
+    handler._call_chatterbox_tts = fake_tts  # type: ignore[method-assign]
+    handler._start_tool_calls = fake_start_tool_calls  # type: ignore[method-assign]
+
+    await handler._dispatch_completed_transcript("dance!")
+
+    assert llm_call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_message_appended_to_history() -> None:
+    """A role=tool message with tool_call_id appears in history before the second LLM call."""
+    from robot_comic.tools.background_tool_manager import BackgroundTool, ToolState
+
+    handler = _make_handler()
+    messages_seen_on_second_call: list[dict] = []
+    call_count = 0
+    camera_result = {
+        "description": "An older gentleman in a Hawaiian shirt waves at the camera enthusiastically."
+    }
+
+    async def instant_task() -> None:
+        pass
+
+    bg_tool = BackgroundTool(
+        id="cam2",
+        tool_name="camera",
+        is_idle_tool_call=False,
+        status=ToolState.COMPLETED,
+        result=camera_result,
+    )
+    bg_tool._task = asyncio.create_task(instant_task())
+
+    async def patched_llm():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return (
+                "Checking the camera!",
+                [{"function": {"name": "camera", "arguments": {}}}],
+                {"role": "assistant", "content": "Checking the camera!",
+                 "tool_calls": [{"function": {"name": "camera", "arguments": {}}}]},
+            )
+        messages_seen_on_second_call.extend(list(handler._conversation_history))
+        return "I see someone waving!", [], {"role": "assistant", "content": "I see someone waving!"}
+
+    async def fake_tts(text: str, *, exaggeration=None, cfg_weight=None) -> bytes:
+        return _pcm_bytes(2400)
+
+    async def fake_start_tool_calls(tool_calls):
+        return [("cam2", bg_tool)]
+
+    handler._call_llm = patched_llm  # type: ignore[method-assign]
+    handler._call_chatterbox_tts = fake_tts  # type: ignore[method-assign]
+    handler._start_tool_calls = fake_start_tool_calls  # type: ignore[method-assign]
+
+    await handler._dispatch_completed_transcript("who's there?")
+
+    tool_messages = [m for m in messages_seen_on_second_call if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["tool_call_id"] == "cam2"
+    import json as _json
+    content = _json.loads(tool_messages[0]["content"])
+    assert "description" in content
+
+
+@pytest.mark.asyncio
+async def test_assistant_message_preserves_tool_calls_field() -> None:
+    """When Ollama returns tool_calls, the history entry has a tool_calls field."""
+    handler = _make_handler()
+
+    async def patched_llm():
+        raw_msg = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"function": {"name": "dance", "arguments": {}}}],
+        }
+        return "", [{"function": {"name": "dance", "arguments": {}}}], raw_msg
+
+    async def fake_start_tool_calls(tool_calls):
+        return []
+
+    handler._call_llm = patched_llm  # type: ignore[method-assign]
+    handler._start_tool_calls = fake_start_tool_calls  # type: ignore[method-assign]
+
+    await handler._dispatch_completed_transcript("dance!")
+
+    assistant_entries = [m for m in handler._conversation_history if m.get("role") == "assistant"]
+    assert len(assistant_entries) == 1
+    assert "tool_calls" in assistant_entries[0]
+    assert assistant_entries[0]["tool_calls"][0]["function"]["name"] == "dance"
+
+
 def _drain_queue(q: asyncio.Queue) -> list:
     items = []
     while not q.empty():
