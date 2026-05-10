@@ -384,26 +384,36 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             except Exception as exc:
                 logger.warning("Failed to dispatch tool %s: %s", tool_name, exc)
 
+    # Maximum enum values to keep per parameter. Larger enums (e.g. 81 emotions) dominate
+    # the tools payload and push the combined prompt past Hermes3 8B's effective persona
+    # range (~2500 tokens), causing it to ignore the system-prompt character entirely.
+    _MAX_ENUM_VALUES = 8
+
     @staticmethod
     def _trim_tool_spec(s: dict[str, Any]) -> dict[str, Any]:
-        """Strip verbose parameter descriptions so the tools payload stays under ~1500 prompt tokens.
+        """Strip verbose content from tool specs to keep the tools payload compact.
 
-        Hermes3 8B ignores its system-prompt persona when the combined prompt exceeds ~2500
-        tokens — it reverts to its baked-in "I am Hermes" identity. The play_emotion spec
-        alone contributes ~1500 tokens of prose that duplicates what the system prompt already
-        says. Keeping only the enum list (not the per-value prose) cuts this to <100 tokens.
+        Hermes3 8B ignores its system-prompt persona when the combined prompt exceeds
+        ~2500 tokens. Trimming strategies:
+          - Top-level description → 80 chars
+          - Per-property description → 50 chars
+          - Enum arrays → first _MAX_ENUM_VALUES entries (large enums, e.g. 81 emotions,
+            cost ~250 tokens on their own and are the main culprit)
         """
         import copy
         params = copy.deepcopy(s.get("parameters", {}))
         for prop in params.get("properties", {}).values():
             desc = prop.get("description", "")
-            if len(desc) > 120:
-                prop["description"] = desc[:120]
+            if len(desc) > 50:
+                prop["description"] = desc[:50]
+            enum_vals = prop.get("enum")
+            if isinstance(enum_vals, list) and len(enum_vals) > ChatterboxTTSResponseHandler._MAX_ENUM_VALUES:
+                prop["enum"] = enum_vals[:ChatterboxTTSResponseHandler._MAX_ENUM_VALUES]
         return {
             "type": "function",
             "function": {
                 "name": s["name"],
-                "description": s["description"][:200],
+                "description": s["description"][:80],
                 "parameters": params,
             },
         }
@@ -444,12 +454,13 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         tool_specs = get_active_tool_specs(self.deps)
         ollama_tools = [self._trim_tool_spec(s) for s in tool_specs]
         messages = [{"role": "system", "content": system_prompt}] + self._conversation_history
-        logger.debug(
-            "_call_llm: model=%s tools=%d sys_prompt_chars=%d sys_prompt_head=%r",
+        logger.info(
+            "_call_llm: profile=%r model=%s tools=%d sys_chars=%d sys_head=%r",
+            getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None),
             getattr(config, "OLLAMA_MODEL", "hermes3:8b-llama3.1-q4_K_M"),
             len(ollama_tools),
             len(system_prompt),
-            system_prompt[:120],
+            system_prompt[:80],
         )
 
         payload: dict[str, Any] = {

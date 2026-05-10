@@ -641,3 +641,66 @@ async def test_nudge_recovers_json_content_tool_call() -> None:
     assert text == ""
     assert len(tool_calls) == 1
     assert tool_calls[0]["function"]["name"] == "play_emotion"
+
+
+# ---------------------------------------------------------------------------
+# _trim_tool_spec — enum and description trimming
+# ---------------------------------------------------------------------------
+
+def _make_spec(
+    *,
+    name: str = "my_tool",
+    description: str = "A" * 200,
+    enum: list | None = None,
+    prop_description: str = "B" * 200,
+) -> dict:
+    props: dict = {"param": {"type": "string", "description": prop_description}}
+    if enum is not None:
+        props["param"]["enum"] = enum
+    return {
+        "name": name,
+        "description": description,
+        "parameters": {"type": "object", "properties": props},
+    }
+
+
+def test_trim_tool_spec_truncates_top_level_description() -> None:
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
+    spec = _make_spec(description="X" * 300)
+    result = ChatterboxTTSResponseHandler._trim_tool_spec(spec)
+    assert len(result["function"]["description"]) == 80
+
+
+def test_trim_tool_spec_truncates_property_description() -> None:
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
+    spec = _make_spec(prop_description="Y" * 200)
+    result = ChatterboxTTSResponseHandler._trim_tool_spec(spec)
+    prop = result["function"]["parameters"]["properties"]["param"]
+    assert len(prop["description"]) == 50
+
+
+def test_trim_tool_spec_truncates_large_enum() -> None:
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
+    big_enum = [f"emotion{i}" for i in range(81)]
+    spec = _make_spec(enum=big_enum)
+    result = ChatterboxTTSResponseHandler._trim_tool_spec(spec)
+    prop = result["function"]["parameters"]["properties"]["param"]
+    assert len(prop["enum"]) == ChatterboxTTSResponseHandler._MAX_ENUM_VALUES
+    assert prop["enum"] == big_enum[: ChatterboxTTSResponseHandler._MAX_ENUM_VALUES]
+
+
+def test_trim_tool_spec_preserves_small_enum() -> None:
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
+    small_enum = ["a", "b", "c"]
+    spec = _make_spec(enum=small_enum)
+    result = ChatterboxTTSResponseHandler._trim_tool_spec(spec)
+    prop = result["function"]["parameters"]["properties"]["param"]
+    assert prop["enum"] == small_enum
+
+
+def test_trim_tool_spec_no_enum_untouched() -> None:
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
+    spec = _make_spec()
+    result = ChatterboxTTSResponseHandler._trim_tool_spec(spec)
+    prop = result["function"]["parameters"]["properties"]["param"]
+    assert "enum" not in prop
