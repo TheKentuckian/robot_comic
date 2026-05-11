@@ -16,6 +16,8 @@ from fastrtc import AdditionalOutputs, wait_for_item, audio_to_int16
 from pydantic import Field, BaseModel
 from numpy.typing import NDArray
 from scipy.signal import resample
+from opentelemetry import trace
+from opentelemetry import context as otel_context
 from openai.types.realtime import (
     RealtimeAudioConfigParam,
     RealtimeToolsConfigParam,
@@ -27,6 +29,7 @@ from openai.types.realtime import (
 from websockets.exceptions import ConnectionClosedError
 from openai.resources.realtime.realtime import AsyncRealtimeConnection
 
+from robot_comic import telemetry
 from robot_comic.config import (
     config,
     get_default_voice_for_backend,
@@ -172,6 +175,19 @@ class BaseRealtimeHandler(ConversationHandler, ABC):
         self._turn_user_done_at: float | None = None
         self._turn_response_created_at: float | None = None
         self._turn_first_audio_at: float | None = None
+
+        # OTel turn-span tracking
+        self._session_id: str = str(uuid.uuid4())
+        self._turn_id: str | None = None
+        self._turn_span: Any = None
+        self._turn_ctx_token: Any = None
+        self._turn_start_at: float | None = None
+        self._vad_start_at: float | None = None
+        self._llm_span: Any = None
+        self._llm_start_at: float | None = None
+        self._tts_span: Any = None
+        self._tts_start_at: float | None = None
+        self._current_response_has_tool_call: bool = False
 
     @staticmethod
     def _sanitize_tool_result_for_model(tool_name: str, tool_result: dict[str, Any]) -> dict[str, Any]:
@@ -356,6 +372,31 @@ class BaseRealtimeHandler(ConversationHandler, ABC):
             cost += (getattr(out, "audio_tokens", 0) or 0) * self.AUDIO_OUTPUT_COST_PER_1M / 1e6
             cost += (getattr(out, "text_tokens", 0) or 0) * self.TEXT_OUTPUT_COST_PER_1M / 1e6
         return cost
+
+    def _close_turn_span(self, outcome: str) -> None:
+        """End the active root turn span (idempotent) and record the turn-duration metric."""
+        if self._tts_span is not None:
+            self._tts_span.end()
+            self._tts_span = None
+        if self._llm_span is not None:
+            self._llm_span.end()
+            self._llm_span = None
+        if self._turn_span is not None:
+            self._turn_span.set_attribute("turn.outcome", outcome)
+            self._turn_span.end()
+            self._turn_span = None
+            if self._turn_start_at is not None:
+                telemetry.record_turn(
+                    time.perf_counter() - self._turn_start_at,
+                    {"robot.mode": self.BACKEND_PROVIDER, "turn.outcome": outcome},
+                )
+        if self._turn_ctx_token is not None:
+            otel_context.detach(self._turn_ctx_token)
+            self._turn_ctx_token = None
+        self._turn_start_at = None
+        self._vad_start_at = None
+        self._llm_start_at = None
+        self._tts_start_at = None
 
     async def _prepare_startup_credentials(self) -> None:
         """Let providers collect any startup credentials they need."""
@@ -690,6 +731,23 @@ class BaseRealtimeHandler(ConversationHandler, ABC):
                         self._turn_user_done_at = None
                         self._turn_response_created_at = None
                         self._turn_first_audio_at = None
+                        self._close_turn_span("interrupted")  # close any previous turn span
+                        self._turn_id = str(uuid.uuid4())
+                        self._turn_start_at = time.perf_counter()
+                        self._vad_start_at = self._turn_start_at
+                        self._current_response_has_tool_call = False
+                        _tracer = telemetry.get_tracer()
+                        self._turn_span = _tracer.start_span(
+                            "turn",
+                            attributes={
+                                "turn.id": self._turn_id,
+                                "session.id": self._session_id,
+                                "robot.mode": self.BACKEND_PROVIDER,
+                            },
+                        )
+                        self._turn_ctx_token = otel_context.attach(
+                            trace.set_span_in_context(self._turn_span)
+                        )
                         if hasattr(self, "_clear_queue") and callable(self._clear_queue):
                             self._clear_queue()
                         if self.deps.head_wobbler is not None:
@@ -706,6 +764,18 @@ class BaseRealtimeHandler(ConversationHandler, ABC):
                         if self.deps.head_wobbler is not None:
                             self.deps.head_wobbler.request_reset_after_current_audio()
                         logger.debug("response completed")
+                        if self._tts_span is not None and self._tts_start_at is not None:
+                            tts_s = time.perf_counter() - self._tts_start_at
+                            self._tts_span.end()
+                            self._tts_span = None
+                            telemetry.record_tts(tts_s, {"gen_ai.system": self.BACKEND_PROVIDER})
+                            if self._turn_user_done_at is not None:
+                                telemetry.record_tts_first_audio(
+                                    self._tts_start_at - self._turn_user_done_at,
+                                    {"gen_ai.system": self.BACKEND_PROVIDER},
+                                )
+                            self._tts_start_at = None
+                        self._close_turn_span("success")
 
                     if event.type == "response.created":
                         self._mark_activity("response_created")
@@ -716,11 +786,25 @@ class BaseRealtimeHandler(ConversationHandler, ABC):
                             delta_ms = (self._turn_response_created_at - self._turn_user_done_at) * 1000
                             logger.info("Turn latency: response.created %.0f ms after user transcript", delta_ms)
                         logger.debug("Response created (active)")
+                        if self._llm_span is not None:
+                            self._llm_span.end()
+                            self._llm_span = None
+                        self._llm_start_at = time.perf_counter()
+                        self._llm_span = telemetry.get_tracer().start_span(
+                            "llm.request",
+                            attributes={
+                                "gen_ai.system": self.BACKEND_PROVIDER,
+                                "gen_ai.operation.name": "chat",
+                                "gen_ai.request.model": config.MODEL_NAME,
+                            },
+                        )
 
                     if event.type == "response.done":
                         # Doesn't mean the audio is done playing
                         self._response_done_event.set()
                         self._response_started_or_rejected_event.set()
+                        had_tool_call = self._current_response_has_tool_call
+                        self._current_response_has_tool_call = False
                         self.is_idle_tool_call = False
                         logger.debug("Response done")
 
@@ -732,6 +816,31 @@ class BaseRealtimeHandler(ConversationHandler, ABC):
                             logger.debug("Cost: $%.4f | Cumulative: $%.4f", cost, self.cumulative_cost)
                         else:
                             logger.warning("No usage data available for cost tracking")
+
+                        if self._llm_span is not None and self._llm_start_at is not None:
+                            llm_s = time.perf_counter() - self._llm_start_at
+                            if usage:
+                                self._llm_span.set_attribute(
+                                    "gen_ai.usage.input_tokens", getattr(usage, "input_tokens", 0) or 0
+                                )
+                                self._llm_span.set_attribute(
+                                    "gen_ai.usage.output_tokens", getattr(usage, "output_tokens", 0) or 0
+                                )
+                            self._llm_span.end()
+                            self._llm_span = None
+                            telemetry.record_llm_duration(
+                                llm_s,
+                                {
+                                    "gen_ai.system": self.BACKEND_PROVIDER,
+                                    "gen_ai.operation.name": "chat",
+                                    "gen_ai.request.model": config.MODEL_NAME,
+                                },
+                            )
+                            self._llm_start_at = None
+                        # Close turn span only if the response contained no tool call
+                        # (tool-calling responses are followed by another response.created)
+                        if not had_tool_call:
+                            self._close_turn_span("success")
 
                     if event.type == "conversation.item.input_audio_transcription.delta":
                         self._mark_activity("user_transcription_delta")
@@ -779,10 +888,22 @@ class BaseRealtimeHandler(ConversationHandler, ABC):
                             logger.debug("Ignoring empty user transcript")
                             continue
 
-                        self._turn_user_done_at = time.perf_counter()
+                        now_pc = time.perf_counter()
+                        self._turn_user_done_at = now_pc
                         self._turn_response_created_at = None
                         self._turn_first_audio_at = None
 
+                        if self._vad_start_at is not None and self._turn_span is not None:
+                            vad_s = now_pc - self._vad_start_at
+                            _vad_span = telemetry.get_tracer().start_span(
+                                "vad.endpoint",
+                                attributes={"vad.duration_ms": round(vad_s * 1000)},
+                            )
+                            _vad_span.end()
+                            telemetry.record_stt(
+                                vad_s,
+                                {"gen_ai.system": self.BACKEND_PROVIDER, "stt.type": "server_vad"},
+                            )
                         await self.output_queue.put(AdditionalOutputs({"role": "user", "content": transcript}))
 
                         pause_controller = getattr(self.deps, "pause_controller", None)
@@ -811,6 +932,16 @@ class BaseRealtimeHandler(ConversationHandler, ABC):
                             self._turn_first_audio_at = time.perf_counter()
                             delta_ms = (self._turn_first_audio_at - self._turn_user_done_at) * 1000
                             logger.info("Turn latency: first audio delta %.0f ms after user transcript", delta_ms)
+                            ttft_s = self._turn_first_audio_at - self._turn_user_done_at
+                            if self._llm_span is not None:
+                                self._llm_span.set_attribute("gen_ai.server.time_to_first_token", ttft_s)
+                            telemetry.record_ttft(
+                                ttft_s,
+                                {"gen_ai.system": self.BACKEND_PROVIDER, "gen_ai.request.model": config.MODEL_NAME},
+                            )
+                            if self._tts_span is None:
+                                self._tts_start_at = self._turn_first_audio_at
+                                self._tts_span = telemetry.get_tracer().start_span("tts.synthesize")
                         await self.output_queue.put(
                             (
                                 self.output_sample_rate,
@@ -819,6 +950,7 @@ class BaseRealtimeHandler(ConversationHandler, ABC):
                         )
                     # ---- tool-calling plumbing ----
                     if event.type == "response.function_call_arguments.done":
+                        self._current_response_has_tool_call = True
                         self._mark_activity("tool_call_received")
                         tool_name = getattr(event, "name", None)
                         args_json_str = getattr(event, "arguments", None)

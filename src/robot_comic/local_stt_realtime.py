@@ -10,6 +10,8 @@ import numpy as np
 from fastrtc import AdditionalOutputs, audio_to_float32
 from numpy.typing import NDArray
 from scipy.signal import resample
+from opentelemetry import trace
+from opentelemetry import context as otel_context
 from openai.types.realtime import (
     RealtimeAudioConfigParam,
     RealtimeAudioConfigOutputParam,
@@ -19,6 +21,7 @@ from openai.types.realtime import (
 from openai.types.realtime.realtime_audio_formats_param import AudioPCM
 
 from robot_comic.pause import TranscriptDisposition
+from robot_comic import telemetry
 from robot_comic.config import (
     HF_BACKEND,
     OPENAI_BACKEND,
@@ -195,12 +198,47 @@ class LocalSTTInputMixin:
 
     async def _handle_local_stt_event(self, kind: str, text: str) -> None:
         """Handle local STT lifecycle events inside the asyncio loop."""
+        import uuid as _uuid
         transcript = (text or "").strip()
         if kind == "started":
             self._mark_activity("local_stt_speech_started")  # type: ignore[attr-defined]
             self._turn_user_done_at = None
             self._turn_response_created_at = None
             self._turn_first_audio_at = None
+            # Open root turn span and STT infer child span
+            if hasattr(self, "_close_turn_span"):
+                self._close_turn_span("interrupted")  # type: ignore[attr-defined]
+            _now = time.perf_counter()
+            _tracer = telemetry.get_tracer()
+            _turn_id = str(_uuid.uuid4())
+            if hasattr(self, "_turn_id"):
+                self._turn_id = _turn_id  # type: ignore[attr-defined]
+            if hasattr(self, "_turn_start_at"):
+                self._turn_start_at = _now  # type: ignore[attr-defined]
+            if hasattr(self, "_session_id"):
+                _session_id = self._session_id  # type: ignore[attr-defined]
+            else:
+                _session_id = ""
+            if hasattr(self, "_current_response_has_tool_call"):
+                self._current_response_has_tool_call = False  # type: ignore[attr-defined]
+            _turn_span = _tracer.start_span(
+                "turn",
+                attributes={
+                    "turn.id": _turn_id,
+                    "session.id": _session_id,
+                    "robot.mode": "local_stt",
+                },
+            )
+            if hasattr(self, "_turn_span"):
+                self._turn_span = _turn_span  # type: ignore[attr-defined]
+            _ctx_token = otel_context.attach(trace.set_span_in_context(_turn_span))
+            if hasattr(self, "_turn_ctx_token"):
+                self._turn_ctx_token = _ctx_token  # type: ignore[attr-defined]
+            _prior_stt = getattr(self, "_stt_infer_span", None)
+            if _prior_stt is not None:
+                _prior_stt.end()
+            self._stt_infer_span: Any = _tracer.start_span("stt.infer")
+            self._stt_infer_start: float = _now
             if hasattr(self, "_clear_queue") and callable(self._clear_queue):
                 self._clear_queue()
             if self.deps.head_wobbler is not None:
@@ -226,6 +264,12 @@ class LocalSTTInputMixin:
 
         self._mark_activity("local_stt_completed")  # type: ignore[attr-defined]
         self.deps.movement_manager.set_listening(False)
+        stt_span = getattr(self, "_stt_infer_span", None)
+        if stt_span is not None:
+            stt_s = now - getattr(self, "_stt_infer_start", now)
+            stt_span.end()
+            self._stt_infer_span = None
+            telemetry.record_stt(stt_s, {"gen_ai.system": "local_stt", "stt.type": "moonshine"})
         self._turn_user_done_at = now
         self._turn_response_created_at = None
         self._turn_first_audio_at = None

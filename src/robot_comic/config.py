@@ -505,6 +505,8 @@ class Config:
     GEMINI_LIVE_VIDEO_STREAMING = _env_flag("GEMINI_LIVE_VIDEO_STREAMING", default=False)
     MOVEMENT_SPEED_FACTOR = _env_float_clamped("MOVEMENT_SPEED_FACTOR", default=0.3, lo=0.1, hi=2.0)
     MOONSHINE_HEARTBEAT = _env_flag("MOONSHINE_HEARTBEAT", default=False)
+    # OTel instrumentation mode: unset=disabled, "trace"=console only, "remote"=console+OTLP
+    ROBOT_INSTRUMENTATION = os.getenv("ROBOT_INSTRUMENTATION", "")
 
     CHATTERBOX_URL = os.getenv(CHATTERBOX_URL_ENV, CHATTERBOX_DEFAULT_URL)
     CHATTERBOX_VOICE = os.getenv(CHATTERBOX_VOICE_ENV, CHATTERBOX_DEFAULT_VOICE)
@@ -638,6 +640,7 @@ def refresh_runtime_config_from_env() -> None:
     config.CHATTERBOX_TEMPERATURE = float(os.getenv("CHATTERBOX_TEMPERATURE", str(CHATTERBOX_DEFAULT_TEMPERATURE)))
     config.CHATTERBOX_GAIN = float(os.getenv("CHATTERBOX_GAIN", str(CHATTERBOX_DEFAULT_GAIN)))
     config.OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", OLLAMA_MODEL_DEFAULT)
+    config.ROBOT_INSTRUMENTATION = os.getenv("ROBOT_INSTRUMENTATION", "")
 
 
 def get_backend_choice(model_name: str | None = None) -> str:

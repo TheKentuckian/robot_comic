@@ -11,6 +11,7 @@ from collections.abc import Callable
 import numpy as np
 from numpy.typing import NDArray
 
+from robot_comic import telemetry
 from robot_comic.audio.speech_tapper import HOP_MS, SwayRollRT
 
 
@@ -131,6 +132,7 @@ class HeadWobbler:
                             with self._state_lock:
                                 self._hops_done += drop
                                 hops_done = self._hops_done
+                            telemetry.inc_frame_drops(drop, {"component": "head_wobbler"})
                             i += drop
                             continue
 

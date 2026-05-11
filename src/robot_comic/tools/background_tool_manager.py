@@ -13,6 +13,7 @@ from typing import Any, Dict, Callable, Optional, Coroutine
 
 from pydantic import Field, BaseModel, PrivateAttr
 
+from robot_comic import telemetry
 from robot_comic.tools.core_tools import (
     ToolDependencies,
     dispatch_tool_call,
@@ -207,7 +208,29 @@ class BackgroundToolManager(BaseModel):
         tool_call_routine: ToolCallRoutine,
     ) -> None:
         """Execute the tool and handle completion."""
-        result: dict[str, Any] = await tool_call_routine(self)
+        _tool_span = telemetry.get_tracer().start_span(
+            "tool.execute",
+            attributes={"tool.name": bg_tool.tool_name, "tool.id": bg_tool.id},
+        )
+        try:
+            result: dict[str, Any] = await tool_call_routine(self)
+        except asyncio.CancelledError:
+            _tool_span.end()
+            bg_tool.completed_at = time.monotonic()
+            bg_tool.status = ToolState.CANCELLED
+            bg_tool.error = "Tool cancelled"
+            await self._notification_queue.put(bg_tool.get_notification())
+            raise
+        except Exception as exc:
+            _tool_span.end()
+            bg_tool.completed_at = time.monotonic()
+            bg_tool.status = ToolState.FAILED
+            bg_tool.error = str(exc)
+            logger.debug("Background tool raised exception: %s (id=%s): %s", bg_tool.tool_name, bg_tool.id, exc)
+            await self._notification_queue.put(bg_tool.get_notification())
+            return
+        else:
+            _tool_span.end()
         bg_tool.completed_at = time.monotonic()
         error = result.get("error")
 

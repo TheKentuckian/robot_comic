@@ -28,6 +28,10 @@ dependencies = [
     #Gemini
     "google-genai>=1.0.0",
 
+    #OpenTelemetry (always installed; gated by ROBOT_INSTRUMENTATION at runtime)
+    "opentelemetry-api>=1.24.0",
+    "opentelemetry-sdk>=1.24.0",
+
     #Reachy mini
     "reachy_mini_dances_library",
     "reachy_mini_toolbox",
@@ -53,6 +57,12 @@ mediapipe_vision = [
 ]
 local_stt = [
   "moonshine-voice>=0.0.46",
+]
+otel = [
+  # OTLP exporter for remote/SigNoz export (ROBOT_INSTRUMENTATION=remote).
+  # Requires protobuf>=5 which conflicts with mediapipe<5; install separately
+  # on hosts that don't use mediapipe (e.g. CI, cloud aggregators).
+  "opentelemetry-exporter-otlp-proto-grpc>=1.24.0",
 ]
 all_vision = [
   "accelerate>=1.13.0",

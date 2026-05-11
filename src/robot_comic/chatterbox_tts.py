@@ -9,6 +9,7 @@ Audio output: 24 kHz, mono, 16-bit PCM — matches the existing pipeline.
 
 import re
 import json
+import time
 import uuid
 import asyncio
 import logging
@@ -19,6 +20,7 @@ import numpy as np
 from fastrtc import AdditionalOutputs, wait_for_item
 from scipy.signal import resample
 
+from robot_comic import telemetry
 from robot_comic.config import (
     CHATTERBOX_OUTPUT,
     CHATTERBOX_DEFAULT_URL,
@@ -355,53 +357,108 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         """LLM → tool dispatch → TTS → PCM frames (two-phase with query-tool feedback)."""
         self._conversation_history.append({"role": "user", "content": transcript})
 
-        try:
-            response_text, tool_calls, raw_message = await self._call_llm()
-        except Exception as exc:
-            logger.warning("LLM call failed: %s", exc)
-            return
-
-        self._conversation_history.append(raw_message)
-
-        bg_tools: list[tuple[str, BackgroundTool]] = []
-        if tool_calls:
-            bg_tools = await self._start_tool_calls(tool_calls)
-
-        await self.output_queue.put(
-            AdditionalOutputs({"role": "assistant", "content": response_text})
+        _tracer = telemetry.get_tracer()
+        _model = getattr(config, "OLLAMA_MODEL", "hermes3")
+        _turn_span = _tracer.start_span(
+            "turn",
+            attributes={"robot.mode": "chatterbox", "gen_ai.request.model": _model},
         )
-        await self._synthesize_and_enqueue(response_text)
+        _turn_start = time.perf_counter()
 
-        if not bg_tools:
-            return
-
-        tool_results = await self._await_tool_results(bg_tools)
-        meaningful = {
-            cid: result
-            for cid, result in tool_results.items()
-            if self._is_meaningful_result(result)
-        }
-        if not meaningful:
-            return
-
-        for call_id, result in meaningful.items():
-            self._conversation_history.append({
-                "role": "tool",
-                "content": json.dumps(result),
-                "tool_call_id": call_id,
-            })
-
+        _outcome = "success"
         try:
-            follow_up_text, _, _ = await self._call_llm()
-        except Exception as exc:
-            logger.warning("Phase-2 LLM call failed: %s", exc)
-            return
+            _llm_span = _tracer.start_span(
+                "llm.request",
+                attributes={
+                    "gen_ai.system": "ollama",
+                    "gen_ai.operation.name": "chat",
+                    "gen_ai.request.model": _model,
+                },
+            )
+            _llm_start = time.perf_counter()
+            try:
+                response_text, tool_calls, raw_message = await self._call_llm()
+            except Exception as exc:
+                logger.warning("LLM call failed: %s", exc)
+                _outcome = "llm_error"
+                return
+            finally:
+                _llm_s = time.perf_counter() - _llm_start
+                _llm_span.end()
+                telemetry.record_llm_duration(
+                    _llm_s, {"gen_ai.system": "ollama", "gen_ai.operation.name": "chat", "gen_ai.request.model": _model}
+                )
 
-        self._conversation_history.append({"role": "assistant", "content": follow_up_text})
-        await self.output_queue.put(
-            AdditionalOutputs({"role": "assistant", "content": follow_up_text})
-        )
-        await self._synthesize_and_enqueue(follow_up_text)
+            self._conversation_history.append(raw_message)
+
+            bg_tools: list[tuple[str, BackgroundTool]] = []
+            if tool_calls:
+                bg_tools = await self._start_tool_calls(tool_calls)
+
+            await self.output_queue.put(
+                AdditionalOutputs({"role": "assistant", "content": response_text})
+            )
+            _tts_start = time.perf_counter()
+            await self._synthesize_and_enqueue(response_text)
+            _tts_s = time.perf_counter() - _tts_start
+            telemetry.record_tts(_tts_s, {"gen_ai.system": "chatterbox"})
+
+            if not bg_tools:
+                return
+
+            tool_results = await self._await_tool_results(bg_tools)
+            meaningful = {
+                cid: result
+                for cid, result in tool_results.items()
+                if self._is_meaningful_result(result)
+            }
+            if not meaningful:
+                return
+
+            for call_id, result in meaningful.items():
+                self._conversation_history.append({
+                    "role": "tool",
+                    "content": json.dumps(result),
+                    "tool_call_id": call_id,
+                })
+
+            _llm2_span = _tracer.start_span(
+                "llm.request",
+                attributes={
+                    "gen_ai.system": "ollama",
+                    "gen_ai.operation.name": "chat",
+                    "gen_ai.request.model": _model,
+                    "llm.phase": "2",
+                },
+            )
+            _llm2_start = time.perf_counter()
+            try:
+                follow_up_text, _, _ = await self._call_llm()
+            except Exception as exc:
+                logger.warning("Phase-2 LLM call failed: %s", exc)
+                _outcome = "llm_error"
+                return
+            finally:
+                _llm2_span.end()
+                telemetry.record_llm_duration(
+                    time.perf_counter() - _llm2_start,
+                    {"gen_ai.system": "ollama", "gen_ai.operation.name": "chat", "gen_ai.request.model": _model},
+                )
+
+            self._conversation_history.append({"role": "assistant", "content": follow_up_text})
+            await self.output_queue.put(
+                AdditionalOutputs({"role": "assistant", "content": follow_up_text})
+            )
+            _tts2_start = time.perf_counter()
+            await self._synthesize_and_enqueue(follow_up_text)
+            telemetry.record_tts(time.perf_counter() - _tts2_start, {"gen_ai.system": "chatterbox"})
+
+        finally:
+            _turn_span.set_attribute("turn.outcome", _outcome)
+            _turn_span.end()
+            telemetry.record_turn(
+                time.perf_counter() - _turn_start, {"robot.mode": "chatterbox", "turn.outcome": _outcome}
+            )
 
     async def _start_tool_calls(
         self, tool_calls: list[dict[str, Any]]

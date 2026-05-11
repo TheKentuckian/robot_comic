@@ -10,6 +10,7 @@ Audio formats (per Gemini Live API spec):
 
 import re
 import json
+import time
 import uuid
 import base64
 import random
@@ -25,7 +26,10 @@ from fastrtc import AdditionalOutputs, wait_for_item, audio_to_int16
 from google.genai import types
 from numpy.typing import NDArray
 from scipy.signal import resample
+from opentelemetry import trace
+from opentelemetry import context as otel_context
 
+from robot_comic import telemetry
 from robot_comic.config import (
     GEMINI_BACKEND,
     GEMINI_AVAILABLE_VOICES,
@@ -241,6 +245,19 @@ class GeminiLiveHandler(ConversationHandler):
         self._pending_assistant_transcript_chunks: list[str] = []
         self._listening_state = False
 
+        # OTel turn-span tracking
+        self._session_id: str = str(uuid.uuid4())
+        self._turn_id: str | None = None
+        self._turn_span: Any = None
+        self._turn_ctx_token: Any = None
+        self._turn_start_at: float | None = None
+        self._user_done_at: float | None = None
+        self._llm_span: Any = None
+        self._llm_start_at: float | None = None
+        self._tts_span: Any = None
+        self._tts_start_at: float | None = None
+        self._first_audio_at: float | None = None
+
     def copy(self) -> "GeminiLiveHandler":
         """Create a copy of the handler."""
         return GeminiLiveHandler(
@@ -249,6 +266,32 @@ class GeminiLiveHandler(ConversationHandler):
             self.instance_path,
             startup_voice=self._voice_override,
         )
+
+    def _close_turn_span(self, outcome: str) -> None:
+        """End the active root turn span (idempotent) and record the turn-duration metric."""
+        if self._tts_span is not None:
+            self._tts_span.end()
+            self._tts_span = None
+        if self._llm_span is not None:
+            self._llm_span.end()
+            self._llm_span = None
+        if self._turn_span is not None:
+            self._turn_span.set_attribute("turn.outcome", outcome)
+            self._turn_span.end()
+            self._turn_span = None
+            if self._turn_start_at is not None:
+                telemetry.record_turn(
+                    time.perf_counter() - self._turn_start_at,
+                    {"robot.mode": "gemini", "turn.outcome": outcome},
+                )
+        if self._turn_ctx_token is not None:
+            otel_context.detach(self._turn_ctx_token)
+            self._turn_ctx_token = None
+        self._turn_start_at = None
+        self._user_done_at = None
+        self._llm_start_at = None
+        self._tts_start_at = None
+        self._first_audio_at = None
 
     def _set_listening_state(self, listening: bool) -> None:
         """Avoid queueing redundant listening-state updates."""
@@ -278,6 +321,7 @@ class GeminiLiveHandler(ConversationHandler):
         """Stop current playback and preserve any transcript already spoken."""
         logger.debug("Gemini: user interrupted")
         await self._flush_transcript_chunks("assistant", self._pending_assistant_transcript_chunks)
+        self._close_turn_span("interrupted")
         if hasattr(self, "_clear_queue") and callable(self._clear_queue):
             self._clear_queue()
         if self.deps.head_wobbler is not None:
@@ -289,6 +333,7 @@ class GeminiLiveHandler(ConversationHandler):
         logger.debug("Gemini turn complete")
         await self._flush_transcript_chunks("user", self._pending_user_transcript_chunks)
         await self._flush_transcript_chunks("assistant", self._pending_assistant_transcript_chunks)
+        self._close_turn_span("success")
         self._set_listening_state(False)
         if self.deps.head_wobbler is not None:
             self.deps.head_wobbler.request_reset_after_current_audio()
@@ -665,6 +710,21 @@ class GeminiLiveHandler(ConversationHandler):
 
                                             self.last_activity_time = asyncio.get_event_loop().time()
 
+                                            if self._first_audio_at is None and self._user_done_at is not None:
+                                                self._first_audio_at = time.perf_counter()
+                                                ttft_s = self._first_audio_at - self._user_done_at
+                                                if self._llm_span is not None:
+                                                    self._llm_span.set_attribute(
+                                                        "gen_ai.server.time_to_first_token", ttft_s
+                                                    )
+                                                telemetry.record_ttft(
+                                                    ttft_s,
+                                                    {"gen_ai.system": "gemini", "gen_ai.request.model": config.MODEL_NAME},
+                                                )
+                                                if self._tts_span is None:
+                                                    self._tts_start_at = self._first_audio_at
+                                                    self._tts_span = telemetry.get_tracer().start_span("tts.synthesize")
+
                                             await self.output_queue.put(
                                                 (GEMINI_OUTPUT_SAMPLE_RATE, audio_array),
                                             )
@@ -673,6 +733,34 @@ class GeminiLiveHandler(ConversationHandler):
                                 if content.input_transcription and content.input_transcription.text:
                                     transcript = content.input_transcription.text
                                     logger.debug("User transcript chunk: %s", transcript)
+                                    if not self._pending_user_transcript_chunks:
+                                        # First chunk — open turn span and record user-done timestamp
+                                        self._close_turn_span("interrupted")
+                                        self._turn_id = str(uuid.uuid4())
+                                        now_pc = time.perf_counter()
+                                        self._turn_start_at = now_pc
+                                        self._user_done_at = now_pc
+                                        self._first_audio_at = None
+                                        self._turn_span = telemetry.get_tracer().start_span(
+                                            "turn",
+                                            attributes={
+                                                "turn.id": self._turn_id,
+                                                "session.id": self._session_id,
+                                                "robot.mode": "gemini",
+                                            },
+                                        )
+                                        self._turn_ctx_token = otel_context.attach(
+                                            trace.set_span_in_context(self._turn_span)
+                                        )
+                                        self._llm_start_at = now_pc
+                                        self._llm_span = telemetry.get_tracer().start_span(
+                                            "llm.request",
+                                            attributes={
+                                                "gen_ai.system": "gemini",
+                                                "gen_ai.operation.name": "chat",
+                                                "gen_ai.request.model": config.MODEL_NAME,
+                                            },
+                                        )
                                     self._pending_user_transcript_chunks.append(transcript)
                                     self._set_listening_state(True)
 

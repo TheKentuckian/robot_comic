@@ -78,6 +78,10 @@ def run(
     )
 
     logger = setup_logger(args.debug)
+
+    from robot_comic import telemetry as _telemetry
+    _telemetry.init()
+
     try:
         import subprocess
         _git_hash = subprocess.check_output(
