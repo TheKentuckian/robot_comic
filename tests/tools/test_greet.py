@@ -143,7 +143,7 @@ async def test_scan_no_frame_available(Greet):
 @pytest.mark.asyncio
 async def test_identify_match_found(Greet, tmp_path):
     """Exact name match returns returning=True with full profile."""
-    session_dir = tmp_path / ".rickles_sessions"
+    session_dir = tmp_path / ".comedy_sessions"
     session_dir.mkdir()
     (session_dir / "session_20260504_120000.json").write_text(
         json.dumps(
@@ -174,7 +174,7 @@ async def test_identify_match_found(Greet, tmp_path):
 @pytest.mark.asyncio
 async def test_identify_fuzzy_match(Greet, tmp_path):
     """'Jon' matches stored 'John' — score 0.857, above 0.75 threshold."""
-    session_dir = tmp_path / ".rickles_sessions"
+    session_dir = tmp_path / ".comedy_sessions"
     session_dir.mkdir()
     (session_dir / "session_20260504_120000.json").write_text(
         json.dumps(
@@ -200,7 +200,7 @@ async def test_identify_fuzzy_match(Greet, tmp_path):
 @pytest.mark.asyncio
 async def test_identify_below_threshold(Greet, tmp_path):
     """Score below 0.75 threshold — returns returning=False."""
-    session_dir = tmp_path / ".rickles_sessions"
+    session_dir = tmp_path / ".comedy_sessions"
     session_dir.mkdir()
     (session_dir / "session_20260504_120000.json").write_text(
         json.dumps(
@@ -225,7 +225,7 @@ async def test_identify_below_threshold(Greet, tmp_path):
 @pytest.mark.asyncio
 async def test_identify_no_sessions(Greet, tmp_path):
     """Empty session directory — returns returning=False."""
-    session_dir = tmp_path / ".rickles_sessions"
+    session_dir = tmp_path / ".comedy_sessions"
     session_dir.mkdir()
     result = await Greet(session_dir=session_dir)(make_deps(), action="identify", name="Tony")
     assert result == {"returning": False}
@@ -237,7 +237,7 @@ async def test_identify_no_sessions(Greet, tmp_path):
 @pytest.mark.asyncio
 async def test_identify_ignores_old_sessions(Greet, tmp_path):
     """Session file older than 30 days is excluded from matching."""
-    session_dir = tmp_path / ".rickles_sessions"
+    session_dir = tmp_path / ".comedy_sessions"
     session_dir.mkdir()
     old_file = session_dir / "session_19990101_120000.json"
     old_file.write_text(
@@ -265,7 +265,7 @@ async def test_identify_ignores_old_sessions(Greet, tmp_path):
 @pytest.mark.asyncio
 async def test_identify_skips_null_names(Greet, tmp_path):
     """Sessions with name=null are skipped — returns returning=False."""
-    session_dir = tmp_path / ".rickles_sessions"
+    session_dir = tmp_path / ".comedy_sessions"
     session_dir.mkdir()
     (session_dir / "session_20260504_120000.json").write_text(
         json.dumps(
@@ -290,7 +290,7 @@ async def test_identify_skips_null_names(Greet, tmp_path):
 @pytest.mark.asyncio
 async def test_identify_skips_corrupt_files(Greet, tmp_path):
     """Corrupt JSON session file is skipped without raising — returns returning=False."""
-    session_dir = tmp_path / ".rickles_sessions"
+    session_dir = tmp_path / ".comedy_sessions"
     session_dir.mkdir()
     (session_dir / "session_20260504_120000.json").write_text("not valid json {{{")
     result = await Greet(session_dir=session_dir)(make_deps(), action="identify", name="Tony")
@@ -303,7 +303,7 @@ async def test_identify_skips_corrupt_files(Greet, tmp_path):
 @pytest.mark.asyncio
 async def test_identify_name_required(Greet, tmp_path):
     """Missing name parameter for identify action — returns error."""
-    session_dir = tmp_path / ".rickles_sessions"
+    session_dir = tmp_path / ".comedy_sessions"
     result = await Greet(session_dir=session_dir)(make_deps(), action="identify")
     assert "error" in result
 
@@ -314,7 +314,7 @@ async def test_identify_name_required(Greet, tmp_path):
 @pytest.mark.asyncio
 async def test_identify_returns_callbacks(Greet, tmp_path):
     """Matched session with job + details produces at least one callback hint."""
-    session_dir = tmp_path / ".rickles_sessions"
+    session_dir = tmp_path / ".comedy_sessions"
     session_dir.mkdir()
     (session_dir / "session_20260504_120000.json").write_text(
         json.dumps(

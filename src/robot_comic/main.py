@@ -205,6 +205,7 @@ def run(
         vision_processor=vision_processor,
         head_wobbler=head_wobbler,
         pause_controller=pause_controller,
+        instance_path=Path(instance_path) if instance_path is not None else None,
     )
     current_file_path = os.path.dirname(os.path.abspath(__file__))
     logger.debug(f"Current file absolute path: {current_file_path}")

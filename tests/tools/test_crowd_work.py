@@ -38,7 +38,7 @@ def CrowdWork():
 @pytest.fixture
 def crowd_work(tmp_path, CrowdWork):
     """Fixture that returns a CrowdWork instance backed by a temp session directory."""
-    session_dir = tmp_path / ".rickles_sessions"
+    session_dir = tmp_path / ".comedy_sessions"
     return CrowdWork(session_dir=session_dir)
 
 
@@ -137,7 +137,7 @@ async def test_update_writes_session_file(crowd_work, tmp_path):
     """Update triggers a background write that persists the session to disk."""
     await crowd_work(make_deps(), action="update", name="Tony")
     await asyncio.sleep(0.15)  # let fire-and-forget write complete
-    session_dir = tmp_path / ".rickles_sessions"
+    session_dir = tmp_path / ".comedy_sessions"
     files = list(session_dir.glob("session_*.json"))
     assert len(files) == 1
     data = json.loads(files[0].read_text())
@@ -149,7 +149,7 @@ async def test_update_writes_session_file(crowd_work, tmp_path):
 @pytest.mark.asyncio
 async def test_load_recent_session_resumes_from_disk(tmp_path, CrowdWork):
     """A same-day session file on disk is resumed on construction."""
-    session_dir = tmp_path / ".rickles_sessions"
+    session_dir = tmp_path / ".comedy_sessions"
     session_dir.mkdir()
     session_file = session_dir / "session_20260506_120000.json"
     session_file.write_text(
@@ -174,7 +174,7 @@ async def test_load_recent_session_resumes_from_disk(tmp_path, CrowdWork):
 @pytest.mark.asyncio
 async def test_load_does_not_resume_old_session(tmp_path, CrowdWork):
     """Sessions outside SESSION_WINDOW_HOURS should not be loaded."""
-    session_dir = tmp_path / ".rickles_sessions"
+    session_dir = tmp_path / ".comedy_sessions"
     session_dir.mkdir()
     session_file = session_dir / "session_19990101_120000.json"
     old_data = {

@@ -96,7 +96,10 @@ LEGACY_STARTUP_ENV_NAMES = (
     "REACHY_MINI_CUSTOM_PROFILE",
     "REACHY_MINI_VOICE_OVERRIDE",
 )
-CROWD_HISTORY_DIR = Path(".rickles_sessions")
+CROWD_HISTORY_DIRNAME = ".comedy_sessions"
+# Legacy directory name retained so the admin UI can still surface old sessions
+# from before the rename in commit 141f761.
+LEGACY_CROWD_HISTORY_DIRNAME = ".rickles_sessions"
 
 
 def _estimate_pending_playback_seconds(robot: ReachyMini) -> float:
@@ -416,19 +419,33 @@ class LocalStream:
         return read_startup_settings(self._instance_path).profile
 
     def _crowd_history_path(self) -> Path:
-        """Return the local crowd-work session directory for the running app."""
-        return CROWD_HISTORY_DIR
+        """Return the local crowd-work session directory for the running app.
+
+        Prefers the instance-local path so the admin UI sees the same files the
+        tools write. Falls back to a CWD-relative path when no instance_path is
+        configured (dev/sim mode).
+        """
+        if self._instance_path is not None:
+            return Path(self._instance_path) / CROWD_HISTORY_DIRNAME
+        return Path(CROWD_HISTORY_DIRNAME)
+
+    def _legacy_crowd_history_path(self) -> Path:
+        """Return the pre-rename ``.rickles_sessions`` directory for back-compat."""
+        if self._instance_path is not None:
+            return Path(self._instance_path) / LEGACY_CROWD_HISTORY_DIRNAME
+        return Path(LEGACY_CROWD_HISTORY_DIRNAME)
 
     def _crowd_history_files(self) -> list[Path]:
-        """Return persisted crowd-work session files, newest first."""
-        session_dir = self._crowd_history_path()
-        if not session_dir.exists():
-            return []
-        return sorted(
-            session_dir.glob("session_*.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
+        """Return persisted crowd-work session files, newest first.
+
+        Includes any leftover legacy ``.rickles_sessions`` files so renaming the
+        directory didn't strand pre-existing history.
+        """
+        files: list[Path] = []
+        for session_dir in (self._crowd_history_path(), self._legacy_crowd_history_path()):
+            if session_dir.exists():
+                files.extend(session_dir.glob("session_*.json"))
+        return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
 
     def _crowd_history_status(self) -> dict[str, object]:
         """Return admin-facing metadata for persisted crowd-work sessions."""

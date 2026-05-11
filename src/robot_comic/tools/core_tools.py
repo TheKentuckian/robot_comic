@@ -59,6 +59,9 @@ class ToolDependencies:
     head_wobbler: Any | None = None  # HeadWobbler for audio-reactive motion
     pause_controller: Any | None = None  # PauseController from pause.py
     motion_duration_s: float = 1.0
+    # Stable per-instance directory for tool-managed persistence (sessions, etc.).
+    # None in dev/sim mode; tools fall back to a CWD-relative path in that case.
+    instance_path: Path | None = None
 
 
 # Tool base class
