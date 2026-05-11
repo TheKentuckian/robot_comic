@@ -64,6 +64,10 @@ class MoveHead(Tool):
             _, current_antennas = deps.reachy_mini.get_current_joint_positions()
 
             # Create goto move
+            try:
+                speed = float(getattr(movement_manager, "speed_factor", 1.0))
+            except (TypeError, ValueError):
+                speed = 1.0
             goto_move = GotoQueueMove(
                 target_head_pose=target,
                 start_head_pose=current_head_pose,
@@ -75,10 +79,11 @@ class MoveHead(Tool):
                 target_body_yaw=0,  # Reset body yaw
                 start_body_yaw=current_antennas[0],  # body_yaw is first in joint positions
                 duration=deps.motion_duration_s,
+                speed_factor=speed,
             )
 
             movement_manager.queue_move(goto_move)
-            movement_manager.set_moving_state(deps.motion_duration_s)
+            movement_manager.set_moving_state(goto_move.duration)
 
             return {"status": f"looking {direction}"}
 
