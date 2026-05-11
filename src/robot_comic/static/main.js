@@ -348,6 +348,57 @@ async function clearCrowdHistory() {
   return data;
 }
 
+async function getPausePhrases() {
+  try {
+    const url = new URL("/pause_phrases", window.location.origin);
+    url.searchParams.set("_", Date.now().toString());
+    const resp = await fetchWithTimeout(url, {}, 3000);
+    if (!resp.ok) throw new Error("pause_phrases_failed");
+    return await resp.json();
+  } catch (e) {
+    return null;
+  }
+}
+
+function parsePhraseTextarea(value) {
+  if (typeof value !== "string") return [];
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+async function savePausePhrases({ stop, resume, shutdown, switch: switchPhrases }) {
+  const resp = await fetchWithTimeout(
+    "/pause_phrases",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        stop: stop.length ? stop : null,
+        resume: resume.length ? resume : null,
+        shutdown: shutdown.length ? shutdown : null,
+        switch: switchPhrases.length ? switchPhrases : null,
+      }),
+    },
+    5000,
+  );
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new Error(data.error || "save_failed");
+  }
+  return data;
+}
+
+async function restartApp() {
+  const resp = await fetchWithTimeout("/admin/restart", { method: "POST" }, 5000);
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new Error(data.error || "restart_failed");
+  }
+  return data;
+}
+
 async function getVoices() {
   try {
     const url = new URL("/voices", window.location.origin);
@@ -716,6 +767,112 @@ async function init() {
       setStatusMessage(crowdHistoryStatus, "Failed to clear crowd history.", "error");
     }
   });
+
+  // Pause phrases admin section
+  const pauseStopEl = document.getElementById("pause-phrase-stop");
+  const pauseResumeEl = document.getElementById("pause-phrase-resume");
+  const pauseShutdownEl = document.getElementById("pause-phrase-shutdown");
+  const pauseSwitchEl = document.getElementById("pause-phrase-switch");
+  const pausePhrasesStatus = document.getElementById("pause-phrases-status");
+  const savePausePhrasesBtn = document.getElementById("save-pause-phrases");
+  const resetPausePhrasesBtn = document.getElementById("reset-pause-phrases");
+
+  function fillPauseField(textarea, savedList, effectiveList) {
+    if (!textarea) return;
+    if (Array.isArray(savedList) && savedList.length > 0) {
+      textarea.value = savedList.join("\n");
+      textarea.placeholder = (effectiveList || []).join(", ");
+    } else {
+      textarea.value = "";
+      textarea.placeholder = (effectiveList || []).join(", ");
+    }
+  }
+
+  function applyPausePhrasePayload(payload) {
+    if (!payload) return;
+    const saved = payload.saved || {};
+    const effective = payload.effective || {};
+    fillPauseField(pauseStopEl, saved.stop, effective.stop);
+    fillPauseField(pauseResumeEl, saved.resume, effective.resume);
+    fillPauseField(pauseShutdownEl, saved.shutdown, effective.shutdown);
+    fillPauseField(pauseSwitchEl, saved.switch, effective.switch);
+  }
+
+  (async () => {
+    const data = await getPausePhrases();
+    if (data && data.ok) {
+      applyPausePhrasePayload(data);
+    } else {
+      setStatusMessage(pausePhrasesStatus, "Could not load saved phrases.", "error");
+    }
+  })();
+
+  if (savePausePhrasesBtn) {
+    savePausePhrasesBtn.addEventListener("click", async () => {
+      setStatusMessage(pausePhrasesStatus, "Saving phrases…");
+      savePausePhrasesBtn.disabled = true;
+      try {
+        const data = await savePausePhrases({
+          stop: parsePhraseTextarea(pauseStopEl.value),
+          resume: parsePhraseTextarea(pauseResumeEl.value),
+          shutdown: parsePhraseTextarea(pauseShutdownEl.value),
+          switch: parsePhraseTextarea(pauseSwitchEl.value),
+        });
+        applyPausePhrasePayload(data);
+        const message = data.applied_live
+          ? "Saved and applied to running session."
+          : "Saved. Restart Robot Comic to apply.";
+        setStatusMessage(pausePhrasesStatus, message, "ok");
+      } catch (e) {
+        setStatusMessage(pausePhrasesStatus, "Failed to save phrases.", "error");
+      } finally {
+        savePausePhrasesBtn.disabled = false;
+      }
+    });
+  }
+
+  if (resetPausePhrasesBtn) {
+    resetPausePhrasesBtn.addEventListener("click", async () => {
+      setStatusMessage(pausePhrasesStatus, "Resetting to defaults…");
+      resetPausePhrasesBtn.disabled = true;
+      try {
+        pauseStopEl.value = "";
+        pauseResumeEl.value = "";
+        pauseShutdownEl.value = "";
+        pauseSwitchEl.value = "";
+        const data = await savePausePhrases({ stop: [], resume: [], shutdown: [], switch: [] });
+        applyPausePhrasePayload(data);
+        const message = data.applied_live
+          ? "Reset to defaults and applied to running session."
+          : "Reset to defaults. Restart Robot Comic to apply.";
+        setStatusMessage(pausePhrasesStatus, message, "ok");
+      } catch (e) {
+        setStatusMessage(pausePhrasesStatus, "Failed to reset phrases.", "error");
+      } finally {
+        resetPausePhrasesBtn.disabled = false;
+      }
+    });
+  }
+
+  // Restart Comic admin button
+  const restartBtn = document.getElementById("restart-app");
+  const restartStatus = document.getElementById("restart-status");
+  if (restartBtn) {
+    restartBtn.addEventListener("click", async () => {
+      if (!window.confirm("Restart Robot Comic now? The app will shut down gracefully and the autostart service should relaunch it.")) {
+        return;
+      }
+      setStatusMessage(restartStatus, "Requesting restart…");
+      restartBtn.disabled = true;
+      try {
+        const data = await restartApp();
+        setStatusMessage(restartStatus, data.message || "Restart requested.", "ok");
+      } catch (e) {
+        restartBtn.disabled = false;
+        setStatusMessage(restartStatus, "Restart hook unavailable.", "error");
+      }
+    });
+  }
 
   // Handler for "Change API key" button
   changeKeyBtn.addEventListener("click", () => {

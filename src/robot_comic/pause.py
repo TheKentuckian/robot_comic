@@ -142,30 +142,34 @@ class PauseController:
 
         with self._lock:
             state = self._state
+            stop_phrases = self._stop_phrases
+            resume_phrases = self._resume_phrases
+            shutdown_phrases = self._shutdown_phrases
+            switch_phrases = self._switch_phrases
 
         if state is PauseState.SHUTTING_DOWN:
             logger.debug("Pause controller already shutting down; ignoring transcript")
             return TranscriptDisposition.HANDLED
 
         if state is PauseState.ACTIVE:
-            stop_match = _phrase_matches(transcript, self._stop_phrases)
+            stop_match = _phrase_matches(transcript, stop_phrases)
             if stop_match is None:
                 return TranscriptDisposition.DISPATCH
             self._enter_paused(stop_match)
             return TranscriptDisposition.HANDLED
 
         # PAUSED
-        shutdown_match = _phrase_matches(transcript, self._shutdown_phrases)
+        shutdown_match = _phrase_matches(transcript, shutdown_phrases)
         if shutdown_match is not None:
             self._enter_shutdown(shutdown_match)
             return TranscriptDisposition.HANDLED
 
-        resume_match = _phrase_matches(transcript, self._resume_phrases)
+        resume_match = _phrase_matches(transcript, resume_phrases)
         if resume_match is not None:
             self._enter_active(resume_match)
             return TranscriptDisposition.HANDLED
 
-        switch_match = _phrase_matches(transcript, self._switch_phrases)
+        switch_match = _phrase_matches(transcript, switch_phrases)
         if switch_match is not None:
             self._handle_switch(switch_match)
             return TranscriptDisposition.HANDLED
@@ -175,6 +179,53 @@ class PauseController:
             transcript,
         )
         return TranscriptDisposition.HANDLED
+
+    def get_phrases(self) -> dict[str, tuple[str, ...]]:
+        """Return a snapshot of the active phrase lists keyed by category."""
+        with self._lock:
+            return {
+                "stop": self._stop_phrases,
+                "resume": self._resume_phrases,
+                "shutdown": self._shutdown_phrases,
+                "switch": self._switch_phrases,
+            }
+
+    def update_phrases(
+        self,
+        *,
+        stop: Sequence[str] | None = None,
+        resume: Sequence[str] | None = None,
+        shutdown: Sequence[str] | None = None,
+        switch: Sequence[str] | None = None,
+    ) -> dict[str, tuple[str, ...]]:
+        """Replace one or more phrase lists at runtime; returns the new snapshot.
+
+        Each argument left as None preserves the current value. Pass an
+        empty sequence to disable matching for that category entirely.
+        """
+        with self._lock:
+            if stop is not None:
+                self._stop_phrases = tuple(stop)
+            if resume is not None:
+                self._resume_phrases = tuple(resume)
+            if shutdown is not None:
+                self._shutdown_phrases = tuple(shutdown)
+            if switch is not None:
+                self._switch_phrases = tuple(switch)
+            snapshot = {
+                "stop": self._stop_phrases,
+                "resume": self._resume_phrases,
+                "shutdown": self._shutdown_phrases,
+                "switch": self._switch_phrases,
+            }
+        logger.info(
+            "Pause phrases updated (stop=%d, resume=%d, shutdown=%d, switch=%d)",
+            len(snapshot["stop"]),
+            len(snapshot["resume"]),
+            len(snapshot["shutdown"]),
+            len(snapshot["switch"]),
+        )
+        return snapshot
 
     def _enter_paused(self, matched_phrase: str) -> None:
         with self._lock:

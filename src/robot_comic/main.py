@@ -124,6 +124,7 @@ def run(
 
     from robot_comic.pause import PauseController
     from robot_comic.console import LocalStream
+    from robot_comic.pause_settings import read_pause_settings
     from robot_comic.tools.core_tools import ToolDependencies
     from robot_comic.audio.head_wobbler import HeadWobbler
 
@@ -189,9 +190,14 @@ def run(
         else:
             logger.warning("No app_stop_event available; cannot trigger graceful shutdown")
 
+    pause_settings = read_pause_settings(instance_path)
     pause_controller = PauseController(
         clear_move_queue=movement_manager.clear_move_queue,
         on_shutdown=_request_shutdown_from_pause,
+        stop_phrases=pause_settings.resolved_stop(),
+        resume_phrases=pause_settings.resolved_resume(),
+        shutdown_phrases=pause_settings.resolved_shutdown(),
+        switch_phrases=pause_settings.resolved_switch(),
     )
 
     deps = ToolDependencies(
@@ -332,6 +338,8 @@ def run(
             robot,
             settings_app=settings_app,
             instance_path=instance_path,
+            app_stop_event=app_stop_event,
+            pause_controller=pause_controller,
         )
 
     # Each async service → its own thread/loop

@@ -162,6 +162,54 @@ def test_phrase_matches_helper():
     assert _phrase_matches("", ["system pause"]) is None
 
 
+def test_get_phrases_returns_current_lists():
+    """get_phrases reflects the constructor-supplied phrase sets."""
+    controller, _, _, _ = _make_controller(
+        stop_phrases=("a", "b"),
+        resume_phrases=("c",),
+        shutdown_phrases=("d",),
+        switch_phrases=("e", "f"),
+    )
+    snapshot = controller.get_phrases()
+    assert snapshot["stop"] == ("a", "b")
+    assert snapshot["resume"] == ("c",)
+    assert snapshot["shutdown"] == ("d",)
+    assert snapshot["switch"] == ("e", "f")
+
+
+def test_update_phrases_replaces_only_provided_fields():
+    """update_phrases overwrites only the fields supplied, returning the new snapshot."""
+    controller, _, _, _ = _make_controller()
+    initial = controller.get_phrases()
+
+    snapshot = controller.update_phrases(stop=("brand new",))
+    assert snapshot["stop"] == ("brand new",)
+    assert snapshot["resume"] == initial["resume"]
+    assert snapshot["shutdown"] == initial["shutdown"]
+    assert snapshot["switch"] == initial["switch"]
+
+
+def test_update_phrases_takes_effect_on_next_transcript():
+    """After update_phrases the controller routes by the new phrase lists."""
+    controller, clear, _, _ = _make_controller(stop_phrases=("foo bar",))
+    # Default 'system pause' should not match now
+    assert controller.handle_transcript("system pause") is TranscriptDisposition.DISPATCH
+    clear.assert_not_called()
+
+    controller.update_phrases(stop=("system pause",))
+    assert controller.handle_transcript("system pause") is TranscriptDisposition.HANDLED
+    assert controller.is_paused
+    clear.assert_called_once()
+
+
+def test_update_phrases_with_empty_list_disables_category():
+    """An empty tuple disables matching for that category entirely."""
+    controller, clear, _, _ = _make_controller()
+    controller.update_phrases(stop=())
+    assert controller.handle_transcript("system pause") is TranscriptDisposition.DISPATCH
+    clear.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_local_stt_skips_dispatch_when_paused():
     """When PauseController returns HANDLED, the local STT path must NOT dispatch."""

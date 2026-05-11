@@ -146,6 +146,62 @@
         </div>
       </div>
 
+      <div id="pause-phrases-panel" class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Admin</p>
+            <h2>Pause phrases</h2>
+          </div>
+          <span class="chip">Live</span>
+        </div>
+        <p class="muted small">
+          Words and phrases the comic listens for. The <strong>Stop</strong> phrase interrupts the
+          routine and enters the paused state; while paused, the controller listens for
+          <strong>Resume</strong>, <strong>Shutdown</strong>, or <strong>Switch</strong>.
+          Enter one phrase per line — matching is case- and punctuation-insensitive.
+          Leave a field blank to fall back to the built-in defaults.
+        </p>
+        <div class="row">
+          <label for="pause-phrase-stop">Stop phrases</label>
+          <textarea id="pause-phrase-stop" rows="3" placeholder="system pause"></textarea>
+        </div>
+        <div class="row">
+          <label for="pause-phrase-resume">Resume phrases</label>
+          <textarea id="pause-phrase-resume" rows="3" placeholder="continue"></textarea>
+        </div>
+        <div class="row">
+          <label for="pause-phrase-shutdown">Shutdown phrases</label>
+          <textarea id="pause-phrase-shutdown" rows="3" placeholder="shutdown"></textarea>
+        </div>
+        <div class="row">
+          <label for="pause-phrase-switch">Switch-comic phrases</label>
+          <textarea id="pause-phrase-switch" rows="3" placeholder="switch comic"></textarea>
+        </div>
+        <div class="actions">
+          <button id="save-pause-phrases">Save phrases</button>
+          <button id="reset-pause-phrases" class="ghost">Reset to defaults</button>
+          <p id="pause-phrases-status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
+        </div>
+      </div>
+
+      <div id="restart-panel" class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Admin</p>
+            <h2>Restart Robot Comic</h2>
+          </div>
+        </div>
+        <p class="muted small">
+          Triggers a graceful shutdown (head returns to neutral) so the autostart service can
+          relaunch the app with current settings. If you are running Robot Comic manually, the
+          process will exit and you will need to restart it yourself.
+        </p>
+        <div class="actions">
+          <button id="restart-app" class="ghost danger">Restart Comic</button>
+          <p id="restart-status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
+        </div>
+      </div>
+
       <div id="form-panel" class="panel hidden">
         <div class="panel-heading">
           <div>
