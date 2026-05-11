@@ -84,7 +84,19 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
         default=None,
         help="[Optional] Robot name to target. Must match the daemon's --robot-name when connecting to a specific robot, mainly useful for development with multiple robots.",
     )
-    return parser.parse_known_args()
+    args, extras = parser.parse_known_args()
+    # The legacy --gradio alias keeps existing launchers and scripts working,
+    # but warn so users (and the next code-search) migrate to --sim.
+    if "--gradio" in sys.argv[1:]:
+        warnings.warn(
+            "--gradio is deprecated; use --sim instead. The alias will be removed in a future release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        logging.getLogger(__name__).warning(
+            "--gradio is deprecated; use --sim instead (will be removed in a future release)."
+        )
+    return args, extras
 
 
 def initialize_camera_and_vision(

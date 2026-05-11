@@ -131,6 +131,7 @@ class LocalStream:
         instance_path: Optional[str] = None,
         app_stop_event: Optional[Any] = None,
         pause_controller: Optional[Any] = None,
+        movement_manager: Optional[Any] = None,
     ):
         """Initialize the stream with a realtime handler and pipelines.
 
@@ -144,6 +145,8 @@ class LocalStream:
           trigger the graceful shutdown path (the autostart service is expected to relaunch).
         - ``pause_controller``: optional ``PauseController`` whose phrase lists the admin
           endpoints can read and hot-reload.
+        - ``movement_manager``: optional ``MovementManager`` used by the admin
+          ``/movement_speed`` endpoints (read/write the playback speed factor).
         """
         self.handler = handler
         self._robot = robot
@@ -156,6 +159,7 @@ class LocalStream:
         self._instance_path: Optional[str] = instance_path
         self._app_stop_event = app_stop_event
         self._pause_controller = pause_controller
+        self._movement_manager = movement_manager
         self._settings_initialized = False
         self._asyncio_loop = None
         self._active_backend_name = get_backend_choice()
@@ -792,6 +796,29 @@ class LocalStream:
                     ),
                 }
             )
+
+        @self._settings_app.get("/movement_speed")
+        def _get_movement_speed() -> JSONResponse:
+            if self._movement_manager is None:
+                return JSONResponse({"ok": False, "error": "no_movement_manager"}, status_code=503)
+            value = float(getattr(self._movement_manager, "speed_factor", 1.0))
+            return JSONResponse({"ok": True, "value": value, "min": 0.1, "max": 2.0, "step": 0.05})
+
+        @self._settings_app.post("/movement_speed")
+        def _set_movement_speed(payload: dict[str, object]) -> JSONResponse:
+            if self._movement_manager is None:
+                return JSONResponse({"ok": False, "error": "no_movement_manager"}, status_code=503)
+            raw = payload.get("value")
+            try:
+                value = float(raw)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                return JSONResponse({"ok": False, "error": "invalid_value"}, status_code=400)
+            try:
+                self._movement_manager.set_speed_factor(value)
+            except Exception as e:
+                logger.warning("set_speed_factor(%r) failed: %s", value, e)
+                return JSONResponse({"ok": False, "error": "set_failed"}, status_code=500)
+            return JSONResponse({"ok": True, "value": float(self._movement_manager.speed_factor)})
 
         self._settings_initialized = True
 

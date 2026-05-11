@@ -25,6 +25,7 @@ def _make_stream(
     *,
     pause_controller: PauseController | None = None,
     stop_event: threading.Event | None = None,
+    movement_manager: object | None = None,
 ) -> tuple[FastAPI, LocalStream]:
     app = FastAPI()
     robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
@@ -35,6 +36,7 @@ def _make_stream(
         instance_path=str(tmp_path),
         app_stop_event=stop_event,
         pause_controller=pause_controller,
+        movement_manager=movement_manager,
     )
     stream.init_admin_ui()
     return app, stream
@@ -156,3 +158,63 @@ def test_round_trip_phrase_save_and_get(tmp_path: Path) -> None:
     data = resp.json()
     assert data["saved"]["stop"] == ["robot stop"]
     assert data["saved"]["resume"] is None
+
+
+def test_get_movement_speed_returns_current_factor(tmp_path: Path) -> None:
+    """GET /movement_speed reports the live ``speed_factor`` and the slider bounds."""
+    mm = SimpleNamespace(speed_factor=0.6, set_speed_factor=MagicMock())
+    app, _ = _make_stream(tmp_path, movement_manager=mm)
+    client = TestClient(app)
+
+    resp = client.get("/movement_speed")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data == {"ok": True, "value": 0.6, "min": 0.1, "max": 2.0, "step": 0.05}
+
+
+def test_post_movement_speed_updates_manager(tmp_path: Path) -> None:
+    """POST /movement_speed calls ``set_speed_factor`` and echoes the new value."""
+
+    class _MM:
+        def __init__(self) -> None:
+            self.speed_factor = 0.6
+            self.calls: list[float] = []
+
+        def set_speed_factor(self, value: float) -> None:
+            self.calls.append(value)
+            self.speed_factor = max(0.1, min(2.0, value))
+
+    mm = _MM()
+    app, _ = _make_stream(tmp_path, movement_manager=mm)
+    client = TestClient(app)
+
+    resp = client.post("/movement_speed", json={"value": 1.4})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "value": 1.4}
+    assert mm.calls == [1.4]
+
+
+def test_movement_speed_503_when_no_manager(tmp_path: Path) -> None:
+    """Both endpoints return 503 when no movement_manager is wired in."""
+    app, _ = _make_stream(tmp_path)
+    client = TestClient(app)
+
+    get_resp = client.get("/movement_speed")
+    assert get_resp.status_code == 503
+    assert get_resp.json()["error"] == "no_movement_manager"
+
+    post_resp = client.post("/movement_speed", json={"value": 1.0})
+    assert post_resp.status_code == 503
+    assert post_resp.json()["error"] == "no_movement_manager"
+
+
+def test_post_movement_speed_rejects_invalid_value(tmp_path: Path) -> None:
+    """Non-numeric payloads return 400 without touching the manager."""
+    mm = SimpleNamespace(speed_factor=0.6, set_speed_factor=MagicMock())
+    app, _ = _make_stream(tmp_path, movement_manager=mm)
+    client = TestClient(app)
+
+    resp = client.post("/movement_speed", json={"value": "fast"})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_value"
+    mm.set_speed_factor.assert_not_called()

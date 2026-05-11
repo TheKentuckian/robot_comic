@@ -399,6 +399,35 @@ async function restartApp() {
   return data;
 }
 
+async function getMovementSpeed() {
+  try {
+    const url = new URL("/movement_speed", window.location.origin);
+    url.searchParams.set("_", Date.now().toString());
+    const resp = await fetchWithTimeout(url, {}, 3000);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (e) {
+    return null;
+  }
+}
+
+async function setMovementSpeed(value) {
+  const resp = await fetchWithTimeout(
+    "/movement_speed",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value }),
+    },
+    3000,
+  );
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new Error(data.error || "set_failed");
+  }
+  return data;
+}
+
 async function getVoices() {
   try {
     const url = new URL("/voices", window.location.origin);
@@ -851,6 +880,60 @@ async function init() {
       } finally {
         resetPausePhrasesBtn.disabled = false;
       }
+    });
+  }
+
+  // Movement speed slider
+  const speedSlider = document.getElementById("movement-speed-slider");
+  const speedChip = document.getElementById("movement-speed-chip");
+  const speedStatus = document.getElementById("movement-speed-status");
+
+  function renderSpeedChip(value) {
+    if (speedChip) speedChip.textContent = Number(value).toFixed(2) + "×";
+  }
+
+  (async () => {
+    const data = await getMovementSpeed();
+    if (!data || !data.ok) {
+      if (speedSlider) speedSlider.disabled = true;
+      setStatusMessage(speedStatus, "Movement manager unavailable.", "error");
+      if (speedChip) speedChip.textContent = "off";
+      return;
+    }
+    if (speedSlider) {
+      speedSlider.min = String(data.min);
+      speedSlider.max = String(data.max);
+      speedSlider.step = String(data.step);
+      speedSlider.value = String(data.value);
+    }
+    renderSpeedChip(data.value);
+  })();
+
+  if (speedSlider) {
+    let debounceTimer = null;
+    let lastSentValue = null;
+    const commit = async () => {
+      const value = parseFloat(speedSlider.value);
+      if (Number.isNaN(value) || value === lastSentValue) return;
+      lastSentValue = value;
+      try {
+        const data = await setMovementSpeed(value);
+        if (data && data.ok) {
+          renderSpeedChip(data.value);
+          setStatusMessage(speedStatus, "");
+        }
+      } catch (e) {
+        setStatusMessage(speedStatus, "Failed to update speed.", "error");
+      }
+    };
+    speedSlider.addEventListener("input", () => {
+      renderSpeedChip(speedSlider.value);
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(commit, 150);
+    });
+    speedSlider.addEventListener("change", () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      commit();
     });
   }
 

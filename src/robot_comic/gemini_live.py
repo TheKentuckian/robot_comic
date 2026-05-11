@@ -15,7 +15,7 @@ import base64
 import random
 import asyncio
 import logging
-from typing import Any, Dict, List, Final, Tuple, Literal, Optional
+from typing import Any, Dict, List, Final, Tuple, Optional
 from datetime import datetime
 
 import numpy as np
@@ -228,10 +228,6 @@ class GeminiLiveHandler(ConversationHandler):
         self.last_activity_time = asyncio.get_event_loop().time()
         self.start_time = asyncio.get_event_loop().time()
         self.is_idle_tool_call = False
-
-        # Track API key source (env vs textbox)
-        self._key_source: Literal["env", "textbox"] = "env"
-        self._provided_api_key: str | None = None
 
         # Internal lifecycle flags
         self._connected_event: asyncio.Event = asyncio.Event()

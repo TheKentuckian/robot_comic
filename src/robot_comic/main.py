@@ -313,6 +313,7 @@ def run(
             instance_path=instance_path,
             app_stop_event=app_stop_event,
             pause_controller=pause_controller,
+            movement_manager=movement_manager,
         )
         admin_only_stream.init_admin_ui()
 
@@ -337,6 +338,7 @@ def run(
             instance_path=instance_path,
             app_stop_event=app_stop_event,
             pause_controller=pause_controller,
+            movement_manager=movement_manager,
         )
 
     # Each async service → its own thread/loop

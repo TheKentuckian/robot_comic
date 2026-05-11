@@ -1,7 +1,6 @@
 import asyncio
 import logging
-from typing import Any, Literal
-from pathlib import Path
+from typing import Any
 
 from openai import AsyncOpenAI
 from openai.types.realtime import (
@@ -17,7 +16,7 @@ from openai.types.realtime.realtime_audio_input_turn_detection_param import Serv
 from robot_comic.config import OPENAI_BACKEND, config, get_default_voice_for_backend
 from robot_comic.prompts import get_session_voice, get_session_instructions
 from robot_comic.base_realtime import BaseRealtimeHandler, to_realtime_tools_config
-from robot_comic.tools.core_tools import ToolDependencies, get_active_tool_specs
+from robot_comic.tools.core_tools import get_active_tool_specs
 
 
 logger = logging.getLogger(__name__)
@@ -36,18 +35,6 @@ class OpenaiRealtimeHandler(BaseRealtimeHandler):
     TEXT_INPUT_COST_PER_1M = 4.0
     TEXT_OUTPUT_COST_PER_1M = 16.0
     IMAGE_INPUT_COST_PER_1M = 5.0
-
-    def __init__(
-        self,
-        deps: ToolDependencies,
-        sim_mode: bool = False,
-        instance_path: str | None = None,
-        startup_voice: str | None = None,
-    ) -> None:
-        """Initialize OpenAI-specific credential state."""
-        super().__init__(deps, sim_mode, instance_path, startup_voice)
-        self._key_source: Literal["env", "textbox"] = "env"
-        self._provided_api_key: str | None = None
 
     async def _prepare_startup_credentials(self) -> None:
         """Wait for the admin UI to populate the OpenAI key in env when needed.
@@ -68,63 +55,6 @@ class OpenaiRealtimeHandler(BaseRealtimeHandler):
                 refresh_runtime_config_from_env()
             except Exception:
                 pass
-
-    def _persist_credentials_if_needed(self) -> None:
-        """Legacy textbox→.env persistence; now a no-op (admin UI handles it)."""
-        try:
-            if not self.sim_mode:
-                return
-
-            if self._key_source != "textbox":
-                return
-
-            key = (self._provided_api_key or "").strip()
-            if not key:
-                logger.warning("No OpenAI API key provided via textbox; skipping persistence.")
-                return
-            if self.instance_path is None:
-                logger.warning("Instance path is None; cannot persist OpenAI API key.")
-                return
-
-            # Update the current process environment for downstream consumers.
-            try:
-                import os
-
-                os.environ["OPENAI_API_KEY"] = key
-            except Exception:  # best-effort
-                pass
-
-            target_dir = Path(self.instance_path)
-            env_path = target_dir / ".env"
-            if env_path.exists():
-                # Respect existing user configuration.
-                logger.info(".env already exists at %s; not overwriting.", env_path)
-                return
-
-            example_path = target_dir / ".env.example"
-            content_lines: list[str] = []
-            if example_path.exists():
-                try:
-                    content = example_path.read_text(encoding="utf-8")
-                    content_lines = content.splitlines()
-                except Exception as e:
-                    logger.warning("Failed to read .env.example at %s: %s", example_path, e)
-
-            replaced = False
-            for i, line in enumerate(content_lines):
-                if line.strip().startswith("OPENAI_API_KEY="):
-                    content_lines[i] = f"OPENAI_API_KEY={key}"
-                    replaced = True
-                    break
-            if not replaced:
-                content_lines.append(f"OPENAI_API_KEY={key}")
-
-            final_text = "\n".join(content_lines) + "\n"
-            env_path.write_text(final_text, encoding="utf-8")
-            logger.info("Created %s and stored OPENAI_API_KEY for future runs.", env_path)
-        except Exception as e:
-            # Never crash the app for QoL persistence; just log.
-            logger.warning("Could not persist OPENAI_API_KEY to .env: %s", e)
 
     def _get_session_instructions(self) -> str:
         """Return OpenAI session instructions."""
@@ -218,7 +148,7 @@ class OpenaiRealtimeHandler(BaseRealtimeHandler):
     async def _build_realtime_client(self) -> AsyncOpenAI:
         """Build the OpenAI realtime SDK client."""
         self._realtime_connect_query = {}
-        resolved_api_key = (self._provided_api_key or config.OPENAI_API_KEY or "").strip()
+        resolved_api_key = (config.OPENAI_API_KEY or "").strip()
         if not resolved_api_key:
             # In headless console mode, LocalStream blocks startup until the key is provided.
             # Unit tests may invoke this handler directly with a stubbed client.
