@@ -15,7 +15,7 @@ import sys
 import time
 import asyncio
 import logging
-from typing import List, Optional
+from typing import Any, List, Optional
 from pathlib import Path
 
 from fastrtc import AdditionalOutputs, audio_to_float32
@@ -28,19 +28,19 @@ from robot_comic.config import (
     GEMINI_BACKEND,
     LOCKED_PROFILE,
     OPENAI_BACKEND,
-    LOCAL_STT_BACKEND,
-    GEMINI_TTS_OUTPUT,
     CHATTERBOX_OUTPUT,
+    GEMINI_TTS_OUTPUT,
+    LOCAL_STT_BACKEND,
     CHATTERBOX_URL_ENV,
+    LOCAL_STT_MODEL_ENV,
     CHATTERBOX_VOICE_ENV,
     CHATTERBOX_DEFAULT_URL,
-    CHATTERBOX_DEFAULT_VOICE,
-    LOCAL_STT_MODEL_ENV,
     HF_REALTIME_WS_URL_ENV,
     LOCAL_STT_LANGUAGE_ENV,
     LOCAL_STT_PROVIDER_ENV,
     LOCAL_STT_CACHE_DIR_ENV,
     LOCAL_STT_MODEL_CHOICES,
+    CHATTERBOX_DEFAULT_VOICE,
     HF_LOCAL_CONNECTION_MODE,
     HF_DEPLOYED_CONNECTION_MODE,
     LOCAL_STT_UPDATE_INTERVAL_ENV,
@@ -57,6 +57,12 @@ from robot_comic.config import (
     get_model_name_for_backend,
     get_hf_connection_selection,
     refresh_runtime_config_from_env,
+)
+from robot_comic.pause_settings import (
+    PausePhraseSettings,
+    read_pause_settings,
+    write_pause_settings,
+    settings_from_payload,
 )
 from robot_comic.startup_settings import read_startup_settings, write_startup_settings
 from robot_comic.audio.startup_config import apply_audio_startup_config
@@ -123,11 +129,17 @@ class LocalStream:
         *,
         settings_app: Optional[FastAPI] = None,
         instance_path: Optional[str] = None,
+        app_stop_event: Optional[Any] = None,
+        pause_controller: Optional[Any] = None,
     ):
         """Initialize the stream with a realtime handler and pipelines.
 
         - ``settings_app``: the Reachy Mini Apps FastAPI to attach settings endpoints.
         - ``instance_path``: directory where per-instance ``.env`` should be stored.
+        - ``app_stop_event``: optional ``threading.Event`` used by the admin restart endpoint to
+          trigger the graceful shutdown path (the autostart service is expected to relaunch).
+        - ``pause_controller``: optional ``PauseController`` whose phrase lists the admin
+          endpoints can read and hot-reload.
         """
         self.handler = handler
         self._robot = robot
@@ -137,6 +149,8 @@ class LocalStream:
         self.handler._clear_queue = self.clear_audio_queue
         self._settings_app: Optional[FastAPI] = settings_app
         self._instance_path: Optional[str] = instance_path
+        self._app_stop_event = app_stop_event
+        self._pause_controller = pause_controller
         self._settings_initialized = False
         self._asyncio_loop = None
         self._active_backend_name = get_backend_choice()
@@ -701,6 +715,78 @@ class LocalStream:
             except Exception as e:
                 logger.warning(f"API key validation failed: {e}")
                 return JSONResponse({"valid": False, "error": "validation_error"}, status_code=500)
+
+        def _pause_phrases_payload(settings: PausePhraseSettings) -> dict[str, object]:
+            return {
+                "saved": {
+                    "stop": list(settings.stop) if settings.stop is not None else None,
+                    "resume": list(settings.resume) if settings.resume is not None else None,
+                    "shutdown": list(settings.shutdown) if settings.shutdown is not None else None,
+                    "switch": list(settings.switch) if settings.switch is not None else None,
+                },
+                "effective": {
+                    "stop": list(settings.resolved_stop()),
+                    "resume": list(settings.resolved_resume()),
+                    "shutdown": list(settings.resolved_shutdown()),
+                    "switch": list(settings.resolved_switch()),
+                },
+            }
+
+        @self._settings_app.get("/pause_phrases")
+        def _get_pause_phrases() -> JSONResponse:
+            settings = read_pause_settings(self._instance_path)
+            return JSONResponse({"ok": True, **_pause_phrases_payload(settings)})
+
+        @self._settings_app.post("/pause_phrases")
+        def _set_pause_phrases(payload: dict[str, object]) -> JSONResponse:
+            new_settings = settings_from_payload(payload)
+            persisted = write_pause_settings(self._instance_path, new_settings)
+            applied_live = False
+            if self._pause_controller is not None:
+                try:
+                    self._pause_controller.update_phrases(
+                        stop=persisted.resolved_stop(),
+                        resume=persisted.resolved_resume(),
+                        shutdown=persisted.resolved_shutdown(),
+                        switch=persisted.resolved_switch(),
+                    )
+                    applied_live = True
+                except Exception as e:
+                    logger.warning("Failed to apply pause phrases to running controller: %s", e)
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "applied_live": applied_live,
+                    **_pause_phrases_payload(persisted),
+                }
+            )
+
+        @self._settings_app.post("/admin/restart")
+        def _restart_app() -> JSONResponse:
+            if self._app_stop_event is None:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "no_stop_event",
+                        "message": "Restart hook is unavailable. Stop and start Robot Comic manually to apply changes.",
+                    },
+                    status_code=503,
+                )
+            logger.info("Admin requested restart — setting app_stop_event")
+            try:
+                self._app_stop_event.set()
+            except Exception as e:
+                logger.error("Failed to set app_stop_event: %s", e)
+                return JSONResponse({"ok": False, "error": "stop_event_failed"}, status_code=500)
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "message": (
+                        "Robot Comic is shutting down gracefully. The autostart service will "
+                        "relaunch it; if you are running manually, restart the process."
+                    ),
+                }
+            )
 
         self._settings_initialized = True
 

@@ -1,0 +1,158 @@
+"""Tests for the new pause-phrases + restart admin endpoints in console.py."""
+
+from __future__ import annotations
+import threading
+from types import SimpleNamespace
+from pathlib import Path
+from unittest.mock import MagicMock
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from robot_comic.pause import (
+    DEFAULT_STOP_PHRASES,
+    DEFAULT_RESUME_PHRASES,
+    DEFAULT_SWITCH_PHRASES,
+    DEFAULT_SHUTDOWN_PHRASES,
+    PauseController,
+)
+from robot_comic.console import LocalStream
+from robot_comic.pause_settings import PAUSE_SETTINGS_FILENAME
+
+
+def _make_stream(
+    tmp_path: Path,
+    *,
+    pause_controller: PauseController | None = None,
+    stop_event: threading.Event | None = None,
+) -> tuple[FastAPI, LocalStream]:
+    app = FastAPI()
+    robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
+    stream = LocalStream(
+        MagicMock(),
+        robot,
+        settings_app=app,
+        instance_path=str(tmp_path),
+        app_stop_event=stop_event,
+        pause_controller=pause_controller,
+    )
+    stream._init_settings_ui_if_needed()
+    return app, stream
+
+
+def test_get_pause_phrases_returns_defaults_when_unsaved(tmp_path: Path) -> None:
+    """GET /pause_phrases with no saved file returns nulls for saved and defaults for effective."""
+    app, _ = _make_stream(tmp_path)
+    client = TestClient(app)
+
+    resp = client.get("/pause_phrases")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["saved"] == {"stop": None, "resume": None, "shutdown": None, "switch": None}
+    assert data["effective"]["stop"] == list(DEFAULT_STOP_PHRASES)
+    assert data["effective"]["resume"] == list(DEFAULT_RESUME_PHRASES)
+    assert data["effective"]["shutdown"] == list(DEFAULT_SHUTDOWN_PHRASES)
+    assert data["effective"]["switch"] == list(DEFAULT_SWITCH_PHRASES)
+
+
+def test_post_pause_phrases_persists_and_returns_canonical_form(tmp_path: Path) -> None:
+    """POST /pause_phrases writes the file and returns the normalised state."""
+    app, _ = _make_stream(tmp_path)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/pause_phrases",
+        json={
+            "stop": ["  System Pause  ", "system pause"],
+            "resume": ["Continue"],
+            "shutdown": None,
+            "switch": [],
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["saved"]["stop"] == ["system pause"]
+    assert data["saved"]["resume"] == ["continue"]
+    assert data["saved"]["shutdown"] is None
+    assert data["saved"]["switch"] == []
+    # Effective falls back to defaults when saved is None
+    assert data["effective"]["shutdown"] == list(DEFAULT_SHUTDOWN_PHRASES)
+    # Effective is the empty list when saved is the empty list
+    assert data["effective"]["switch"] == []
+    assert (tmp_path / PAUSE_SETTINGS_FILENAME).exists()
+
+
+def test_post_pause_phrases_applies_live_when_controller_present(tmp_path: Path) -> None:
+    """When a PauseController is wired, POST updates it in-place and reports applied_live=True."""
+    controller = PauseController(
+        clear_move_queue=MagicMock(),
+        on_shutdown=MagicMock(),
+    )
+    app, _ = _make_stream(tmp_path, pause_controller=controller)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/pause_phrases",
+        json={"stop": ["please halt"], "resume": None, "shutdown": None, "switch": None},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["applied_live"] is True
+    assert controller.get_phrases()["stop"] == ("please halt",)
+
+
+def test_post_pause_phrases_without_controller_reports_not_applied(tmp_path: Path) -> None:
+    """Without a controller wired, save still succeeds but applied_live is False."""
+    app, _ = _make_stream(tmp_path)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/pause_phrases",
+        json={"stop": ["please halt"], "resume": None, "shutdown": None, "switch": None},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["applied_live"] is False
+
+
+def test_post_admin_restart_sets_stop_event(tmp_path: Path) -> None:
+    """POST /admin/restart sets the supplied threading.Event for graceful shutdown."""
+    stop_event = threading.Event()
+    app, _ = _make_stream(tmp_path, stop_event=stop_event)
+    client = TestClient(app)
+
+    resp = client.post("/admin/restart")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert "graceful" in body["message"].lower() or "shutting down" in body["message"].lower()
+    assert stop_event.is_set()
+
+
+def test_post_admin_restart_503_when_no_stop_event(tmp_path: Path) -> None:
+    """When no stop event was plumbed in, the endpoint reports 503."""
+    app, _ = _make_stream(tmp_path)
+    client = TestClient(app)
+
+    resp = client.post("/admin/restart")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["error"] == "no_stop_event"
+
+
+def test_round_trip_phrase_save_and_get(tmp_path: Path) -> None:
+    """POST then GET reflects the previously persisted state."""
+    app, _ = _make_stream(tmp_path)
+    client = TestClient(app)
+
+    client.post(
+        "/pause_phrases",
+        json={"stop": ["robot stop"], "resume": None, "shutdown": None, "switch": None},
+    )
+    resp = client.get("/pause_phrases")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["saved"]["stop"] == ["robot stop"]
+    assert data["saved"]["resume"] is None

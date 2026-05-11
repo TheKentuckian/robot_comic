@@ -1,6 +1,8 @@
 """Entrypoint for Robot Comic."""
 
 import warnings
+
+
 warnings.filterwarnings(
     "ignore",
     category=UserWarning,
@@ -10,6 +12,7 @@ warnings.filterwarnings(
 import os
 import sys
 import time
+import signal
 import asyncio
 import argparse
 import threading
@@ -61,9 +64,9 @@ def run(
         HF_BACKEND,
         GEMINI_BACKEND,
         OPENAI_BACKEND,
-        LOCAL_STT_BACKEND,
         CHATTERBOX_OUTPUT,
         GEMINI_TTS_OUTPUT,
+        LOCAL_STT_BACKEND,
         HF_LOCAL_CONNECTION_MODE,
         config,
         is_gemini_model,
@@ -119,7 +122,9 @@ def run(
             config.MODEL_NAME,
         )
 
+    from robot_comic.pause import PauseController
     from robot_comic.console import LocalStream
+    from robot_comic.pause_settings import read_pause_settings
     from robot_comic.tools.core_tools import ToolDependencies
     from robot_comic.audio.head_wobbler import HeadWobbler
 
@@ -178,12 +183,30 @@ def run(
 
     head_wobbler = HeadWobbler(set_speech_offsets=movement_manager.set_speech_offsets)
 
+    def _request_shutdown_from_pause() -> None:
+        logger.info("Pause controller requested shutdown")
+        if app_stop_event is not None:
+            app_stop_event.set()
+        else:
+            logger.warning("No app_stop_event available; cannot trigger graceful shutdown")
+
+    pause_settings = read_pause_settings(instance_path)
+    pause_controller = PauseController(
+        clear_move_queue=movement_manager.clear_move_queue,
+        on_shutdown=_request_shutdown_from_pause,
+        stop_phrases=pause_settings.resolved_stop(),
+        resume_phrases=pause_settings.resolved_resume(),
+        shutdown_phrases=pause_settings.resolved_shutdown(),
+        switch_phrases=pause_settings.resolved_switch(),
+    )
+
     deps = ToolDependencies(
         reachy_mini=robot,
         movement_manager=movement_manager,
         camera_worker=camera_worker,
         vision_processor=vision_processor,
         head_wobbler=head_wobbler,
+        pause_controller=pause_controller,
     )
     current_file_path = os.path.dirname(os.path.abspath(__file__))
     logger.debug(f"Current file absolute path: {current_file_path}")
@@ -231,11 +254,11 @@ def run(
             startup_voice=startup_settings.voice,
         )  # type: ignore[assignment]
     elif config.BACKEND_PROVIDER == LOCAL_STT_BACKEND:
-        from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
         from robot_comic.gemini_tts import LocalSTTGeminiTTSHandler
+        from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
         from robot_comic.local_stt_realtime import (
-            LocalSTTHuggingFaceRealtimeHandler,
             LocalSTTOpenAIRealtimeHandler,
+            LocalSTTHuggingFaceRealtimeHandler,
         )
 
         local_stt_response_backend = getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
@@ -315,6 +338,8 @@ def run(
             robot,
             settings_app=settings_app,
             instance_path=instance_path,
+            app_stop_event=app_stop_event,
+            pause_controller=pause_controller,
         )
 
     # Each async service → its own thread/loop
@@ -336,6 +361,28 @@ def run(
 
     if app_stop_event:
         threading.Thread(target=poll_stop_event, daemon=True).start()
+
+    # Translate SIGTERM into the same graceful path as KeyboardInterrupt so
+    # `systemctl stop` (and any future power-button hook) drives the head back
+    # to a neutral pose instead of letting motors cut mid-motion.
+    def _request_graceful_shutdown(signum: int, _frame: Any) -> None:
+        try:
+            name = signal.Signals(signum).name
+        except ValueError:
+            name = str(signum)
+        logger.info("Received %s; requesting graceful shutdown", name)
+        if app_stop_event is not None:
+            app_stop_event.set()
+        else:
+            # No external stop_event plumbed — fall back to raising
+            # KeyboardInterrupt so the existing finally-block path runs.
+            raise KeyboardInterrupt
+
+    try:
+        signal.signal(signal.SIGTERM, _request_graceful_shutdown)
+    except ValueError:
+        # signal.signal() only works in the main thread; skip silently if not.
+        logger.debug("Skipped SIGTERM handler install (not in main thread)")
 
     try:
         if args.gradio:
