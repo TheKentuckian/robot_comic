@@ -18,6 +18,7 @@ from openai.types.realtime import (
 )
 from openai.types.realtime.realtime_audio_formats_param import AudioPCM
 
+from robot_comic.pause import TranscriptDisposition
 from robot_comic.config import (
     HF_BACKEND,
     OPENAI_BACKEND,
@@ -230,6 +231,17 @@ class LocalSTTInputMixin:
         self._turn_first_audio_at = None
 
         await self.output_queue.put(AdditionalOutputs({"role": "user", "content": transcript}))
+
+        pause_controller = getattr(self.deps, "pause_controller", None)
+        if pause_controller is not None:
+            try:
+                disposition = pause_controller.handle_transcript(transcript)
+            except Exception as e:
+                logger.error("pause_controller.handle_transcript raised: %s", e)
+                disposition = TranscriptDisposition.DISPATCH
+            if disposition is TranscriptDisposition.HANDLED:
+                return
+
         await self._dispatch_completed_transcript(transcript)
 
     async def _dispatch_completed_transcript(self, transcript: str) -> None:

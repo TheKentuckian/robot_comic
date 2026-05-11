@@ -777,6 +777,13 @@ class BaseRealtimeHandler(ConversationHandler, ABC):
 
                         await self.output_queue.put(AdditionalOutputs({"role": "user", "content": transcript}))
 
+                        pause_controller = getattr(self.deps, "pause_controller", None)
+                        if pause_controller is not None:
+                            try:
+                                pause_controller.handle_transcript(transcript)
+                            except Exception as e:
+                                logger.error("pause_controller.handle_transcript raised: %s", e)
+
                     # Handle assistant transcription
                     if event.type == "response.output_audio_transcript.done":
                         self._mark_activity("assistant_transcript_done")
