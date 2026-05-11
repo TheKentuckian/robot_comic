@@ -124,8 +124,8 @@ class LocalStream:
 
     def __init__(
         self,
-        handler: ConversationHandler,
-        robot: ReachyMini,
+        handler: Optional[ConversationHandler],
+        robot: Optional[ReachyMini],
         *,
         settings_app: Optional[FastAPI] = None,
         instance_path: Optional[str] = None,
@@ -134,6 +134,10 @@ class LocalStream:
     ):
         """Initialize the stream with a realtime handler and pipelines.
 
+        - ``handler``/``robot`` may be ``None`` when constructing a settings-only
+          LocalStream (e.g. ``--sim`` mode, which uses FastRTC for audio but still
+          serves the static admin UI through ``init_admin_ui``). ``launch`` and
+          the audio-pipeline methods require both to be provided.
         - ``settings_app``: the Reachy Mini Apps FastAPI to attach settings endpoints.
         - ``instance_path``: directory where per-instance ``.env`` should be stored.
         - ``app_stop_event``: optional ``threading.Event`` used by the admin restart endpoint to
@@ -146,7 +150,8 @@ class LocalStream:
         self._stop_event = asyncio.Event()
         self._tasks: List[asyncio.Task[None]] = []
         # Allow the handler to flush the player queue when appropriate.
-        self.handler._clear_queue = self.clear_audio_queue
+        if self.handler is not None:
+            self.handler._clear_queue = self.clear_audio_queue
         self._settings_app: Optional[FastAPI] = settings_app
         self._instance_path: Optional[str] = instance_path
         self._app_stop_event = app_stop_event
@@ -443,7 +448,7 @@ class LocalStream:
                 continue
         return {"removed": removed, **self._crowd_history_status()}
 
-    def _init_settings_ui_if_needed(self) -> None:
+    def init_admin_ui(self) -> None:
         """Attach minimal settings UI to the settings app.
 
         Always mounts the UI when a settings_app is provided so that users
@@ -815,7 +820,7 @@ class LocalStream:
 
         # Always expose settings UI if a settings app is available
         # (do this AFTER loading the instance .env so status endpoint sees the right value)
-        self._init_settings_ui_if_needed()
+        self.init_admin_ui()
 
         # If key is still missing -> wait until provided via the settings UI
         if not self._has_required_key(active_backend):

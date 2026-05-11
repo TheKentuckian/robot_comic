@@ -14,26 +14,28 @@ import logging
 from typing import Any, Optional
 
 import numpy as np
-from fastrtc import AdditionalOutputs, wait_for_item
 from google import genai
+from fastrtc import AdditionalOutputs, wait_for_item
 from google.genai import types
 
 from robot_comic.config import (
     GEMINI_AVAILABLE_VOICES,
-    GEMINI_TTS_AVAILABLE_VOICES,
     GEMINI_TTS_DEFAULT_VOICE,
+    GEMINI_TTS_AVAILABLE_VOICES,
     config,
     set_custom_profile,
 )
 
+
 # Voices shared with Gemini Live may have been persisted for that backend.
 # Only restore startup_voice if it is TTS-exclusive (not in the Live voice list).
 _TTS_EXCLUSIVE_VOICES: frozenset[str] = frozenset(GEMINI_TTS_AVAILABLE_VOICES) - frozenset(GEMINI_AVAILABLE_VOICES)
-from robot_comic.conversation_handler import ConversationHandler
-from robot_comic.gemini_live import _openai_tool_specs_to_gemini
-from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.prompts import get_session_instructions
+from robot_comic.gemini_live import _openai_tool_specs_to_gemini
 from robot_comic.tools.core_tools import ToolDependencies, dispatch_tool_call, get_active_tool_specs
+from robot_comic.local_stt_realtime import LocalSTTInputMixin
+from robot_comic.conversation_handler import ConversationHandler
+
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +56,7 @@ class GeminiTTSResponseHandler(ConversationHandler):
     def __init__(
         self,
         deps: ToolDependencies,
-        gradio_mode: bool = False,
+        sim_mode: bool = False,
         instance_path: Optional[str] = None,
         startup_voice: Optional[str] = None,
     ) -> None:
@@ -64,7 +66,7 @@ class GeminiTTSResponseHandler(ConversationHandler):
             input_sample_rate=16000,
         )
         self.deps = deps
-        self.gradio_mode = gradio_mode
+        self.sim_mode = sim_mode
         self.instance_path = instance_path
         # Only restore voices that are TTS-exclusive. Shared Live/TTS voices
         # (Kore, Aoede, etc.) may have been persisted for Gemini Live — ignore them
@@ -87,7 +89,7 @@ class GeminiTTSResponseHandler(ConversationHandler):
     def copy(self) -> "GeminiTTSResponseHandler":
         return GeminiTTSResponseHandler(
             self.deps,
-            self.gradio_mode,
+            self.sim_mode,
             self.instance_path,
             startup_voice=self._voice_override,
         )

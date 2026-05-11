@@ -626,29 +626,38 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
 
 
 @pytest.mark.asyncio
-async def test_start_up_openai_gradio_collects_textbox_api_key(monkeypatch: Any) -> None:
-    """OpenAI should own Gradio textbox credential collection."""
+async def test_start_up_openai_sim_polls_env_for_api_key(monkeypatch: Any) -> None:
+    """In --sim mode, OpenAI handler polls the env until the admin UI populates the key."""
     monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
     monkeypatch.setattr(config, "OPENAI_API_KEY", None)
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
-    handler = rt_mod.OpenaiRealtimeHandler(deps, gradio_mode=True)
-    handler.latest_args = ["profile", "voice", "unused", "sk-textbox-secret"]
+    handler = rt_mod.OpenaiRealtimeHandler(deps, sim_mode=True)
 
     build_client = AsyncMock(return_value=MagicMock())
     run_realtime_session = AsyncMock(return_value=None)
-    wait_for_args = AsyncMock(return_value=None)
+
+    # First poll: still missing; second poll: admin UI has populated the key.
+    poll_calls = {"n": 0}
+
+    def fake_refresh() -> None:
+        poll_calls["n"] += 1
+        if poll_calls["n"] >= 1:
+            monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-admin-ui-set")
 
     monkeypatch.setattr(handler, "_build_realtime_client", build_client)
     monkeypatch.setattr(handler, "_run_realtime_session", run_realtime_session)
-    monkeypatch.setattr(handler, "wait_for_args", wait_for_args)
+    monkeypatch.setattr(rt_mod, "refresh_runtime_config_from_env", fake_refresh, raising=False)
+    # Patch the late import inside _prepare_startup_credentials too.
+    import robot_comic.config as config_mod
+
+    monkeypatch.setattr(config_mod, "refresh_runtime_config_from_env", fake_refresh)
 
     await handler.start_up()
 
-    wait_for_args.assert_awaited_once()
     build_client.assert_awaited_once_with()
     run_realtime_session.assert_awaited_once()
-    assert handler._provided_api_key == "sk-textbox-secret"
+    assert poll_calls["n"] >= 1
 
 
 @pytest.mark.asyncio

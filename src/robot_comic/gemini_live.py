@@ -206,7 +206,7 @@ class GeminiLiveHandler(ConversationHandler):
     def __init__(
         self,
         deps: ToolDependencies,
-        gradio_mode: bool = False,
+        sim_mode: bool = False,
         instance_path: Optional[str] = None,
         startup_voice: Optional[str] = None,
     ):
@@ -218,7 +218,7 @@ class GeminiLiveHandler(ConversationHandler):
         )
 
         self.deps = deps
-        self.gradio_mode = gradio_mode
+        self.sim_mode = sim_mode
         self.instance_path = instance_path
         self._voice_override: str | None = _resolve_gemini_startup_voice(startup_voice)
 
@@ -249,7 +249,7 @@ class GeminiLiveHandler(ConversationHandler):
         """Create a copy of the handler."""
         return GeminiLiveHandler(
             self.deps,
-            self.gradio_mode,
+            self.sim_mode,
             self.instance_path,
             startup_voice=self._voice_override,
         )
@@ -349,15 +349,18 @@ class GeminiLiveHandler(ConversationHandler):
     async def start_up(self) -> None:
         """Start the handler with retries on unexpected closure."""
         gemini_api_key = config.GEMINI_API_KEY
-        if self.gradio_mode and not gemini_api_key:
-            await self.wait_for_args()  # type: ignore[no-untyped-call]
-            args = list(self.latest_args)
-            textbox_api_key = args[3] if len(args) > 3 and len(args[3]) > 0 else None
-            if textbox_api_key is not None:
-                gemini_api_key = textbox_api_key
-                self._key_source = "textbox"
-                self._provided_api_key = textbox_api_key
-            else:
+        if self.sim_mode and not gemini_api_key:
+            # Sim mode: poll the env for the key. The admin UI writes it to
+            # the instance .env when the user enters credentials.
+            from robot_comic.config import refresh_runtime_config_from_env
+
+            logger.warning("GEMINI_API_KEY not set; waiting for the admin UI at / to provide it…")
+            while not gemini_api_key:
+                await asyncio.sleep(0.2)
+                try:
+                    refresh_runtime_config_from_env()
+                except Exception:
+                    pass
                 gemini_api_key = config.GEMINI_API_KEY
         else:
             if not gemini_api_key or not gemini_api_key.strip():
@@ -659,7 +662,7 @@ class GeminiLiveHandler(ConversationHandler):
                                             if len(audio_array) == 0:
                                                 continue
 
-                                            if self.gradio_mode and self.deps.head_wobbler is not None:
+                                            if self.sim_mode and self.deps.head_wobbler is not None:
                                                 self.deps.head_wobbler.feed(
                                                     base64.b64encode(audio_bytes).decode("utf-8")
                                                 )

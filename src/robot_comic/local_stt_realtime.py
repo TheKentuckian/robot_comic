@@ -94,12 +94,12 @@ class LocalSTTInputMixin:
     def __init__(
         self,
         deps: ToolDependencies,
-        gradio_mode: bool = False,
+        sim_mode: bool = False,
         instance_path: str | None = None,
         startup_voice: str | None = None,
     ) -> None:
         """Initialize local STT state and the response backend."""
-        super().__init__(deps, gradio_mode, instance_path, startup_voice)  # type: ignore[misc]
+        super().__init__(deps, sim_mode, instance_path, startup_voice)  # type: ignore[misc]
         self.local_stt_sample_rate = LOCAL_STT_SAMPLE_RATE
         self._local_stt_stream: Any = None
         self._local_stt_transcriber: Any = None
@@ -120,7 +120,7 @@ class LocalSTTInputMixin:
         """Create a copy of the handler."""
         return type(self)(  # type: ignore[call-arg, return-value]
             self.deps,
-            self.gradio_mode,
+            self.sim_mode,
             self.instance_path,
             startup_voice=self._voice_override,
         )

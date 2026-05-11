@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Any, Literal
 from pathlib import Path
@@ -39,37 +40,42 @@ class OpenaiRealtimeHandler(BaseRealtimeHandler):
     def __init__(
         self,
         deps: ToolDependencies,
-        gradio_mode: bool = False,
+        sim_mode: bool = False,
         instance_path: str | None = None,
         startup_voice: str | None = None,
     ) -> None:
         """Initialize OpenAI-specific credential state."""
-        super().__init__(deps, gradio_mode, instance_path, startup_voice)
+        super().__init__(deps, sim_mode, instance_path, startup_voice)
         self._key_source: Literal["env", "textbox"] = "env"
         self._provided_api_key: str | None = None
 
     async def _prepare_startup_credentials(self) -> None:
-        """Collect an OpenAI API key from Gradio input when needed."""
-        openai_api_key = config.OPENAI_API_KEY
-        if not self.gradio_mode or openai_api_key:
+        """Wait for the admin UI to populate the OpenAI key in env when needed.
+
+        In sim mode the user provides credentials through the static admin
+        UI at /, which writes them to the instance ``.env``. Poll the env
+        until the key appears (mirrors LocalStream's headless polling).
+        """
+        if not self.sim_mode or config.OPENAI_API_KEY:
             return
 
-        await self.wait_for_args()  # type: ignore[no-untyped-call]
-        args = list(self.latest_args)
-        textbox_api_key = args[3] if len(args) > 3 and len(args[3]) > 0 else None
-        if textbox_api_key is not None:
-            self._key_source = "textbox"
-            self._provided_api_key = textbox_api_key
+        from robot_comic.config import refresh_runtime_config_from_env
+
+        logger.warning("OPENAI_API_KEY not set; waiting for the admin UI at / to provide it…")
+        while not config.OPENAI_API_KEY:
+            await asyncio.sleep(0.2)
+            try:
+                refresh_runtime_config_from_env()
+            except Exception:
+                pass
 
     def _persist_credentials_if_needed(self) -> None:
-        """Persist a textbox-provided OpenAI API key into the instance `.env`."""
+        """Legacy textbox→.env persistence; now a no-op (admin UI handles it)."""
         try:
-            if not self.gradio_mode:
-                logger.warning("Not in Gradio mode; skipping OpenAI API key persistence.")
+            if not self.sim_mode:
                 return
 
             if self._key_source != "textbox":
-                logger.info("OpenAI API key not provided via textbox; skipping persistence.")
                 return
 
             key = (self._provided_api_key or "").strip()

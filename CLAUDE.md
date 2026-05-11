@@ -36,8 +36,8 @@ mypy --pretty --show-error-codes     # Type check
 /venvs/apps_venv/bin/python -m pytest tests/ -k "test_name" -v
 
 # Run the app
-python -m robot_comic.main           # Console/headless mode
-python -m robot_comic.main --gradio  # Gradio web UI
+python -m robot_comic.main           # Console/headless mode (default; on-robot autostart path)
+python -m robot_comic.main --sim     # Simulation/dev mode: FastRTC audio chat at /chat + admin UI at /
 python -m robot_comic.main --debug   # Verbose logging
 
 # On-robot logs
@@ -81,20 +81,20 @@ Camera runs in a dedicated thread. Head tracking is pluggable: `mediapipe` (in-p
 ### Audio (`audio/`)
 `HeadWobbler` produces speech-reactive secondary head motion. `startup_settings.json` persists UI profile/voice selections across restarts.
 
-### Admin/Settings UI (headless mode)
-The user-facing admin UI runs in **headless mode** (the default, on-robot autostart path) on port 7860 — **not** in `--gradio` mode. When making admin/settings UI changes, edit these files:
+### Admin/Settings UI
+The user-facing admin UI is the same in headless (`/`) and sim (`/`) modes — only the audio bridge differs (local speakers vs FastRTC at `/chat`). When making admin/settings UI changes, edit these files:
 - `src/robot_comic/static/index.html` — markup
 - `src/robot_comic/static/main.js` — client-side fetch + handlers
 - `src/robot_comic/static/main.css` — styles
-- `src/robot_comic/console.py` — FastAPI route handlers (look for `@self._settings_app.get/post(...)` inside `_init_settings_ui_if_needed`)
+- `src/robot_comic/console.py` — FastAPI route handlers registered inside `LocalStream.init_admin_ui` (look for `@self._settings_app.get/post(...)`)
 - `src/robot_comic/headless_personality_ui.py` — the profile/personality picker routes
 
-The `gradio_personality.py` / `--gradio` flag is a separate code path (primarily used for simulation mode + browser-based FastRTC audio testing); changes made there will NOT appear in the on-robot UI.
+In sim mode (`--sim`), `main.py` constructs a settings-only `LocalStream(handler=None, robot=None, ...)` purely to call `init_admin_ui()`. The FastRTC `Stream.ui` is mounted at `/chat`. There is no longer a separate Gradio personality UI.
 
 ## Key Conventions
 
 - **Threading model**: MovementManager, CameraWorker, and HeadWobbler each own a dedicated thread. The main thread drives the asyncio event loop for audio streaming.
-- **Startup config**: Persisted to `startup_settings.json`; reloaded on app restart from the Gradio UI.
+- **Startup config**: Persisted to `startup_settings.json`; reloaded on app restart from the admin UI.
 - **Config refresh**: `config.py` centralizes all env-var reading; backends call `refresh()` at startup.
 - **Cross-platform**: All code must work on Linux, macOS, and Windows.
 - **Git branches**: `feat/<issue>-<desc>`, `fix/<issue>-<desc>`. `main` is the release branch; PRs require CI (lint + types + tests) to pass.

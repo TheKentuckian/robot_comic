@@ -69,7 +69,14 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
         action="store_true",
         help="Use local vision model instead of the selected realtime backend vision",
     )
-    parser.add_argument("--gradio", default=False, action="store_true", help="Open gradio interface")
+    parser.add_argument(
+        "--sim",
+        "--gradio",
+        dest="sim",
+        default=False,
+        action="store_true",
+        help="Run in simulation/dev mode: serve the browser audio chat (FastRTC) at /chat and the admin UI at /. Required when running against the Reachy Mini simulator. --gradio is accepted as a deprecated alias.",
+    )
     parser.add_argument("--debug", default=False, action="store_true", help="Enable debug logging")
     parser.add_argument(
         "--robot-name",

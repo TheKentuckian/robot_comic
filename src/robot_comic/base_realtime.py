@@ -110,11 +110,19 @@ class BaseRealtimeHandler(ConversationHandler, ABC):
     def __init__(
         self,
         deps: ToolDependencies,
-        gradio_mode: bool = False,
+        sim_mode: bool = False,
         instance_path: Optional[str] = None,
         startup_voice: Optional[str] = None,
     ):
-        """Initialize the handler."""
+        """Initialize the handler.
+
+        ``sim_mode`` is True when audio is bridged to a browser via FastRTC
+        (the `--sim` flag, used for simulation / dev-workstation testing).
+        In sim mode the handler feeds the head wobbler from the outgoing
+        audio stream rather than from local playback timing, and polls the
+        instance ``.env`` (populated by the admin UI) for any missing API
+        credentials instead of waiting for a Gradio textbox.
+        """
         sample_rate = self.SAMPLE_RATE
         super().__init__(
             expected_layout="mono",
@@ -134,7 +142,7 @@ class BaseRealtimeHandler(ConversationHandler, ABC):
         self.last_activity_time = asyncio.get_event_loop().time()
         self.start_time = asyncio.get_event_loop().time()
         self.is_idle_tool_call = False
-        self.gradio_mode = gradio_mode
+        self.sim_mode = sim_mode
         self.instance_path = instance_path
         self._voice_override: str | None = self._normalize_startup_voice(startup_voice)
         self._realtime_connect_query: dict[str, str] = {}
@@ -226,7 +234,7 @@ class BaseRealtimeHandler(ConversationHandler, ABC):
         """Create a copy of the handler."""
         return type(self)(
             self.deps,
-            self.gradio_mode,
+            self.sim_mode,
             self.instance_path,
             startup_voice=self._voice_override,
         )
@@ -796,7 +804,7 @@ class BaseRealtimeHandler(ConversationHandler, ABC):
                     if event.type == "response.output_audio.delta":
                         decoded_pcm_bytes = base64.b64decode(event.delta)
                         decoded_pcm = np.frombuffer(decoded_pcm_bytes, dtype=np.int16).reshape(1, -1)
-                        if self.gradio_mode and self.deps.head_wobbler is not None:
+                        if self.sim_mode and self.deps.head_wobbler is not None:
                             self.deps.head_wobbler.feed_pcm(decoded_pcm, self.output_sample_rate)
                         self._mark_activity("assistant_audio_delta")
                         if self._turn_user_done_at is not None and self._turn_first_audio_at is None:

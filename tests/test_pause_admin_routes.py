@@ -36,7 +36,7 @@ def _make_stream(
         app_stop_event=stop_event,
         pause_controller=pause_controller,
     )
-    stream._init_settings_ui_if_needed()
+    stream.init_admin_ui()
     return app, stream
 
 

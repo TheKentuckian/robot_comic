@@ -62,7 +62,7 @@ Conversational app for the Reachy Mini robot combining realtime voice backends, 
   - **Gemini Live** (`gemini-3.1-flash-live-preview`) - requires `GEMINI_API_KEY`.
 - Vision processing uses the selected realtime backend by default (when the camera tool is used), with optional on-device local vision using SmolVLM2 (CPU/GPU/MPS) via `--local-vision`.
 - Layered motion system queues primary moves (dances, emotions, goto poses, breathing) while blending speech-reactive wobble and head-tracking.
-- Async tool dispatch integrates robot motion, camera capture, and optional head-tracking capabilities through a Gradio web UI with live transcripts.
+- Async tool dispatch integrates robot motion, camera capture, and optional head-tracking capabilities through a browser admin UI with live transcripts.
 
 ## Architecture
 
@@ -244,7 +244,7 @@ reachy-mini-conversation-app
 > [!TIP]
 > Make sure the Reachy Mini daemon is running before launching the app. If you see a `TimeoutError`, it means the daemon isn't started. See [Reachy Mini's SDK](https://github.com/pollen-robotics/reachy_mini/) for setup instructions.
 
-The app runs in console mode by default. Add `--gradio` to launch a web UI at http://127.0.0.1:7860/ (required for simulation mode). Vision and head-tracking options are described in the CLI table below.
+The app runs in **headless mode** by default — the admin UI is served at http://127.0.0.1:7860/. For workstation/simulation runs, add `--sim` to also bridge audio to your browser via FastRTC (mounted at `/chat`); the same admin UI remains at `/`. Vision and head-tracking options are described in the CLI table below.
 
 ### CLI options
 
@@ -253,7 +253,7 @@ The app runs in console mode by default. Add `--gradio` to launch a web UI at ht
 | `--head-tracker {yolo,mediapipe}` | `None` | Select a head-tracking backend when a camera is available. `mediapipe` comes from the `reachy_mini_toolbox` package and is installed by default; `yolo` uses a local YOLO face detector and requires the `yolo_vision` extra. For app launches without CLI flags, set `REACHY_MINI_HEAD_TRACKER=mediapipe` in the app instance `.env`. |
 | `--no-camera` | `False` | Run without camera capture or head tracking. |
 | `--local-vision` | `False` | Use the local vision model (SmolVLM2) for camera-tool requests instead of the selected realtime backend. Requires `local_vision` extra to be installed. |
-| `--gradio` | `False` | Launch the Gradio web UI. Without this flag, runs in console mode. Required when running in simulation mode. |
+| `--sim` | `False` | Simulation/dev mode. Bridges audio to the browser via FastRTC at `/chat` and serves the admin UI at `/`. Auto-enabled when the Reachy Mini daemon reports simulation. `--gradio` is accepted as a deprecated alias. |
 | `--robot-name` | `None` | Optional. Connect to a specific robot by name when running multiple daemons on the same subnet. See [Multiple robots on the same subnet](#advanced-features). |
 | `--debug` | `False` | Enable verbose logging for troubleshooting. |
 
@@ -272,8 +272,8 @@ reachy-mini-conversation-app --local-vision
 # Audio-only conversation (no camera)
 reachy-mini-conversation-app --no-camera
 
-# Launch with Gradio web interface
-reachy-mini-conversation-app --gradio
+# Simulation / workstation dev mode (browser audio at /chat, admin UI at /)
+reachy-mini-conversation-app --sim
 ```
 
 > [!WARNING]
@@ -337,7 +337,7 @@ Custom tools must subclass `robot_comic.tools.core_tools.Tool` (see `profiles/ex
 
 **Edit personalities from the UI:**
 
-When running with `--gradio`, open the "Personality" accordion:
+The admin UI at http://127.0.0.1:7860/ (served in both headless and `--sim` modes) exposes a Personality section:
 - Select among available profiles (folders under `profiles/`) or the built‑in default.
 - Click "Apply" to update the current session instructions live.
 - Create a new personality by entering a name and instructions text. It stores files under `profiles/<name>/` and copies `tools.txt` from the `default` profile.
@@ -353,7 +353,7 @@ To create a locked variant of the app that cannot switch profiles, edit `src/rob
 ```python
 LOCKED_PROFILE: str | None = "mars_rover"  # Lock to this profile
 ```
-When `LOCKED_PROFILE` is set, the app always uses that profile, ignoring saved startup settings, `REACHY_MINI_CUSTOM_PROFILE`, and the Gradio UI. The UI shows "(locked)" and disables all profile editing controls.
+When `LOCKED_PROFILE` is set, the app always uses that profile, ignoring saved startup settings, `REACHY_MINI_CUSTOM_PROFILE`, and the admin UI personality picker. The UI shows "(locked)" and disables all profile editing controls.
 This is useful for creating dedicated clones of the app with a fixed personality. Clone scripts can simply edit this constant to lock the variant.
 
 </details>
