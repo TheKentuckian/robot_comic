@@ -81,6 +81,16 @@ Camera runs in a dedicated thread. Head tracking is pluggable: `mediapipe` (in-p
 ### Audio (`audio/`)
 `HeadWobbler` produces speech-reactive secondary head motion. `startup_settings.json` persists UI profile/voice selections across restarts.
 
+### Admin/Settings UI (headless mode)
+The user-facing admin UI runs in **headless mode** (the default, on-robot autostart path) on port 7860 — **not** in `--gradio` mode. When making admin/settings UI changes, edit these files:
+- `src/robot_comic/static/index.html` — markup
+- `src/robot_comic/static/main.js` — client-side fetch + handlers
+- `src/robot_comic/static/main.css` — styles
+- `src/robot_comic/console.py` — FastAPI route handlers (look for `@self._settings_app.get/post(...)` inside `_init_settings_ui_if_needed`)
+- `src/robot_comic/headless_personality_ui.py` — the profile/personality picker routes
+
+The `gradio_personality.py` / `--gradio` flag is a separate code path (primarily used for simulation mode + browser-based FastRTC audio testing); changes made there will NOT appear in the on-robot UI.
+
 ## Key Conventions
 
 - **Threading model**: MovementManager, CameraWorker, and HeadWobbler each own a dedicated thread. The main thread drives the asyncio event loop for audio streaming.
