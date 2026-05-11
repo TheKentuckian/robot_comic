@@ -124,33 +124,42 @@ class LocalStream:
 
     def __init__(
         self,
-        handler: ConversationHandler,
-        robot: ReachyMini,
+        handler: Optional[ConversationHandler],
+        robot: Optional[ReachyMini],
         *,
         settings_app: Optional[FastAPI] = None,
         instance_path: Optional[str] = None,
         app_stop_event: Optional[Any] = None,
         pause_controller: Optional[Any] = None,
+        movement_manager: Optional[Any] = None,
     ):
         """Initialize the stream with a realtime handler and pipelines.
 
+        - ``handler``/``robot`` may be ``None`` when constructing a settings-only
+          LocalStream (e.g. ``--sim`` mode, which uses FastRTC for audio but still
+          serves the static admin UI through ``init_admin_ui``). ``launch`` and
+          the audio-pipeline methods require both to be provided.
         - ``settings_app``: the Reachy Mini Apps FastAPI to attach settings endpoints.
         - ``instance_path``: directory where per-instance ``.env`` should be stored.
         - ``app_stop_event``: optional ``threading.Event`` used by the admin restart endpoint to
           trigger the graceful shutdown path (the autostart service is expected to relaunch).
         - ``pause_controller``: optional ``PauseController`` whose phrase lists the admin
           endpoints can read and hot-reload.
+        - ``movement_manager``: optional ``MovementManager`` used by the admin
+          ``/movement_speed`` endpoints (read/write the playback speed factor).
         """
         self.handler = handler
         self._robot = robot
         self._stop_event = asyncio.Event()
         self._tasks: List[asyncio.Task[None]] = []
         # Allow the handler to flush the player queue when appropriate.
-        self.handler._clear_queue = self.clear_audio_queue
+        if self.handler is not None:
+            self.handler._clear_queue = self.clear_audio_queue
         self._settings_app: Optional[FastAPI] = settings_app
         self._instance_path: Optional[str] = instance_path
         self._app_stop_event = app_stop_event
         self._pause_controller = pause_controller
+        self._movement_manager = movement_manager
         self._settings_initialized = False
         self._asyncio_loop = None
         self._active_backend_name = get_backend_choice()
@@ -443,7 +452,7 @@ class LocalStream:
                 continue
         return {"removed": removed, **self._crowd_history_status()}
 
-    def _init_settings_ui_if_needed(self) -> None:
+    def init_admin_ui(self) -> None:
         """Attach minimal settings UI to the settings app.
 
         Always mounts the UI when a settings_app is provided so that users
@@ -788,6 +797,29 @@ class LocalStream:
                 }
             )
 
+        @self._settings_app.get("/movement_speed")
+        def _get_movement_speed() -> JSONResponse:
+            if self._movement_manager is None:
+                return JSONResponse({"ok": False, "error": "no_movement_manager"}, status_code=503)
+            value = float(getattr(self._movement_manager, "speed_factor", 1.0))
+            return JSONResponse({"ok": True, "value": value, "min": 0.1, "max": 2.0, "step": 0.05})
+
+        @self._settings_app.post("/movement_speed")
+        def _set_movement_speed(payload: dict[str, object]) -> JSONResponse:
+            if self._movement_manager is None:
+                return JSONResponse({"ok": False, "error": "no_movement_manager"}, status_code=503)
+            raw = payload.get("value")
+            try:
+                value = float(raw)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                return JSONResponse({"ok": False, "error": "invalid_value"}, status_code=400)
+            try:
+                self._movement_manager.set_speed_factor(value)
+            except Exception as e:
+                logger.warning("set_speed_factor(%r) failed: %s", value, e)
+                return JSONResponse({"ok": False, "error": "set_failed"}, status_code=500)
+            return JSONResponse({"ok": True, "value": float(self._movement_manager.speed_factor)})
+
         self._settings_initialized = True
 
     def launch(self) -> None:
@@ -815,7 +847,7 @@ class LocalStream:
 
         # Always expose settings UI if a settings app is available
         # (do this AFTER loading the instance .env so status endpoint sees the right value)
-        self._init_settings_ui_if_needed()
+        self.init_admin_ui()
 
         # If key is still missing -> wait until provided via the settings UI
         if not self._has_required_key(active_backend):

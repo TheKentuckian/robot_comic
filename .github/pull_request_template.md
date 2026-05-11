@@ -20,9 +20,8 @@
 <details>
 <summary><strong>UI / run modes</strong> — expand if your PR touches these</summary>
 
-- [ ] Headless mode (default)
-- [ ] Gradio UI (`--gradio`)
-- [ ] Simulation (`--gradio` required)
+- [ ] Headless mode (default, on-robot)
+- [ ] Simulation/dev mode (`--sim`, formerly `--gradio`)
 </details>
 
 <details>

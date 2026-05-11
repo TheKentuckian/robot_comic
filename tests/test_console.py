@@ -142,7 +142,7 @@ def test_backend_config_persists_gemini_selection_and_status(
     app = FastAPI()
     robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
     stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
-    stream._init_settings_ui_if_needed()
+    stream.init_admin_ui()
 
     client = TestClient(app)
 
@@ -197,7 +197,7 @@ def test_backend_config_preserves_explicit_model_override_when_saving_key(
     app = FastAPI()
     robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
     stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
-    stream._init_settings_ui_if_needed()
+    stream.init_admin_ui()
 
     client = TestClient(app)
     response = client.post(
@@ -239,7 +239,7 @@ def test_backend_config_persists_local_stt_selection_and_status(
     app = FastAPI()
     robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
     stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
-    stream._init_settings_ui_if_needed()
+    stream.init_admin_ui()
 
     client = TestClient(app)
     response = client.post(
@@ -293,7 +293,7 @@ def test_backend_config_rejects_invalid_local_stt_update_interval(
     app = FastAPI()
     robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
     stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
-    stream._init_settings_ui_if_needed()
+    stream.init_admin_ui()
 
     client = TestClient(app)
     response = client.post(
@@ -328,7 +328,7 @@ def test_backend_config_persists_local_hf_selection_and_status(
     app = FastAPI()
     robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
     stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
-    stream._init_settings_ui_if_needed()
+    stream.init_admin_ui()
 
     client = TestClient(app)
     response = client.post(
@@ -388,7 +388,7 @@ def test_backend_config_persists_deployed_mode_without_clearing_local_hf_ws_url(
     app = FastAPI()
     robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
     stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
-    stream._init_settings_ui_if_needed()
+    stream.init_admin_ui()
 
     client = TestClient(app)
     response = client.post(
@@ -439,7 +439,7 @@ def test_backend_config_switches_to_saved_local_hf_connection_without_payload_ta
     app = FastAPI()
     robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
     stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
-    stream._init_settings_ui_if_needed()
+    stream.init_admin_ui()
 
     client = TestClient(app)
     response = client.post(
@@ -474,7 +474,7 @@ def test_backend_config_rejects_invalid_hf_port_zero(
     app = FastAPI()
     robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
     stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
-    stream._init_settings_ui_if_needed()
+    stream.init_admin_ui()
 
     client = TestClient(app)
     response = client.post(
@@ -504,7 +504,7 @@ def test_status_reports_direct_hf_ws_url_as_ready(
     app = FastAPI()
     robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
     stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
-    stream._init_settings_ui_if_needed()
+    stream.init_admin_ui()
 
     client = TestClient(app)
     response = client.get("/status")
@@ -533,7 +533,7 @@ def test_status_reports_local_crowd_history_directory(
     app = FastAPI()
     robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
     stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
-    stream._init_settings_ui_if_needed()
+    stream.init_admin_ui()
 
     client = TestClient(app)
     response = client.get("/status")
@@ -563,7 +563,7 @@ def test_crowd_history_clear_removes_session_files(
     app = FastAPI()
     robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
     stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
-    stream._init_settings_ui_if_needed()
+    stream.init_admin_ui()
 
     client = TestClient(app)
     response = client.post("/crowd_history/clear")
@@ -746,7 +746,7 @@ def test_local_stream_launch_waits_for_manual_openai_key_without_download(
     stream._active_backend_name = "openai"
 
     init_settings_ui = MagicMock()
-    monkeypatch.setattr(stream, "_init_settings_ui_if_needed", init_settings_ui)
+    monkeypatch.setattr(stream, "init_admin_ui", init_settings_ui)
     monkeypatch.setattr(stream, "_has_required_key", MagicMock(side_effect=[False, False]))
     monkeypatch.setattr("robot_comic.console.time.sleep", MagicMock(side_effect=KeyboardInterrupt))
 

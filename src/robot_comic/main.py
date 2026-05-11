@@ -22,7 +22,6 @@ from pathlib import Path
 import gradio as gr
 from fastapi import FastAPI
 from fastrtc import Stream
-from gradio.utils import get_space
 
 from reachy_mini import ReachyMini, ReachyMiniApp
 from robot_comic.utils import (
@@ -62,7 +61,6 @@ def run(
     from robot_comic.moves import MovementManager
     from robot_comic.config import (
         HF_BACKEND,
-        GEMINI_BACKEND,
         OPENAI_BACKEND,
         CHATTERBOX_OUTPUT,
         GEMINI_TTS_OUTPUT,
@@ -166,9 +164,9 @@ def run(
 
     is_simulation = simulation_enabled or mockup_sim_enabled
 
-    if is_simulation and not args.gradio:
-        logger.info("Simulation mode detected. Automatically enabling gradio flag.")
-        args.gradio = True
+    if is_simulation and not args.sim:
+        logger.info("Simulation mode detected. Automatically enabling --sim.")
+        args.sim = True
 
     try:
         camera_worker, vision_processor = initialize_camera_and_vision(args, robot)
@@ -229,7 +227,7 @@ def run(
         )
         handler = GeminiLiveHandler(
             deps,
-            gradio_mode=args.gradio,
+            sim_mode=args.sim,
             instance_path=instance_path,
             startup_voice=startup_settings.voice,
         )
@@ -249,7 +247,7 @@ def run(
         )
         handler = HuggingFaceRealtimeHandler(
             deps,
-            gradio_mode=args.gradio,
+            sim_mode=args.sim,
             instance_path=instance_path,
             startup_voice=startup_settings.voice,
         )  # type: ignore[assignment]
@@ -275,7 +273,7 @@ def run(
 
         handler = handler_class(
             deps,
-            gradio_mode=args.gradio,
+            sim_mode=args.sim,
             instance_path=instance_path,
             startup_voice=startup_settings.voice,
         )  # type: ignore[assignment]
@@ -288,49 +286,49 @@ def run(
         )
         handler = OpenaiRealtimeHandler(
             deps,
-            gradio_mode=args.gradio,
+            sim_mode=args.sim,
             instance_path=instance_path,
             startup_voice=startup_settings.voice,
         )  # type: ignore[assignment]
 
     stream_manager: gr.Blocks | LocalStream | None = None
 
-    if args.gradio:
-        from robot_comic.gradio_personality import PersonalityUI
-
-        personality_ui = PersonalityUI()
-        personality_ui.create_components()
-        additional_inputs: list[Any] = [chatbot, *personality_ui.additional_inputs_ordered()]
-
-        if config.BACKEND_PROVIDER in {OPENAI_BACKEND, GEMINI_BACKEND, LOCAL_STT_BACKEND}:
-            uses_gemini_backend = is_gemini_model()
-            api_key_textbox = gr.Textbox(
-                label="GEMINI_API_KEY" if uses_gemini_backend else "OPENAI API Key",
-                type="password",
-                value=(os.getenv("GEMINI_API_KEY") if uses_gemini_backend else os.getenv("OPENAI_API_KEY"))
-                if not get_space()
-                else "",
-            )
-            additional_inputs.insert(1, api_key_textbox)
-
-        stream = Stream(
-            handler=handler,
-            mode="send-receive",
-            modality="audio",
-            additional_inputs=additional_inputs,
-            additional_outputs=[chatbot],
-            additional_outputs_handler=update_chatbot,
-            ui_args={"title": "Robot Comic"},
-        )
-        stream_manager = stream.ui
+    if args.sim:
+        # Sim/dev mode: bridge audio to the browser via FastRTC and serve the
+        # same static admin UI at "/" that the on-robot headless build uses.
+        # The FastRTC chat UI lives at "/chat" so it doesn't collide with the
+        # admin UI.
         if not settings_app:
             app = FastAPI()
         else:
             app = settings_app
 
-        personality_ui.wire_events(handler, stream_manager)
+        # Mount the static admin UI (and its REST endpoints) by piggy-backing
+        # on a settings-only LocalStream. It never starts an audio pipeline
+        # because we don't call .launch() on it.
+        admin_only_stream = LocalStream(
+            handler=None,
+            robot=None,
+            settings_app=app,
+            instance_path=instance_path,
+            app_stop_event=app_stop_event,
+            pause_controller=pause_controller,
+            movement_manager=movement_manager,
+        )
+        admin_only_stream.init_admin_ui()
 
-        app = gr.mount_gradio_app(app, stream.ui, path="/")
+        stream = Stream(
+            handler=handler,
+            mode="send-receive",
+            modality="audio",
+            additional_inputs=[chatbot],
+            additional_outputs=[chatbot],
+            additional_outputs_handler=update_chatbot,
+            ui_args={"title": "Robot Comic"},
+        )
+        stream_manager = stream.ui
+
+        app = gr.mount_gradio_app(app, stream.ui, path="/chat")
     else:
         # In headless mode, wire settings_app + instance_path to console LocalStream
         stream_manager = LocalStream(
@@ -340,6 +338,7 @@ def run(
             instance_path=instance_path,
             app_stop_event=app_stop_event,
             pause_controller=pause_controller,
+            movement_manager=movement_manager,
         )
 
     # Each async service → its own thread/loop
@@ -385,7 +384,7 @@ def run(
         logger.debug("Skipped SIGTERM handler install (not in main thread)")
 
     try:
-        if args.gradio:
+        if args.sim:
             stream_manager.launch(server_name="0.0.0.0")
         else:
             stream_manager.launch()

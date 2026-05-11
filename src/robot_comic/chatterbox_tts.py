@@ -22,11 +22,11 @@ from scipy.signal import resample
 from robot_comic.config import (
     CHATTERBOX_OUTPUT,
     CHATTERBOX_DEFAULT_URL,
+    CHATTERBOX_DEFAULT_GAIN,
     CHATTERBOX_DEFAULT_VOICE,
     CHATTERBOX_DEFAULT_CFG_WEIGHT,
     CHATTERBOX_DEFAULT_TEMPERATURE,
     CHATTERBOX_DEFAULT_EXAGGERATION,
-    CHATTERBOX_DEFAULT_GAIN,
     config,
     set_custom_profile,
 )
@@ -148,7 +148,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
     def __init__(
         self,
         deps: ToolDependencies,
-        gradio_mode: bool = False,
+        sim_mode: bool = False,
         instance_path: Optional[str] = None,
         startup_voice: Optional[str] = None,
     ) -> None:
@@ -158,7 +158,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             input_sample_rate=16000,
         )
         self.deps = deps
-        self.gradio_mode = gradio_mode
+        self.sim_mode = sim_mode
         self.instance_path = instance_path
         self._voice_override: str | None = startup_voice
         self._http: httpx.AsyncClient | None = None
@@ -178,7 +178,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
     def copy(self) -> "ChatterboxTTSResponseHandler":
         return ChatterboxTTSResponseHandler(
             self.deps,
-            self.gradio_mode,
+            self.sim_mode,
             self.instance_path,
             startup_voice=self._voice_override,
         )

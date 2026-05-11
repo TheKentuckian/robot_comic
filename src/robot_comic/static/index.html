@@ -184,6 +184,34 @@
         </div>
       </div>
 
+      <div id="movement-speed-panel" class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Admin</p>
+            <h2>Movement speed</h2>
+          </div>
+          <span id="movement-speed-chip" class="chip">—</span>
+        </div>
+        <p class="muted small">
+          Multiplier applied to all primary moves. 0.1 is very slow / quiet, 1.0 is normal,
+          2.0 is fast. Takes effect immediately.
+        </p>
+        <div class="row">
+          <label for="movement-speed-slider">Speed factor</label>
+          <input
+            id="movement-speed-slider"
+            type="range"
+            min="0.1"
+            max="2.0"
+            step="0.05"
+            value="0.6"
+          />
+        </div>
+        <div class="actions">
+          <p id="movement-speed-status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
+        </div>
+      </div>
+
       <div id="restart-panel" class="panel">
         <div class="panel-heading">
           <div>

@@ -223,7 +223,7 @@ async def test_output_audio_delta_passes_output_sample_rate_to_head_wobbler(monk
         movement_manager=MagicMock(),
         head_wobbler=head_wobbler,
     )
-    handler = HuggingFaceRealtimeHandler(deps, gradio_mode=True)
+    handler = HuggingFaceRealtimeHandler(deps, sim_mode=True)
     handler.client = FakeClient()
 
     start_up = MagicMock()
@@ -271,13 +271,13 @@ def test_handler_uses_hf_startup_voice_at_startup(monkeypatch: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_up_hf_gradio_does_not_wait_for_api_key(monkeypatch: Any) -> None:
-    """Hugging Face backend should not wait for gradio key input."""
+async def test_start_up_hf_sim_does_not_wait_for_api_key(monkeypatch: Any) -> None:
+    """Hugging Face backend in --sim mode should not block on textbox key collection."""
     monkeypatch.setattr(config, "BACKEND_PROVIDER", "huggingface")
     monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-openai-secret")
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
-    handler = hf_mod.HuggingFaceRealtimeHandler(deps, gradio_mode=True)
+    handler = hf_mod.HuggingFaceRealtimeHandler(deps, sim_mode=True)
 
     build_client = AsyncMock(return_value=MagicMock())
     run_realtime_session = AsyncMock(return_value=None)
