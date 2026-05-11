@@ -326,13 +326,14 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
     async def _handle_tool_notification(self, notification: ToolNotification) -> None:
         logger.info("Tool %s finished: status=%s", notification.tool_name, notification.status.value)
 
-    async def _synthesize_and_enqueue(self, response_text: str) -> None:
+    async def _synthesize_and_enqueue(self, response_text: str, tts_start: float | None = None) -> None:
         """Translate response_text to TTS segments and enqueue PCM frames."""
         if not response_text:
             return
         persona = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None) or "default"
         segments = translate(response_text, persona=persona, use_turbo=False)
         any_audio = False
+        _first_chunk = True
         for seg in segments:
             if seg.silence_ms:
                 for frame in self._pcm_to_frames(self._silence_pcm(seg.silence_ms)):
@@ -345,6 +346,11 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                         sentence, exaggeration=seg.exaggeration, cfg_weight=seg.cfg_weight
                     )
                     if pcm:
+                        if _first_chunk and tts_start is not None:
+                            telemetry.record_tts_first_audio(
+                                time.perf_counter() - tts_start, {"gen_ai.system": "chatterbox"}
+                            )
+                            _first_chunk = False
                         for frame in self._pcm_to_frames(pcm):
                             await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
                         any_audio = True
@@ -399,7 +405,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                 AdditionalOutputs({"role": "assistant", "content": response_text})
             )
             _tts_start = time.perf_counter()
-            await self._synthesize_and_enqueue(response_text)
+            await self._synthesize_and_enqueue(response_text, tts_start=_tts_start)
             _tts_s = time.perf_counter() - _tts_start
             telemetry.record_tts(_tts_s, {"gen_ai.system": "chatterbox"})
 
@@ -450,7 +456,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                 AdditionalOutputs({"role": "assistant", "content": follow_up_text})
             )
             _tts2_start = time.perf_counter()
-            await self._synthesize_and_enqueue(follow_up_text)
+            await self._synthesize_and_enqueue(follow_up_text, tts_start=_tts2_start)
             telemetry.record_tts(time.perf_counter() - _tts2_start, {"gen_ai.system": "chatterbox"})
 
         finally:
