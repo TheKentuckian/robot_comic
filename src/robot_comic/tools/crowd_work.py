@@ -13,8 +13,20 @@ from robot_comic.tools.core_tools import Tool, ToolDependencies
 
 logger = logging.getLogger(__name__)
 
-SESSION_DIR = Path(".comedy_sessions")
+SESSION_DIRNAME = ".comedy_sessions"
 SESSION_WINDOW_HOURS = 24
+
+
+def resolve_session_dir(instance_path: Path | None) -> Path:
+    """Return the comedy-sessions directory under instance_path, or a CWD-relative fallback.
+
+    On-robot, instance_path is the stable per-instance directory used for
+    startup_settings.json. In dev/sim mode it may be None, in which case we
+    keep the legacy CWD-relative behaviour.
+    """
+    if instance_path is not None:
+        return Path(instance_path) / SESSION_DIRNAME
+    return Path(SESSION_DIRNAME)
 
 
 class CrowdWork(Tool):
@@ -47,8 +59,15 @@ class CrowdWork(Tool):
     }
 
     def __init__(self, session_dir: Path | None = None) -> None:
-        """Initialise state and resume the most recent same-day session if one exists."""
-        self._session_dir = session_dir if session_dir is not None else SESSION_DIR
+        """Initialise state. Resume the most recent same-day session lazily on first call.
+
+        Resume is deferred so the session directory can be resolved against the
+        running instance path (``deps.instance_path``) — singleton tools are
+        constructed before that path is known. When ``session_dir`` is passed
+        explicitly (tests), eager-resume is preserved.
+        """
+        self._explicit_session_dir: Path | None = session_dir
+        self._session_dir: Path | None = session_dir
         self._session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._state: Dict[str, Any] = {
             "session_id": self._session_id,
@@ -60,12 +79,27 @@ class CrowdWork(Tool):
             "roast_targets_used": [],
             "last_updated": None,
         }
-        self._load_recent_session()
+        self._resumed = False
+        if session_dir is not None:
+            self._load_recent_session()
+            self._resumed = True
+
+    def _ensure_session_dir(self, deps: ToolDependencies) -> None:
+        """Resolve the session directory from deps on first use and load any same-day session."""
+        if self._explicit_session_dir is not None:
+            return
+        if self._session_dir is None:
+            self._session_dir = resolve_session_dir(deps.instance_path)
+        if not self._resumed:
+            self._load_recent_session()
+            self._resumed = True
 
     def _session_path(self) -> Path:
+        assert self._session_dir is not None
         return self._session_dir / f"session_{self._session_id}.json"
 
     def _load_recent_session(self) -> None:
+        assert self._session_dir is not None
         if not self._session_dir.exists():
             return
         cutoff = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -86,6 +120,7 @@ class CrowdWork(Tool):
                     logger.warning("Failed to load session file %s", path)
 
     def _write_session(self) -> None:
+        assert self._session_dir is not None
         self._session_dir.mkdir(parents=True, exist_ok=True)
         path = self._session_path()
         with path.open("w") as f:
@@ -125,6 +160,7 @@ class CrowdWork(Tool):
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
         """Dispatch to update or query based on the required 'action' kwarg."""
+        self._ensure_session_dir(deps)
         action = kwargs.get("action")
         logger.info("Tool call: crowd_work action=%s", action)
 

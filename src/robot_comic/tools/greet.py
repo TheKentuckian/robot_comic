@@ -11,11 +11,11 @@ from datetime import datetime, timedelta
 
 from robot_comic.tools.move_head import MoveHead
 from robot_comic.tools.core_tools import Tool, ToolDependencies
+from robot_comic.tools.crowd_work import resolve_session_dir
 
 
 logger = logging.getLogger(__name__)
 
-SESSION_DIR = Path(".comedy_sessions")
 SESSION_WINDOW_DAYS = 30
 MATCH_THRESHOLD = 0.75
 SWEEP_POSITIONS = ["left", "up", "right", "front"]
@@ -133,8 +133,20 @@ class Greet(Tool):
     }
 
     def __init__(self, session_dir: Optional[Path] = None) -> None:
-        """Initialise with an optional session directory override (for testing)."""
-        self._session_dir = session_dir if session_dir is not None else SESSION_DIR
+        """Initialise with an optional session directory override (for testing).
+
+        When no override is provided, the directory is resolved on first call
+        from ``deps.instance_path`` so on-robot sessions land in a stable
+        per-instance location rather than the launcher's CWD.
+        """
+        self._explicit_session_dir: Optional[Path] = session_dir
+        self._session_dir: Optional[Path] = session_dir
+
+    def _ensure_session_dir(self, deps: ToolDependencies) -> None:
+        if self._explicit_session_dir is not None:
+            return
+        if self._session_dir is None:
+            self._session_dir = resolve_session_dir(deps.instance_path)
 
     async def _scan(self, deps: ToolDependencies) -> Dict[str, Any]:
         if deps.camera_worker is None:
@@ -166,6 +178,7 @@ class Greet(Tool):
         return {"no_subject": True}
 
     async def _identify(self, deps: ToolDependencies, name: str) -> Dict[str, Any]:
+        assert self._session_dir is not None
         candidates = _load_candidates(self._session_dir)
         if not candidates:
             return {"returning": False}
@@ -199,6 +212,7 @@ class Greet(Tool):
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
         """Dispatch to scan or identify."""
+        self._ensure_session_dir(deps)
         action = kwargs.get("action")
         logger.info("Tool call: greet action=%s", action)
 

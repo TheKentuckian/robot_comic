@@ -67,5 +67,6 @@ src/reachy_mini_conversation_app/profiles/user_personalities/
 # Git worktrees
 .worktrees/
 
-# Rickles session state (runtime artifacts)
+# Comedy session state (runtime artifacts; legacy name kept for back-compat)
+.comedy_sessions/
 .rickles_sessions/

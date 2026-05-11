@@ -525,7 +525,7 @@ def test_status_reports_local_crowd_history_directory(
 ) -> None:
     """Settings API should expose where crowd-work session JSON is stored."""
     monkeypatch.chdir(tmp_path)
-    session_dir = tmp_path / ".rickles_sessions"
+    session_dir = tmp_path / ".comedy_sessions"
     session_dir.mkdir()
     session_file = session_dir / "session_20260506_204006.json"
     session_file.write_text(json.dumps({"name": "Tony"}), encoding="utf-8")
@@ -551,7 +551,7 @@ def test_crowd_history_clear_removes_session_files(
 ) -> None:
     """Admin API should clear persisted crowd-work history without touching unrelated files."""
     monkeypatch.chdir(tmp_path)
-    session_dir = tmp_path / ".rickles_sessions"
+    session_dir = tmp_path / ".comedy_sessions"
     session_dir.mkdir()
     first = session_dir / "session_20260506_204006.json"
     second = session_dir / "session_20260506_214915.json"
