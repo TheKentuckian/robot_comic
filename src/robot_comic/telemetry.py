@@ -10,6 +10,7 @@ enabled — callers never need to check ENABLED themselves.
 """
 
 import os
+import json
 import logging
 from typing import Any, Optional
 
@@ -17,7 +18,7 @@ from opentelemetry import trace, metrics
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
+from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult, SimpleSpanProcessor
 from opentelemetry.sdk.metrics.export import ConsoleMetricExporter, PeriodicExportingMetricReader
 
 
@@ -38,13 +39,50 @@ _TURN_DURATION_BUCKETS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 5.0, 1
 _DEFAULT_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
 
 
+_SPAN_ATTRS_TO_KEEP = frozenset({
+    "turn.id", "session.id", "turn.outcome", "robot.mode",
+    "gen_ai.system", "gen_ai.operation.name", "gen_ai.request.model",
+    "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens",
+    "tool.name", "tool.id", "vad.duration_ms", "stt.type",
+})
+
+
+class CompactLineExporter(SpanExporter):
+    """Writes one RCSPAN JSON line per span to stdout for live monitoring."""
+
+    def export(self, spans: Any) -> SpanExportResult:
+        """Serialize each span to a compact JSON line prefixed with RCSPAN."""
+        for span in spans:
+            dur_ms = (span.end_time - span.start_time) / 1_000_000
+            attrs = {k: v for k, v in (span.attributes or {}).items() if k in _SPAN_ATTRS_TO_KEEP}
+            line = {
+                "name": span.name,
+                "trace": format(span.context.trace_id, "032x"),
+                "span": format(span.context.span_id, "016x"),
+                "parent": format(span.parent.span_id, "016x") if span.parent else None,
+                "dur_ms": round(dur_ms, 1),
+                "status": span.status.status_code.name,
+                "ts": span.end_time // 1_000_000,
+                "attrs": attrs,
+            }
+            print(f"RCSPAN {json.dumps(line, separators=(',', ':'))}", flush=True)
+        return SpanExportResult.SUCCESS
+
+    def shutdown(self) -> None:
+        """No-op shutdown."""
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        """No-op flush — output is written synchronously."""
+        return True
+
+
 def _init_otel() -> None:
     """Set up TracerProvider and MeterProvider.  Called once at app startup."""
     resource = Resource.create({SERVICE_NAME: _SERVICE})
 
     # --- Tracing ---
     tracer_provider = TracerProvider(resource=resource)
-    tracer_provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
+    tracer_provider.add_span_processor(SimpleSpanProcessor(CompactLineExporter()))
 
     if _REMOTE:
         try:

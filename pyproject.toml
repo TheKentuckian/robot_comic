@@ -64,6 +64,9 @@ otel = [
   # on hosts that don't use mediapipe (e.g. CI, cloud aggregators).
   "opentelemetry-exporter-otlp-proto-grpc>=1.24.0",
 ]
+monitor = [
+  "rich>=13.0",
+]
 all_vision = [
   "accelerate>=1.13.0",
   "torch>=2.1",
@@ -87,6 +90,7 @@ dev = [
 
 [project.scripts]
 robot-comic = "robot_comic.main:main"
+robot-comic-monitor = "robot_comic.monitor:main"
 
 [tool.uv]
 torch-backend = "cu124"

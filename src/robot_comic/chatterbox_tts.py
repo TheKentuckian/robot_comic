@@ -19,6 +19,8 @@ import httpx
 import numpy as np
 from fastrtc import AdditionalOutputs, wait_for_item
 from scipy.signal import resample
+from opentelemetry import trace as _otel_trace
+from opentelemetry import context as _otel_context
 
 from robot_comic import telemetry
 from robot_comic.config import (
@@ -370,6 +372,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             attributes={"robot.mode": "chatterbox", "gen_ai.request.model": _model},
         )
         _turn_start = time.perf_counter()
+        _turn_ctx_token = _otel_context.attach(_otel_trace.set_span_in_context(_turn_span))
 
         _outcome = "success"
         try:
@@ -460,6 +463,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             telemetry.record_tts(time.perf_counter() - _tts2_start, {"gen_ai.system": "chatterbox"})
 
         finally:
+            _otel_context.detach(_turn_ctx_token)
             _turn_span.set_attribute("turn.outcome", _outcome)
             _turn_span.end()
             telemetry.record_turn(
