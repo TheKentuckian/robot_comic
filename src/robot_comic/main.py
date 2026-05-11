@@ -81,7 +81,9 @@ def run(
     try:
         import subprocess
         _git_hash = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=Path(__file__).parent,
+            stderr=subprocess.DEVNULL,
         ).decode().strip()
     except Exception:
         _git_hash = "unknown"
@@ -120,11 +122,18 @@ def run(
             config.MODEL_NAME,
         )
 
+    _t0 = time.perf_counter()
+
     from robot_comic.pause import PauseController
+    logger.info("Startup: +%.2fs import pause", time.perf_counter() - _t0)
     from robot_comic.console import LocalStream
+    logger.info("Startup: +%.2fs import console", time.perf_counter() - _t0)
     from robot_comic.pause_settings import read_pause_settings
+    logger.info("Startup: +%.2fs import pause_settings", time.perf_counter() - _t0)
     from robot_comic.tools.core_tools import ToolDependencies
+    logger.info("Startup: +%.2fs import core_tools", time.perf_counter() - _t0)
     from robot_comic.audio.head_wobbler import HeadWobbler
+    logger.info("Startup: +%.2fs import head_wobbler", time.perf_counter() - _t0)
 
     if args.no_camera and get_requested_head_tracker(args) is not None:
         logger.warning("Head tracking disabled: --no-camera flag is set. Remove --no-camera to enable head tracking.")
@@ -153,6 +162,8 @@ def run(
             logger.error("Please check your configuration and try again.")
             sys.exit(1)
 
+    logger.info("Startup: +%.2fs robot available", time.perf_counter() - _t0)
+
     # Auto-enable Gradio in simulation mode (both MuJoCo for daemon and mockup-sim for desktop app)
     status = robot.client.get_status()
     if isinstance(status, dict):
@@ -173,11 +184,13 @@ def run(
     except CameraVisionInitializationError as e:
         logger.error("Failed to initialize camera/vision: %s", e)
         sys.exit(1)
+    logger.info("Startup: +%.2fs camera/vision init", time.perf_counter() - _t0)
 
     movement_manager = MovementManager(
         current_robot=robot,
         camera_worker=camera_worker,
     )
+    logger.info("Startup: +%.2fs movement manager", time.perf_counter() - _t0)
 
     head_wobbler = HeadWobbler(set_speech_offsets=movement_manager.set_speech_offsets)
 
@@ -218,6 +231,7 @@ def run(
         ),
     )
     logger.debug(f"Chatbot avatar images: {chatbot.avatar_images}")
+    logger.info("Startup: +%.2fs chatbot ready", time.perf_counter() - _t0)
 
     if is_gemini_model():
         from robot_comic.gemini_live import GeminiLiveHandler
@@ -291,6 +305,8 @@ def run(
             instance_path=instance_path,
             startup_voice=startup_settings.voice,
         )  # type: ignore[assignment]
+
+    logger.info("Startup: +%.2fs handler ready", time.perf_counter() - _t0)
 
     stream_manager: gr.Blocks | LocalStream | None = None
 
@@ -402,6 +418,12 @@ def run(
             robot.media.close()
         except Exception as e:
             logger.debug(f"Error closing media during shutdown: {e}")
+
+        try:
+            robot.goto_sleep()
+            robot.disable_motors()
+        except Exception as e:
+            logger.warning(f"Error during goto_sleep on app shutdown: {e}")
 
         # prevent connection to keep alive some threads
         robot.client.disconnect()
