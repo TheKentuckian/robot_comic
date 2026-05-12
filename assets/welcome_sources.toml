@@ -1,8 +1,8 @@
 # Welcome Gate — per-comedian YouTube source config.
 #
 # For each real-comedian profile we extract a short "this is me saying my name"
-# clip from YouTube. Fill in `url` with a stand-up / interview clip where the
-# comedian clearly says one of the configured phrases (first match wins).
+# clip from YouTube. The phrases list matches both self-intros and host intros
+# (first match wins), so a Tonight Show host saying "Don Rickles" also works.
 #
 # Schema:
 #   url      = full YouTube URL
@@ -11,35 +11,61 @@
 #   end      = optional "HH:MM:SS" — only transcribe up to this point
 #
 # Narrowing the [start, end] window dramatically speeds up transcription.
+# Default windows below cover the intro of each show (where names are spoken).
 
 [don_rickles]
-url = ""  # TODO: fill in with a clip where Rickles says his name
-phrases = ["i'm don rickles", "don rickles here", "don rickles", "rickles"]
+# Mr. Warmth: The Don Rickles Project (2007 documentary). John Landis narrates
+# and says Rickles's name in the opener; Rickles intros himself too.
+url = "https://www.youtube.com/watch?v=d4lI1sYCYmk"
+phrases = ["i'm don rickles", "don rickles", "rickles"]
+start = "00:00:00"
+end = "00:05:00"
 
 [bill_hicks]
-url = ""  # TODO
-phrases = ["i'm bill hicks", "bill hicks", "hicks"]
+# Bill Hicks — Relentless (1992). Opens with "Good evening, my name is Bill Hicks."
+url = "https://www.youtube.com/watch?v=PQVFRK0agAY"
+phrases = ["my name is bill hicks", "i'm bill hicks", "bill hicks", "hicks"]
+start = "00:00:00"
+end = "00:03:00"
 
 [george_carlin]
-url = ""  # TODO
+# George Carlin — Class Clown (1972) full album. Title-track intro mentions his name.
+url = "https://www.youtube.com/watch?v=o77zMb70V6A"
 phrases = ["i'm george carlin", "george carlin", "carlin"]
+start = "00:00:00"
+end = "00:05:00"
 
 [dave_chappelle]
-url = ""  # TODO
+# Killin' Them Softly (2000) full special.
+url = "https://www.youtube.com/watch?v=iMd3YVOjM-Q"
 phrases = ["i'm dave chappelle", "dave chappelle", "chappelle"]
+start = "00:00:00"
+end = "00:05:00"
 
 [andrew_dice_clay]
-url = ""  # TODO
-phrases = ["i'm andrew dice clay", "andrew dice clay", "the diceman", "dice clay"]
+# Dice Rules (1991) full concert film. Opens with a chant; host intro follows.
+url = "https://www.youtube.com/watch?v=j9V9UmugmXg"
+phrases = ["andrew dice clay", "i'm andrew dice clay", "the diceman", "dice clay", "diceman"]
+start = "00:00:00"
+end = "00:08:00"
 
 [robin_williams]
-url = ""  # TODO
-phrases = ["i'm robin williams", "robin williams", "williams"]
+# Robin Williams — An Evening at the MET (1986). Crowd chants his name; he intros.
+url = "https://www.youtube.com/watch?v=FtTHfOBbYuk"
+phrases = ["robin williams", "williams"]
+start = "00:00:00"
+end = "00:05:00"
 
 [rodney_dangerfield]
-url = ""  # TODO
-phrases = ["i'm rodney dangerfield", "rodney dangerfield", "dangerfield"]
+# Rodney Dangerfield on the Tonight Show (1980). Carson introduces him.
+url = "https://www.youtube.com/watch?v=MecU2keW54I"
+phrases = ["rodney dangerfield", "i'm rodney dangerfield", "dangerfield"]
+start = "00:00:00"
+end = "00:03:00"
 
 [richard_pryor]
-url = ""  # TODO
+# Richard Pryor — Live in Concert (1979) full special, 1080p.
+url = "https://www.youtube.com/watch?v=mrcNZN8MeZE"
 phrases = ["i'm richard pryor", "richard pryor", "pryor"]
+start = "00:00:00"
+end = "00:05:00"

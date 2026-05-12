@@ -79,6 +79,9 @@ profiles/don_rickles/voice_prep/*.wav
 profiles/*/welcome_name.wav
 assets/welcome/*.wav
 
+# HuggingFace model cache (faster-whisper, etc.) created by the asset_build tool.
+cache/
+
 # Ephemeral benchmark / test output
 test_output.txt
 .claude/scheduled_tasks.lock

@@ -29,6 +29,14 @@ from __future__ import annotations
 import os
 import re
 import sys
+
+
+# Force UTF-8 stdout/stderr so we don't crash printing transcripts / log lines
+# from faster-whisper that contain non-cp1252 characters on Windows.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+import time
 import wave
 import base64
 import shutil
@@ -44,6 +52,14 @@ import tomllib
 
 # Local import so we share constants/auth conventions with the runtime.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+# Load .env so GEMINI_API_KEY / GOOGLE_API_KEY work the same as in the app.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+except ImportError:
+    pass
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROFILES_DIR = REPO_ROOT / "profiles"
@@ -174,20 +190,26 @@ def load_sources() -> dict[str, dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 
 
+_whisper_model: Any = None  # cached module-level — destroyed on interpreter exit
+
+
 def transcribe_words(audio_path: Path) -> list[Word]:
     """Transcribe ``audio_path`` and return a flat list of word-level tokens.
 
     Prefers faster-whisper; falls back to whisper-timestamped. Raises
     RuntimeError if neither is installed.
     """
+    global _whisper_model
     try:
         from faster_whisper import WhisperModel  # type: ignore[import-not-found]
     except ImportError:
         return _transcribe_whisper_timestamped(audio_path)
 
+    if _whisper_model is None:
+        print("  loading faster-whisper (medium)...")
+        _whisper_model = WhisperModel("medium", device="auto", compute_type="auto")
     print("  transcribing with faster-whisper (medium)...")
-    model = WhisperModel("medium", device="auto", compute_type="auto")
-    segments, _ = model.transcribe(str(audio_path), word_timestamps=True, language="en")
+    segments, _ = _whisper_model.transcribe(str(audio_path), word_timestamps=True, language="en")
     words: list[Word] = []
     for seg in segments:
         for w in seg.words or []:
@@ -382,9 +404,34 @@ def _gemini_client() -> Any:
     return genai.Client(api_key=api_key)
 
 
+_GEMINI_MIN_INTERVAL_S = 7.0  # 10 RPM quota → 1 req per 6s; pad to 7s for safety
+_GEMINI_MAX_ATTEMPTS = 4
+_last_gemini_call = 0.0
+
+
+def _extract_pcm(resp: Any) -> bytes | None:
+    """Pull inline audio bytes from a Gemini response, or None if absent."""
+    try:
+        parts = resp.candidates[0].content.parts
+    except (AttributeError, IndexError, TypeError):
+        return None
+    for part in parts or []:
+        inline = getattr(part, "inline_data", None)
+        data = getattr(inline, "data", None) if inline is not None else None
+        if data is None:
+            continue
+        return base64.b64decode(data) if isinstance(data, str) else bytes(data)
+    return None
+
+
 def gemini_tts(text: str, voice: str) -> bytes:
-    """Synthesise ``text`` with Gemini TTS at ``voice``; return raw PCM16 bytes."""
-    # Import constants from the live module so model/rate stay in sync.
+    """Synthesise ``text`` with Gemini TTS at ``voice``; return raw PCM16 bytes.
+
+    Throttles to the 10 RPM quota and retries on 429 / empty-audio responses.
+    Short inputs occasionally come back as a text candidate with no
+    ``inline_data``; we retry with a slightly padded prompt in that case.
+    """
+    global _last_gemini_call
     from google.genai import types  # type: ignore[import-not-found]
 
     from robot_comic.gemini_tts import GEMINI_TTS_MODEL, GEMINI_TTS_OUTPUT_SAMPLE_RATE
@@ -396,10 +443,35 @@ def gemini_tts(text: str, voice: str) -> bytes:
             voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice))
         ),
     )
-    resp = client.models.generate_content(model=GEMINI_TTS_MODEL, contents=text, config=cfg)
-    data = resp.candidates[0].content.parts[0].inline_data.data
-    pcm = base64.b64decode(data) if isinstance(data, str) else bytes(data)
-    return transcode_to_target(pcm, GEMINI_TTS_OUTPUT_SAMPLE_RATE)
+
+    last_exc: Exception | None = None
+    for attempt in range(_GEMINI_MAX_ATTEMPTS):
+        wait = _GEMINI_MIN_INTERVAL_S - (time.monotonic() - _last_gemini_call)
+        if wait > 0:
+            time.sleep(wait)
+        # Pad very short prompts on retry — bare two-word names sometimes return text-only.
+        prompt = text if attempt == 0 else f"Say: {text}."
+        try:
+            resp = client.models.generate_content(model=GEMINI_TTS_MODEL, contents=prompt, config=cfg)
+            _last_gemini_call = time.monotonic()
+            pcm = _extract_pcm(resp)
+            if pcm:
+                return transcode_to_target(pcm, GEMINI_TTS_OUTPUT_SAMPLE_RATE)
+            last_exc = RuntimeError("response had no inline audio data")
+            print(f"  attempt {attempt + 1}: empty audio — retrying with padded prompt")
+        except Exception as exc:
+            _last_gemini_call = time.monotonic()
+            msg = str(exc)
+            last_exc = exc
+            if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                m = re.search(r"retryDelay['\"]?\s*[:=]\s*['\"]?(\d+(?:\.\d+)?)\s*s", msg)
+                raw = float(m.group(1)) if m else 30.0
+                delay = min(70.0, raw + 1.0)  # cap: 60s quota window
+                print(f"  attempt {attempt + 1}: 429 rate-limit — sleeping {delay:.0f}s")
+                time.sleep(delay)
+                continue
+            print(f"  attempt {attempt + 1}: {msg.splitlines()[0][:200]}")
+    raise RuntimeError(f"gemini_tts failed after {_GEMINI_MAX_ATTEMPTS} attempts: {last_exc}")
 
 
 # --------------------------------------------------------------------------- #
@@ -486,7 +558,9 @@ def _extract_one(profile: str, entry: dict[str, Any], force: bool, dry_run: bool
                 chosen_phrase = phrase
                 break
         if match is None or chosen_phrase is None:
+            words_preview = " ".join(w.text for w in words[:40]).strip()
             print(f"  no phrase matched. Tried: {phrases}")
+            print(f"  first 40 words: {words_preview!r}")
             return False
 
         m_start, m_end = match
@@ -648,4 +722,9 @@ def main(argv: Iterable[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    rc = main()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # ctranslate2's destructor segfaults on some Windows configs at interpreter
+    # shutdown, masking our real exit code. Skip the cleanup with os._exit.
+    os._exit(rc)
