@@ -225,6 +225,7 @@ def run(
     chatbot = gr.Chatbot(
         type="messages",
         resizable=True,
+        allow_tags=False,
         avatar_images=(
             os.path.join(current_file_path, "images", "user_avatar.png"),
             os.path.join(current_file_path, "images", "reachymini_avatar.png"),

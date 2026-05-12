@@ -19,7 +19,6 @@ from typing import Any, List, Optional
 from pathlib import Path
 
 from fastrtc import AdditionalOutputs, audio_to_float32
-from scipy.signal import resample
 
 from reachy_mini import ReachyMini
 from reachy_mini.media.media_manager import MediaBackend
@@ -989,6 +988,7 @@ class LocalStream:
 
     async def play_loop(self) -> None:
         """Fetch outputs from the handler: log text and play audio frames."""
+        from scipy.signal import resample
         while not self._stop_event.is_set():
             handler_output = await self.handler.emit()
 

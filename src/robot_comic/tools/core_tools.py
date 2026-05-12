@@ -278,16 +278,15 @@ def _initialize_tools() -> None:
     _TOOLS_INITIALIZED = True
 
 
-_initialize_tools()
-
-
 def get_tool_specs(exclusion_list: list[str] = []) -> list[Dict[str, Any]]:
     """Get tool specs, optionally excluding some tools."""
+    _initialize_tools()
     return [spec for spec in ALL_TOOL_SPECS if spec.get("name") not in exclusion_list]
 
 
 def get_active_tool_specs(deps: ToolDependencies) -> list[Dict[str, Any]]:
     """Get tool specs filtered by what the current session deps support."""
+    _initialize_tools()
     exclusion_list: list[str] = []
     if not (deps.camera_worker and deps.camera_worker.head_tracker):
         exclusion_list.append("head_tracking")
@@ -305,6 +304,7 @@ def _safe_load_obj(args_json: str) -> Dict[str, Any]:
 
 
 async def _dispatch_tool_call(tool_name: str, args: Dict[str, Any], deps: ToolDependencies) -> Dict[str, Any]:
+    _initialize_tools()
     tool = ALL_TOOLS.get(tool_name)
     if not tool:
         return {"error": f"unknown tool: {tool_name}"}
