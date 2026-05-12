@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_STOP_PHRASES: tuple[str, ...] = (
     "reachy pause",
+    "reachy paws",  # common moonshine mishearing
 )
 DEFAULT_RESUME_PHRASES: tuple[str, ...] = (
     "continue",
@@ -40,6 +41,7 @@ DEFAULT_RESUME_PHRASES: tuple[str, ...] = (
 )
 DEFAULT_SHUTDOWN_PHRASES: tuple[str, ...] = (
     "reachy shutdown",
+    "reachy shut down",  # moonshine splits this into two words
 )
 DEFAULT_SWITCH_PHRASES: tuple[str, ...] = (
     "switch",

@@ -439,6 +439,16 @@ def run(
 
         try:
             robot.goto_sleep()
+            # Pin the motor controller's stored target to the physical sleep
+            # position. Without this, enable_motors() on next boot snaps to
+            # the previous neutral target (set by movement_manager.stop()),
+            # causing a visible head jerk before the wake_up animation runs.
+            try:
+                sleep_head = robot.get_current_head_pose()
+                _, sleep_antennas = robot.get_current_joint_positions()
+                robot.set_target(head=sleep_head, antennas=list(sleep_antennas), body_yaw=0.0)
+            except Exception as snap_e:
+                logger.debug("Could not pin sleep position target: %s", snap_e)
             robot.disable_motors()
         except Exception as e:
             logger.warning(f"Error during goto_sleep on app shutdown: {e}")
