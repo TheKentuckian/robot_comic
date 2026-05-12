@@ -136,9 +136,8 @@ class Greet(Tool):
     def __init__(self, session_dir: Optional[Path] = None) -> None:
         """Initialise with an optional session directory override (for testing).
 
-        When no override is provided, the directory is resolved on first call
-        from ``deps.instance_path`` so on-robot sessions land in a stable
-        per-instance location rather than the launcher's CWD.
+        When no override is provided, the directory resolves to
+        ~/.robot_comic/.comedy_sessions/ on first call.
         """
         self._explicit_session_dir: Optional[Path] = session_dir
         self._session_dir: Optional[Path] = session_dir

@@ -56,9 +56,8 @@ class CrowdWork(Tool):
     def __init__(self, session_dir: Path | None = None) -> None:
         """Initialise state. Resume the most recent same-day session lazily on first call.
 
-        Resume is deferred so the session directory can be resolved against the
-        running instance path (``deps.instance_path``) — singleton tools are
-        constructed before that path is known. When ``session_dir`` is passed
+        Resume is deferred to first call since singleton tools are constructed
+        before the session dir is needed. When ``session_dir`` is passed
         explicitly (tests), eager-resume is preserved.
         """
         self._explicit_session_dir: Path | None = session_dir
