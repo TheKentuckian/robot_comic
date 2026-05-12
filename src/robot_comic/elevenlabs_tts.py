@@ -46,6 +46,7 @@ from robot_comic.tools.core_tools import ToolDependencies, dispatch_tool_call, g
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.conversation_handler import ConversationHandler
 from robot_comic.chatterbox_tag_translator import strip_gemini_tags
+from robot_comic.elevenlabs_voices import get_elevenlabs_voices
 
 
 logger = logging.getLogger(__name__)
@@ -58,22 +59,6 @@ _TTS_RETRY_BASE_DELAY = 0.5
 _LLM_MAX_RETRIES = 4
 _LLM_RETRY_BASE_DELAY = 1.0
 _LLM_MAX_TOOL_ROUNDS = 5
-
-# Map voice names to ElevenLabs voice IDs
-_ELEVENLABS_VOICE_IDS = {
-    "Adam": "pNInz6obpgDQGcFmaJgB",
-    "Bella": "EXAVITQu4vr4xnSDxMaL",
-    "Antoni": "ErXwobaYp0GwwMsXgNVH",
-    "Domi": "AZnzlk1UV0MYJmxZNSD4",
-    "Elli": "MF3mGyEYCl7XYWbV7PZT",
-    "Gigi": "jsCqWAovK2LkecY7zXl4",
-    "Freya": "jKsUlyx0O5BjJQ0XfvjQ",
-    "Harry": "SOYHLrjzK2X1ezoeGApW",
-    "Liam": "FGKprHBWjP1d6XrNSZaE",
-    "Rachel": "21m00Tcm4ijWNoXd58YU",
-    "River": "SAz9YHcvj6GT2YYXdXnW",
-    "Sam": "2EiwWnXFnvU5JabPnv2n",
-}
 
 
 def load_profile_elevenlabs_config() -> dict[str, str]:
@@ -97,8 +82,49 @@ def load_profile_elevenlabs_config() -> dict[str, str]:
         return {}
 
 
+def apply_voice_settings_deltas(
+    base_stability: float,
+    base_similarity_boost: float,
+    tags: list[str],
+) -> dict[str, float]:
+    """Map delivery tags to voice_settings adjustments.
+
+    Returns adjusted {stability, similarity_boost} dict, clamped to [0.0, 1.0].
+    """
+    stability = base_stability
+    similarity_boost = base_similarity_boost
+
+    for tag in tags:
+        if tag == "fast":
+            similarity_boost += 0.2
+            stability -= 0.1
+        elif tag == "annoyance":
+            similarity_boost += 0.3
+            stability -= 0.15
+        elif tag == "aggression":
+            similarity_boost += 0.4
+            stability -= 0.2
+        elif tag == "slow":
+            stability += 0.1
+            similarity_boost -= 0.1
+        elif tag == "amusement":
+            similarity_boost += 0.15
+        elif tag == "enthusiasm":
+            similarity_boost += 0.2
+            stability -= 0.05
+
+    return {
+        "stability": max(0.0, min(1.0, stability)),
+        "similarity_boost": max(0.0, min(1.0, similarity_boost)),
+    }
+
+
 class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
     """Gemini Flash text model + ElevenLabs TTS voice output."""
+
+    # ElevenLabs Turbo v2.5 pricing: $0.50 per 1M characters (Creator tier)
+    # verify against current ElevenLabs pricing
+    ELEVENLABS_COST_PER_1M_CHARS: float = 0.50
 
     def __init__(
         self,
@@ -122,6 +148,7 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         self._conversation_history: list[dict[str, Any]] = []
         self._last_tts_rate_limited: bool = False
         self.output_queue: asyncio.Queue = asyncio.Queue()
+        self.cumulative_cost: float = 0.0
 
         # Attributes referenced by LocalSTTInputMixin
         self._turn_user_done_at: float | None = None
@@ -214,13 +241,15 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         """Resolve the ElevenLabs voice ID.
 
         Profile config `voice_id=<id>` takes precedence (e.g. PVC clones).
-        Otherwise map the named voice via the prebuilt voice catalog.
+        Otherwise map the named voice via the dynamic voice catalog.
         """
         config_params = load_profile_elevenlabs_config()
         custom_id = config_params.get("voice_id")
         if custom_id:
             return custom_id
-        return _ELEVENLABS_VOICE_IDS.get(self.get_current_voice())
+        voice_name = self.get_current_voice()
+        voice_catalog = get_elevenlabs_voices()
+        return voice_catalog.get(voice_name)
 
     async def change_voice(self, voice: str) -> str:
         self._voice_override = voice
@@ -250,16 +279,17 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         # When non-empty, the first PCM chunk fires record_tts_first_audio and clears it.
         first_audio_marker: list[float] = [time.perf_counter()]
         for sentence in sentences:
+            # Extract delivery tags before stripping so they can guide voice_settings.
+            tags = extract_delivery_tags(sentence)
             # Strip Gemini-style delivery tags ([fast], [annoyance], etc.) so they
             # aren't spoken literally. [short pause] becomes a real silence gap.
-            # Tag-driven voice_settings adjustments are tracked in a follow-up issue.
             spoken = strip_gemini_tags(sentence)
             if not spoken:
                 continue
-            if SHORT_PAUSE_TAG in extract_delivery_tags(sentence):
+            if SHORT_PAUSE_TAG in tags:
                 for frame in self._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS, ELEVENLABS_OUTPUT_SAMPLE_RATE)):
                     await self.output_queue.put((ELEVENLABS_OUTPUT_SAMPLE_RATE, frame))
-            sentence_had_audio = await self._stream_tts_to_queue(spoken, first_audio_marker)
+            sentence_had_audio = await self._stream_tts_to_queue(spoken, first_audio_marker, tags)
             if sentence_had_audio:
                 any_audio = True
 
@@ -362,6 +392,7 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         self,
         text: str,
         first_audio_marker: list[float] | None = None,
+        tags: list[str] | None = None,
     ) -> bool:
         """Stream ElevenLabs TTS PCM chunks directly into ``output_queue``.
 
@@ -371,6 +402,8 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         ``first_audio_marker``: when non-empty, the first PCM chunk emitted fires
         ``telemetry.record_tts_first_audio`` (perf_counter - marker[0]) and the
         marker is cleared so subsequent sentences in the same turn don't refire.
+
+        ``tags``: delivery tags to adjust voice_settings (e.g., [fast], [annoyance]).
 
         Returns True if any audio was streamed for this call.
         """
@@ -386,9 +419,23 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             logger.error("Could not resolve voice ID for %s", self.get_current_voice())
             return False
 
+        # Accumulate cost: ElevenLabs charges per character (text is already tag-stripped).
+        char_count = len(text)
+        cost = (char_count / 1_000_000) * self.ELEVENLABS_COST_PER_1M_CHARS
+        self.cumulative_cost += cost
+        if cost > 0:
+            logger.debug("ElevenLabs TTS cost: $%.4f (%d chars) | Cumulative: $%.4f", cost, char_count, self.cumulative_cost)
+
         config_params = load_profile_elevenlabs_config()
-        stability = float(config_params.get("stability", "0.5"))
-        similarity_boost = float(config_params.get("similarity_boost", "0.75"))
+        base_stability = float(config_params.get("stability", "0.5"))
+        base_similarity_boost = float(config_params.get("similarity_boost", "0.75"))
+
+        # Apply per-sentence tag adjustments to voice_settings.
+        voice_settings = apply_voice_settings_deltas(
+            base_stability,
+            base_similarity_boost,
+            tags or [],
+        )
 
         url = (
             f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
@@ -398,10 +445,7 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         payload = {
             "text": text,
             "model_id": "eleven_turbo_v2_5",
-            "voice_settings": {
-                "stability": stability,
-                "similarity_boost": similarity_boost,
-            },
+            "voice_settings": voice_settings,
         }
 
         self._last_tts_rate_limited = False

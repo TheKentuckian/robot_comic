@@ -95,7 +95,8 @@ GEMINI_TTS_AVAILABLE_VOICES: list[str] = [
 ]
 GEMINI_TTS_DEFAULT_VOICE = "Algenib"
 
-# Voices supported by the ElevenLabs TTS API
+# Voices supported by the ElevenLabs TTS API (populated at startup from /v1/voices API)
+# Fallback list below is used until fetch_elevenlabs_voices_async() is called
 ELEVENLABS_AVAILABLE_VOICES: list[str] = [
     "Adam",
     "Bella",
@@ -779,3 +780,16 @@ def set_custom_profile(profile: str | None) -> None:
             _os.environ.pop("REACHY_MINI_CUSTOM_PROFILE", None)
     except Exception:
         pass
+
+
+async def refresh_elevenlabs_voices() -> None:
+    """Fetch ElevenLabs voices from the API and update ELEVENLABS_AVAILABLE_VOICES.
+
+    Called once at app startup to populate the voice catalog. Falls back to
+    hardcoded voices if the API is unreachable.
+    """
+    from robot_comic.elevenlabs_voices import fetch_elevenlabs_voices
+
+    global ELEVENLABS_AVAILABLE_VOICES
+    voices = await fetch_elevenlabs_voices()
+    ELEVENLABS_AVAILABLE_VOICES = list(voices.keys())
