@@ -8,34 +8,40 @@ Select via:
     LOCAL_STT_RESPONSE_BACKEND=llama_gemini_tts
 """
 
-import asyncio
-import base64
-import logging
 import time
-from typing import Any, Optional
+import base64
+import asyncio
+import logging
+from typing import Optional
 
-import numpy as np
-from fastrtc import AdditionalOutputs
 from google import genai
+from fastrtc import AdditionalOutputs
 from google.genai import types
 
 from robot_comic import telemetry
-from robot_comic.chatterbox_tag_translator import translate
-from robot_comic.llama_base import BaseLlamaResponseHandler, _OUTPUT_SAMPLE_RATE, split_sentences
 from robot_comic.config import (
-    GEMINI_TTS_AVAILABLE_VOICES,
-    GEMINI_TTS_DEFAULT_VOICE,
     LLAMA_GEMINI_TTS_OUTPUT,
+    GEMINI_TTS_DEFAULT_VOICE,
+    GEMINI_TTS_AVAILABLE_VOICES,
     config,
 )
 from robot_comic.gemini_tts import GEMINI_TTS_MODEL, _TTS_EXCLUSIVE_VOICES
-from robot_comic.local_stt_realtime import LocalSTTInputMixin
+from robot_comic.llama_base import _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
+from robot_comic.gemini_retry import (
+    compute_backoff,
+    is_rate_limit_error,
+    describe_quota_failure,
+    extract_retry_after_seconds,
+)
 from robot_comic.tools.core_tools import ToolDependencies
+from robot_comic.local_stt_realtime import LocalSTTInputMixin
+from robot_comic.chatterbox_tag_translator import translate
+
 
 logger = logging.getLogger(__name__)
 
 _TTS_MAX_RETRIES = 3
-_TTS_RETRY_DELAY = 0.5
+_TTS_RETRY_BASE_DELAY = 0.5
 
 
 class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
@@ -119,9 +125,7 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
         clean_text = " ".join(seg.text for seg in segments if seg.text).strip()
 
         if not clean_text:
-            await self.output_queue.put(
-                AdditionalOutputs({"role": "assistant", "content": "[TTS error]"})
-            )
+            await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": "[TTS error]"}))
             return
 
         sentences = split_sentences(clean_text) or [clean_text]
@@ -133,9 +137,7 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
                 logger.warning("Gemini TTS returned None for sentence: %r", sentence[:60])
                 continue
             if first_chunk and tts_start is not None:
-                telemetry.record_tts_first_audio(
-                    time.perf_counter() - tts_start, {"gen_ai.system": "gemini_tts"}
-                )
+                telemetry.record_tts_first_audio(time.perf_counter() - tts_start, {"gen_ai.system": "gemini_tts"})
                 first_chunk = False
             for frame in self._pcm_to_frames(pcm_bytes):
                 await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
@@ -152,9 +154,7 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=self.get_current_voice()
-                    )
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.get_current_voice())
                 )
             ),
         )
@@ -168,9 +168,35 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
                 data = response.candidates[0].content.parts[0].inline_data.data  # type: ignore[index,union-attr]
                 return base64.b64decode(data) if isinstance(data, str) else bytes(data)  # type: ignore[arg-type]
             except Exception as exc:
-                logger.warning("Gemini TTS attempt %d/%d failed: %s", attempt + 1, _TTS_MAX_RETRIES, exc)
+                rate_limited = is_rate_limit_error(exc)
+                if rate_limited:
+                    quota = describe_quota_failure(exc)
+                    retry_after = extract_retry_after_seconds(exc)
+                    logger.warning(
+                        "Gemini TTS 429 (quota=%s, attempt %d/%d); retry-after=%s",
+                        quota,
+                        attempt + 1,
+                        _TTS_MAX_RETRIES,
+                        f"{retry_after:.1f}s" if retry_after is not None else "n/a",
+                    )
+                else:
+                    retry_after = None
+                    logger.warning("Gemini TTS attempt %d/%d failed: %s", attempt + 1, _TTS_MAX_RETRIES, exc)
                 if attempt < _TTS_MAX_RETRIES - 1:
-                    await asyncio.sleep(_TTS_RETRY_DELAY)
+                    delay = compute_backoff(attempt, _TTS_RETRY_BASE_DELAY, retry_after)
+                    await asyncio.sleep(delay)
+                elif rate_limited:
+                    logger.error(
+                        "Gemini TTS exhausted %d retries on 429 (quota=%s); skipping audio for this turn",
+                        _TTS_MAX_RETRIES,
+                        describe_quota_failure(exc),
+                    )
+                else:
+                    logger.error(
+                        "Gemini TTS exhausted %d retries (last error: %s); skipping audio for this turn",
+                        _TTS_MAX_RETRIES,
+                        exc,
+                    )
         return None
 
 
