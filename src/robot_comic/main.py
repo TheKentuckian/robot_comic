@@ -84,11 +84,16 @@ def run(
 
     try:
         import subprocess
-        _git_hash = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=Path(__file__).parent,
-            stderr=subprocess.DEVNULL,
-        ).decode().strip()
+
+        _git_hash = (
+            subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=Path(__file__).parent,
+                stderr=subprocess.DEVNULL,
+            )
+            .decode()
+            .strip()
+        )
     except Exception:
         _git_hash = "unknown"
     logger.info("Starting Robot Comic (git: %s)", _git_hash)
@@ -129,14 +134,19 @@ def run(
     _t0 = time.perf_counter()
 
     from robot_comic.pause import PauseController
+
     logger.info("Startup: +%.2fs import pause", time.perf_counter() - _t0)
     from robot_comic.console import LocalStream
+
     logger.info("Startup: +%.2fs import console", time.perf_counter() - _t0)
     from robot_comic.pause_settings import read_pause_settings
+
     logger.info("Startup: +%.2fs import pause_settings", time.perf_counter() - _t0)
     from robot_comic.tools.core_tools import ToolDependencies
+
     logger.info("Startup: +%.2fs import core_tools", time.perf_counter() - _t0)
     from robot_comic.audio.head_wobbler import HeadWobbler
+
     logger.info("Startup: +%.2fs import head_wobbler", time.perf_counter() - _t0)
 
     if args.no_camera and get_requested_head_tracker(args) is not None:
@@ -229,6 +239,7 @@ def run(
     chatbot = gr.Chatbot(
         type="messages",
         resizable=True,
+        allow_tags=False,
         avatar_images=(
             os.path.join(current_file_path, "images", "user_avatar.png"),
             os.path.join(current_file_path, "images", "reachymini_avatar.png"),
