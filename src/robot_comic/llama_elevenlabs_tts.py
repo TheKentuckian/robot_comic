@@ -79,6 +79,43 @@ def load_profile_elevenlabs_config() -> dict[str, str]:
         return {}
 
 
+def apply_voice_settings_deltas(
+    base_stability: float,
+    base_similarity_boost: float,
+    tags: list[str],
+) -> dict[str, float]:
+    """Map delivery tags to voice_settings adjustments.
+
+    Returns adjusted {stability, similarity_boost} dict, clamped to [0.0, 1.0].
+    """
+    stability = base_stability
+    similarity_boost = base_similarity_boost
+
+    for tag in tags:
+        if tag == "fast":
+            similarity_boost += 0.2
+            stability -= 0.1
+        elif tag == "annoyance":
+            similarity_boost += 0.3
+            stability -= 0.15
+        elif tag == "aggression":
+            similarity_boost += 0.4
+            stability -= 0.2
+        elif tag == "slow":
+            stability += 0.1
+            similarity_boost -= 0.1
+        elif tag == "amusement":
+            similarity_boost += 0.15
+        elif tag == "enthusiasm":
+            similarity_boost += 0.2
+            stability -= 0.05
+
+    return {
+        "stability": max(0.0, min(1.0, stability)),
+        "similarity_boost": max(0.0, min(1.0, similarity_boost)),
+    }
+
+
 class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
     """llama-server LLM + ElevenLabs TTS voice output with tool dispatch."""
 
@@ -180,15 +217,17 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
         # When non-empty, the first PCM chunk fires record_tts_first_audio and clears it.
         first_audio_marker: list[float] = [tts_start] if tts_start is not None else []
         for sentence in sentences:
+            # Extract delivery tags before stripping so they can guide voice_settings.
+            tags = extract_delivery_tags(sentence)
             # Strip Gemini-style delivery tags ([fast], [annoyance], etc.) so they
             # aren't spoken literally. [short pause] becomes a real silence gap.
             spoken = strip_gemini_tags(sentence)
             if not spoken:
                 continue
-            if SHORT_PAUSE_TAG in extract_delivery_tags(sentence):
+            if SHORT_PAUSE_TAG in tags:
                 for frame in self._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS, _OUTPUT_SAMPLE_RATE)):
                     await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
-            sentence_had_audio = await self._stream_tts_to_queue(spoken, first_audio_marker)
+            sentence_had_audio = await self._stream_tts_to_queue(spoken, first_audio_marker, tags)
             if sentence_had_audio:
                 any_audio = True
 
@@ -203,6 +242,7 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
         self,
         text: str,
         first_audio_marker: list[float] | None = None,
+        tags: list[str] | None = None,
     ) -> bool:
         """Stream ElevenLabs TTS PCM chunks directly into ``output_queue``.
 
@@ -212,6 +252,8 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
         ``first_audio_marker``: when non-empty, the first PCM chunk fires
         ``telemetry.record_tts_first_audio`` (perf_counter - marker[0]) and the
         marker is cleared so subsequent sentences in the same turn don't refire.
+
+        ``tags``: delivery tags to adjust voice_settings (e.g., [fast], [annoyance]).
 
         Returns True if any audio was streamed for this call.
         """
@@ -228,18 +270,22 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
             return False
 
         config_params = load_profile_elevenlabs_config()
-        stability = float(config_params.get("stability", "0.5"))
-        similarity_boost = float(config_params.get("similarity_boost", "0.75"))
+        base_stability = float(config_params.get("stability", "0.5"))
+        base_similarity_boost = float(config_params.get("similarity_boost", "0.75"))
+
+        # Apply per-sentence tag adjustments to voice_settings.
+        voice_settings = apply_voice_settings_deltas(
+            base_stability,
+            base_similarity_boost,
+            tags or [],
+        )
 
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream?output_format=pcm_{_OUTPUT_SAMPLE_RATE}"
         headers = {"xi-api-key": api_key, "Content-Type": "application/json"}
         payload = {
             "text": text,
             "model_id": "eleven_turbo_v2_5",
-            "voice_settings": {
-                "stability": stability,
-                "similarity_boost": similarity_boost,
-            },
+            "voice_settings": voice_settings,
         }
 
         self._last_tts_rate_limited = False

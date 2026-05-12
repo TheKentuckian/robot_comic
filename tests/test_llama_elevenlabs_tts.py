@@ -326,3 +326,86 @@ async def test_synthesize_rate_limited_message_when_all_429(monkeypatch: pytest.
         if isinstance(item, AdditionalOutputs):
             msgs.append(str(item.args))
     assert any("rate-limited" in m for m in msgs)
+
+
+# ---------------------------------------------------------------------------
+# Delivery tag → voice_settings mapping
+# ---------------------------------------------------------------------------
+
+
+def test_apply_voice_settings_deltas_no_tags() -> None:
+    """Without tags, voice_settings are returned unchanged."""
+    from robot_comic.llama_elevenlabs_tts import apply_voice_settings_deltas
+
+    result = apply_voice_settings_deltas(0.5, 0.75, [])
+    assert result == {"stability": 0.5, "similarity_boost": 0.75}
+
+
+def test_apply_voice_settings_deltas_fast_tag() -> None:
+    """[fast] tag increases similarity_boost and decreases stability."""
+    from robot_comic.llama_elevenlabs_tts import apply_voice_settings_deltas
+
+    result = apply_voice_settings_deltas(0.5, 0.75, ["fast"])
+    assert result == {"stability": 0.4, "similarity_boost": 0.95}
+
+
+def test_apply_voice_settings_deltas_multiple_tags() -> None:
+    """Multiple tags combine their effects."""
+    from robot_comic.llama_elevenlabs_tts import apply_voice_settings_deltas
+
+    result = apply_voice_settings_deltas(0.5, 0.5, ["fast", "aggression"])
+    # fast: +0.2 similarity, -0.1 stability
+    # aggression: +0.4 similarity, -0.2 stability
+    # = 0.5 + 0.6 = 1.1 → 1.0, 0.5 - 0.3 = 0.2
+    assert result == {"stability": 0.2, "similarity_boost": 1.0}
+
+
+@pytest.mark.asyncio
+async def test_stream_tts_applies_voice_settings_from_tags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Delivery tags are mapped to voice_settings deltas in the TTS payload."""
+    from robot_comic import llama_elevenlabs_tts as mod
+
+    monkeypatch.setattr(mod.config, "ELEVENLABS_API_KEY", "k", raising=False)
+    monkeypatch.setattr(mod, "load_profile_elevenlabs_config", lambda: {"voice_id": "v"})
+    handler = _make_handler()
+
+    captured_payloads: list[dict[str, Any]] = []
+
+    def capture_stream(method: str, url: str, json: Any = None, **kwargs: Any) -> _FakeStreamCM:
+        if json:
+            captured_payloads.append(json)
+        return _FakeStreamCM(_FakeStreamResponse([_silent_pcm_bytes(2400)]))
+
+    handler._http.stream = capture_stream
+
+    # Call with [fast] tag
+    await handler._stream_tts_to_queue("Hello", tags=["fast"])
+
+    assert len(captured_payloads) == 1
+    payload = captured_payloads[0]
+    vs = payload["voice_settings"]
+    # [fast]: stability -0.1, similarity_boost +0.2 from base (0.5, 0.75)
+    assert vs["stability"] == 0.4
+    assert vs["similarity_boost"] == 0.95
+
+
+@pytest.mark.asyncio
+async def test_synthesize_applies_tags_before_streaming(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Synthesize extracts tags and passes them to _stream_tts_to_queue."""
+    from robot_comic import llama_elevenlabs_tts as mod
+
+    handler = _make_handler()
+
+    captured_calls: list[tuple[str, list[str]]] = []
+
+    async def fake_stream(self, text: str, first_audio_marker=None, tags=None):  # type: ignore[no-untyped-def]
+        captured_calls.append((text, tags or []))
+        return True
+
+    monkeypatch.setattr(mod.LlamaElevenLabsTTSResponseHandler, "_stream_tts_to_queue", fake_stream)
+    await handler._synthesize_and_enqueue("[fast] Zoom in!")
+
+    assert captured_calls
+    text, tags = captured_calls[0]
+    assert text == "Zoom in!"
+    assert "fast" in tags
