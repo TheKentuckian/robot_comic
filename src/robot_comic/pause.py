@@ -30,8 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_STOP_PHRASES: tuple[str, ...] = (
-    "system pause",
-    "robot pause",
+    "reachy pause",
 )
 DEFAULT_RESUME_PHRASES: tuple[str, ...] = (
     "continue",
@@ -40,10 +39,7 @@ DEFAULT_RESUME_PHRASES: tuple[str, ...] = (
     "carry on",
 )
 DEFAULT_SHUTDOWN_PHRASES: tuple[str, ...] = (
-    "shutdown",
-    "shut down",
-    "power off",
-    "turn off",
+    "reachy shutdown",
 )
 DEFAULT_SWITCH_PHRASES: tuple[str, ...] = (
     "switch",
@@ -151,6 +147,12 @@ class PauseController:
             logger.debug("Pause controller already shutting down; ignoring transcript")
             return TranscriptDisposition.HANDLED
 
+        # Shutdown phrases short-circuit from any state.
+        shutdown_match = _phrase_matches(transcript, shutdown_phrases)
+        if shutdown_match is not None:
+            self._enter_shutdown(shutdown_match)
+            return TranscriptDisposition.HANDLED
+
         if state is PauseState.ACTIVE:
             stop_match = _phrase_matches(transcript, stop_phrases)
             if stop_match is None:
@@ -159,11 +161,6 @@ class PauseController:
             return TranscriptDisposition.HANDLED
 
         # PAUSED
-        shutdown_match = _phrase_matches(transcript, shutdown_phrases)
-        if shutdown_match is not None:
-            self._enter_shutdown(shutdown_match)
-            return TranscriptDisposition.HANDLED
-
         resume_match = _phrase_matches(transcript, resume_phrases)
         if resume_match is not None:
             self._enter_active(resume_match)
@@ -175,7 +172,7 @@ class PauseController:
             return TranscriptDisposition.HANDLED
 
         logger.info(
-            "Paused; ignoring transcript (say continue, shutdown, or switch): %r",
+            "Paused; ignoring transcript (say continue, reachy shutdown, or switch): %r",
             transcript,
         )
         return TranscriptDisposition.HANDLED
