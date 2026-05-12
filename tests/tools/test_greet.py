@@ -216,7 +216,7 @@ async def test_identify_below_threshold(Greet, tmp_path):
         )
     )
     result = await Greet(session_dir=session_dir)(make_deps(), action="identify", name="Tony")
-    assert result == {"returning": False}
+    assert result == {"returning": False, "name_received": "Tony"}
 
 
 # ── identify: no sessions ─────────────────────────────────────────────────────
@@ -224,11 +224,11 @@ async def test_identify_below_threshold(Greet, tmp_path):
 
 @pytest.mark.asyncio
 async def test_identify_no_sessions(Greet, tmp_path):
-    """Empty session directory — returns returning=False."""
+    """Empty session directory — returns returning=False with name_received."""
     session_dir = tmp_path / ".comedy_sessions"
     session_dir.mkdir()
     result = await Greet(session_dir=session_dir)(make_deps(), action="identify", name="Tony")
-    assert result == {"returning": False}
+    assert result == {"returning": False, "name_received": "Tony"}
 
 
 # ── identify: old sessions ignored ───────────────────────────────────────────
@@ -256,7 +256,7 @@ async def test_identify_ignores_old_sessions(Greet, tmp_path):
     old_time = 946728000  # ~year 2000, well outside 30-day window
     os.utime(old_file, (old_time, old_time))
     result = await Greet(session_dir=session_dir)(make_deps(), action="identify", name="Tony")
-    assert result == {"returning": False}
+    assert result == {"returning": False, "name_received": "Tony"}
 
 
 # ── identify: null names skipped ─────────────────────────────────────────────
@@ -264,7 +264,7 @@ async def test_identify_ignores_old_sessions(Greet, tmp_path):
 
 @pytest.mark.asyncio
 async def test_identify_skips_null_names(Greet, tmp_path):
-    """Sessions with name=null are skipped — returns returning=False."""
+    """Sessions with name=null are skipped — returns returning=False with name_received."""
     session_dir = tmp_path / ".comedy_sessions"
     session_dir.mkdir()
     (session_dir / "session_20260504_120000.json").write_text(
@@ -281,7 +281,7 @@ async def test_identify_skips_null_names(Greet, tmp_path):
         )
     )
     result = await Greet(session_dir=session_dir)(make_deps(), action="identify", name="Tony")
-    assert result == {"returning": False}
+    assert result == {"returning": False, "name_received": "Tony"}
 
 
 # ── identify: corrupt files skipped ──────────────────────────────────────────
@@ -294,7 +294,7 @@ async def test_identify_skips_corrupt_files(Greet, tmp_path):
     session_dir.mkdir()
     (session_dir / "session_20260504_120000.json").write_text("not valid json {{{")
     result = await Greet(session_dir=session_dir)(make_deps(), action="identify", name="Tony")
-    assert result == {"returning": False}
+    assert result == {"returning": False, "name_received": "Tony"}
 
 
 # ── identify: name required ───────────────────────────────────────────────────

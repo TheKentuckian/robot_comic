@@ -17,7 +17,7 @@ from typing import Any, Optional
 
 import httpx
 import numpy as np
-from fastrtc import AdditionalOutputs, wait_for_item
+from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item
 from scipy.signal import resample
 from opentelemetry import trace as _otel_trace
 from opentelemetry import context as _otel_context
@@ -72,7 +72,7 @@ def _split_sentences(text: str) -> list[str]:
     return [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
 
 
-class ChatterboxTTSResponseHandler(ConversationHandler):
+class ChatterboxTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
     """llama-server LLM + Chatterbox TTS voice output with tool dispatch."""
 
     def __init__(

@@ -12,7 +12,7 @@ from datetime import datetime
 import numpy as np
 import gradio as gr
 from openai import AsyncOpenAI
-from fastrtc import AdditionalOutputs, wait_for_item, audio_to_int16
+from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item, audio_to_int16
 from pydantic import Field, BaseModel
 from numpy.typing import NDArray
 from scipy.signal import resample
@@ -80,7 +80,7 @@ def to_realtime_tools_config(tool_specs: list[dict[str, Any]]) -> RealtimeToolsC
     return realtime_tools
 
 
-class BaseRealtimeHandler(ConversationHandler, ABC):
+class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
     """Shared realtime stream handler for OpenAI-compatible client APIs."""
 
     BACKEND_PROVIDER: ClassVar[str]

@@ -22,7 +22,7 @@ from datetime import datetime
 import numpy as np
 import gradio as gr
 from google import genai
-from fastrtc import AdditionalOutputs, wait_for_item, audio_to_int16
+from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item, audio_to_int16
 from google.genai import types
 from numpy.typing import NDArray
 from scipy.signal import resample
@@ -204,7 +204,7 @@ def _resolve_gemini_startup_voice(voice: str | None) -> str | None:
     return resolved
 
 
-class GeminiLiveHandler(ConversationHandler):
+class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
     """Gemini Live API handler for fastrtc Stream."""
 
     def __init__(

@@ -19,10 +19,6 @@ import threading
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 
-import gradio as gr
-from fastapi import FastAPI
-from fastrtc import Stream
-
 from reachy_mini import ReachyMini, ReachyMiniApp
 from robot_comic.utils import (
     CameraVisionInitializationError,
@@ -238,20 +234,6 @@ def run(
         pause_controller=pause_controller,
         instance_path=Path(instance_path) if instance_path is not None else None,
     )
-    current_file_path = os.path.dirname(os.path.abspath(__file__))
-    logger.debug(f"Current file absolute path: {current_file_path}")
-    chatbot = gr.Chatbot(
-        type="messages",
-        resizable=True,
-        allow_tags=False,
-        avatar_images=(
-            os.path.join(current_file_path, "images", "user_avatar.png"),
-            os.path.join(current_file_path, "images", "reachymini_avatar.png"),
-        ),
-    )
-    logger.debug(f"Chatbot avatar images: {chatbot.avatar_images}")
-    logger.info("Startup: +%.2fs chatbot ready", time.perf_counter() - _t0)
-
     if is_gemini_model():
         from robot_comic.gemini_live import GeminiLiveHandler
 
@@ -330,21 +312,34 @@ def run(
 
     logger.info("Startup: +%.2fs handler ready", time.perf_counter() - _t0)
 
-    stream_manager: gr.Blocks | LocalStream | None = None
+    stream_manager: Any = None
 
     if args.sim:
-        # Sim/dev mode: bridge audio to the browser via FastRTC and serve the
-        # same static admin UI at "/" that the on-robot headless build uses.
-        # The FastRTC chat UI lives at "/chat" so it doesn't collide with the
-        # admin UI.
+        # Sim/dev mode — load fastrtc + gradio only now (deferred from top-level
+        # import to avoid ~10 s cold-start cost in headless on-robot mode).
+        import gradio as gr
+        from fastapi import FastAPI
+        from fastrtc import Stream
+
+        current_file_path = os.path.dirname(os.path.abspath(__file__))
+        chatbot = gr.Chatbot(
+            type="messages",
+            resizable=True,
+            allow_tags=False,
+            avatar_images=(
+                os.path.join(current_file_path, "images", "user_avatar.png"),
+                os.path.join(current_file_path, "images", "reachymini_avatar.png"),
+            ),
+        )
+        logger.info("Startup: +%.2fs chatbot ready", time.perf_counter() - _t0)
+
+        # Bridge audio to the browser via FastRTC; admin UI at "/" (same as
+        # headless), FastRTC chat UI at "/chat".
         if not settings_app:
             app = FastAPI()
         else:
             app = settings_app
 
-        # Mount the static admin UI (and its REST endpoints) by piggy-backing
-        # on a settings-only LocalStream. It never starts an audio pipeline
-        # because we don't call .launch() on it.
         admin_only_stream = LocalStream(
             handler=None,
             robot=None,

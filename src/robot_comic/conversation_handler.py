@@ -1,23 +1,23 @@
 from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
-from typing import TypeAlias
+from typing import Any, TypeAlias
 from collections.abc import Callable
 
 import numpy as np
-from fastrtc import AdditionalOutputs, AsyncStreamHandler
 from numpy.typing import NDArray
 
 from robot_comic.tools.core_tools import ToolDependencies
 
 
 AudioFrame: TypeAlias = tuple[int, NDArray[np.int16]]
-HandlerOutput: TypeAlias = AudioFrame | AdditionalOutputs | None
-QueueItem: TypeAlias = AudioFrame | AdditionalOutputs
+# Broad aliases — concrete handlers use fastrtc types directly.
+HandlerOutput: TypeAlias = Any
+QueueItem: TypeAlias = Any
 
 
-class ConversationHandler(AsyncStreamHandler, ABC):
-    """Shared app handler contract for realtime conversation backends."""
+class ConversationHandler(ABC):
+    """Pure ABC for realtime conversation backends; no fastrtc dependency."""
 
     deps: ToolDependencies
     output_queue: asyncio.Queue[QueueItem]

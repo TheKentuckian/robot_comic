@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 import numpy as np
 from google import genai
-from fastrtc import AdditionalOutputs, wait_for_item
+from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item
 from google.genai import types
 
 from robot_comic.config import (
@@ -50,7 +50,7 @@ _LLM_RETRY_BASE_DELAY = 1.0
 _LLM_MAX_TOOL_ROUNDS = 5
 
 
-class GeminiTTSResponseHandler(ConversationHandler):
+class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
     """Request/response handler: Gemini Flash text model + Gemini TTS voice output."""
 
     def __init__(
