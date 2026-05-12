@@ -69,6 +69,7 @@ class BreathingMove(Move):  # type: ignore
         interpolation_start_pose: NDArray[np.float32],
         interpolation_start_antennas: Tuple[float, float],
         interpolation_duration: float = 1.0,
+        sway_enabled: bool = True,
     ):
         """Initialize breathing move.
 
@@ -76,6 +77,8 @@ class BreathingMove(Move):  # type: ignore
             interpolation_start_pose: 4x4 matrix of current head pose to interpolate from
             interpolation_start_antennas: Current antenna positions to interpolate from
             interpolation_duration: Duration of interpolation to neutral (seconds)
+            sway_enabled: If False, amplitudes are zeroed so the robot holds neutral
+                          without any head bob or antenna sway.
 
         """
         self.interpolation_start_pose = interpolation_start_pose
@@ -86,10 +89,10 @@ class BreathingMove(Move):  # type: ignore
         self.neutral_head_pose = create_head_pose(0, 0, 0, 0, 0, 0, degrees=True)
         self.neutral_antennas = np.array([-0.1745, 0.1745])  # ~10° offset to reduce shaking
 
-        # Breathing parameters
-        self.breathing_z_amplitude = 0.005  # 5mm gentle breathing
+        # Breathing parameters — zeroed when sway_enabled=False so only neutral hold occurs
+        self.breathing_z_amplitude = 0.005 if sway_enabled else 0.0
         self.breathing_frequency = 0.1  # Hz (6 breaths per minute)
-        self.antenna_sway_amplitude = np.deg2rad(15)  # 15 degrees
+        self.antenna_sway_amplitude = np.deg2rad(15) if sway_enabled else 0.0
         self.antenna_frequency = 0.5  # Hz (faster antenna sway)
 
     @property
@@ -539,7 +542,7 @@ class MovementManager:
 
     def _manage_breathing(self, current_time: float) -> None:
         """Manage automatic breathing when idle."""
-        if self._is_paused or not self.idle_animation_enabled:
+        if self._is_paused:
             return
         if (
             self.state.current_move is None
@@ -562,6 +565,7 @@ class MovementManager:
                         interpolation_start_pose=current_head_pose,
                         interpolation_start_antennas=current_antennas,
                         interpolation_duration=1.0,
+                        sway_enabled=self.idle_animation_enabled,
                     )
                     self.move_queue.append(breathing_move)
                     logger.debug("Started breathing after %.1fs of inactivity", idle_for)
