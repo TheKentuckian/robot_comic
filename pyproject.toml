@@ -130,6 +130,10 @@ ignore = [
   "D213",  # summary on second line (conflicts with D212)
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# warnings.filterwarnings() must run before imports to suppress protobuf noise at import time
+"src/robot_comic/main.py" = ["E402"]
+
 [tool.ruff.lint.isort]
 length-sort = true
 lines-after-imports = 2

@@ -613,8 +613,10 @@ class LocalStream:
                 return JSONResponse({"ok": False, "error": "empty_key"}, status_code=400)
 
             local_stt_response_backend = (
-                payload.local_stt_response_backend or getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
-            ).strip().lower()
+                (payload.local_stt_response_backend or getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND))
+                .strip()
+                .lower()
+            )
             if backend == LOCAL_STT_BACKEND and local_stt_response_backend not in LOCAL_STT_RESPONSE_BACKEND_CHOICES:
                 return JSONResponse({"ok": False, "error": "invalid_local_stt_response_backend"}, status_code=400)
             if (
@@ -655,8 +657,15 @@ class LocalStream:
                     return JSONResponse({"ok": False, "error": "invalid_local_stt_language"}, status_code=400)
 
                 model = (
-                    payload.local_stt_model or getattr(config, "LOCAL_STT_MODEL", "tiny_streaming") or "tiny_streaming"
-                ).strip().lower().replace("-", "_")
+                    (
+                        payload.local_stt_model
+                        or getattr(config, "LOCAL_STT_MODEL", "tiny_streaming")
+                        or "tiny_streaming"
+                    )
+                    .strip()
+                    .lower()
+                    .replace("-", "_")
+                )
                 if model not in LOCAL_STT_MODEL_CHOICES:
                     return JSONResponse({"ok": False, "error": "invalid_local_stt_model"}, status_code=400)
 
@@ -989,6 +998,7 @@ class LocalStream:
     async def play_loop(self) -> None:
         """Fetch outputs from the handler: log text and play audio frames."""
         from scipy.signal import resample
+
         while not self._stop_event.is_set():
             handler_output = await self.handler.emit()
 
