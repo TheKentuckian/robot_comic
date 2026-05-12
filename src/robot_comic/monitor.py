@@ -1,7 +1,8 @@
 """Live TUI monitor for robot_comic turn traces.
 
 Tails the systemd journal (or a log file) for RCSPAN lines emitted by
-CompactLineExporter and renders a rolling table of completed turns.
+CompactLineExporter and renders a rolling table of completed turns plus
+a live in-flight row that updates as each stage (STT→LLM→TTS) finishes.
 
 Usage:
     robot-comic-monitor                          # tail reachy-app-autostart unit
@@ -13,6 +14,7 @@ import sys
 import json
 import time
 import argparse
+import threading
 import subprocess
 from typing import Iterator, Optional
 from datetime import datetime
@@ -41,6 +43,24 @@ _THRESHOLDS: dict[str, tuple[float, float]] = {
     "tts":   (500,  1500),
     "total": (2000, 4000),
 }
+
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def _spin() -> str:
+    return _SPINNER[int(time.time() * 8) % len(_SPINNER)]
+
+
+def _service_active(unit: str) -> bool:
+    """Return True iff the given systemd unit is currently active."""
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", unit],
+            timeout=1.0,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -97,17 +117,34 @@ class TurnRecord:
     @property
     def excerpt(self) -> str:
         """Short label: first few words of transcript, or 'greeting' for startup."""
-        # Check root span first (startup trigger sets it there directly).
         val = self.root["attrs"].get("turn.excerpt", "")
         if val:
             return val
-        # For mixin-driven turns the excerpt is on the root span set by local_stt_realtime.
         return ""
 
     @property
     def tool_count(self) -> int:
         """Number of tool calls made during this turn."""
         return len(self._kids("tool.execute"))
+
+
+class PendingTurn:
+    """Tracks a turn that has started (stt.infer seen) but not yet completed."""
+
+    def __init__(self, trace_id: str) -> None:
+        self.trace_id = trace_id
+        self.ts = datetime.now()
+        self.started_at = time.perf_counter()
+        self.stt_ms: Optional[float] = None
+        self.llm_ms: float = 0.0
+        self.llm_count: int = 0   # completed llm.request spans seen
+        self.tts_ms: float = 0.0
+        self.tts_count: int = 0   # completed tts.synthesize spans seen
+        self.tool_count: int = 0
+
+    @property
+    def elapsed_ms(self) -> float:
+        return (time.perf_counter() - self.started_at) * 1000
 
 
 # ---------------------------------------------------------------------------
@@ -120,15 +157,48 @@ class SpanBuffer:
     def __init__(self) -> None:
         """Initialise the pending-span store."""
         self._pending: dict[str, list[dict]] = defaultdict(list)
+        self._inflight: dict[str, PendingTurn] = {}
 
     def ingest(self, span: dict) -> Optional[TurnRecord]:
         """Return a completed TurnRecord when the root turn span arrives, else None."""
         trace_id = span["trace"]
-        if span["name"] == "turn" and span["parent"] is None:
+        name = span["name"]
+
+        if name == "turn" and span["parent"] is None:
             children = self._pending.pop(trace_id, [])
+            self._inflight.pop(trace_id, None)
             return TurnRecord(trace_id, span, children)
+
         self._pending[trace_id].append(span)
+
+        # Update in-flight tracking so the pending row reflects current progress.
+        if name == "stt.infer":
+            if trace_id not in self._inflight:
+                self._inflight[trace_id] = PendingTurn(trace_id)
+            self._inflight[trace_id].stt_ms = span.get("dur_ms")
+        elif name == "llm.request":
+            pt = self._inflight.get(trace_id)
+            if pt is not None:
+                pt.llm_ms += span.get("dur_ms", 0.0)
+                pt.llm_count += 1
+        elif name == "tts.synthesize":
+            pt = self._inflight.get(trace_id)
+            if pt is not None:
+                pt.tts_ms += span.get("dur_ms", 0.0)
+                pt.tts_count += 1
+        elif name == "tool.execute":
+            pt = self._inflight.get(trace_id)
+            if pt is not None:
+                pt.tool_count += 1
+
         return None
+
+    @property
+    def latest_pending(self) -> Optional[PendingTurn]:
+        """Return the most-recently-started in-flight turn, if any."""
+        if not self._inflight:
+            return None
+        return max(self._inflight.values(), key=lambda pt: pt.started_at)
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +220,20 @@ def _fmt(ms: Optional[float], stage: str) -> Text:
     return Text(label.rjust(7), style=style)
 
 
-def _build_table(turns: list[TurnRecord]) -> Table:
+def _fmt_spin(ms: Optional[float], active: bool, stage: str) -> Text:
+    """Format a stage cell for the in-flight pending row.
+
+    active=True  → stage has started (show spinner while waiting, time when done)
+    active=False → stage not yet started (show dim dash)
+    """
+    if ms is not None and ms > 0:
+        return _fmt(ms, stage)
+    if active:
+        return Text(f"  {_spin()}    ", style="yellow")
+    return Text("  —  ", style="dim")
+
+
+def _build_table(turns: list[TurnRecord], pending: Optional[PendingTurn] = None) -> Table:
     """Render the most recent turns as a Rich table (newest row first)."""
     t = Table(
         box=box.SIMPLE_HEAD,
@@ -167,6 +250,30 @@ def _build_table(turns: list[TurnRecord]) -> Table:
     t.add_column("Total",   width=8,  justify="right")
     t.add_column("Tools",   width=5,  justify="right")
     t.add_column("",        width=1,  justify="center")
+
+    if pending is not None:
+        sp = _spin()
+        stt_done = pending.stt_ms is not None
+        llm_started = stt_done          # LLM starts right after STT
+        tts_started = pending.llm_count > 0
+        # LLM spinner: active while STT is done but no llm.request seen yet,
+        # or after the last llm request if tts hasn't started.
+        llm_active = llm_started and pending.llm_count == 0
+        # Show accumulated LLM time if any requests completed.
+        llm_ms = pending.llm_ms if pending.llm_count > 0 else None
+        tts_active = tts_started and pending.tts_count == 0
+        tts_ms = pending.tts_ms if pending.tts_count > 0 else None
+
+        t.add_row(
+            pending.ts.strftime("%H:%M:%S"),
+            Text(f"{sp}", style="bold yellow"),
+            _fmt_spin(pending.stt_ms, stt_done,  "stt"),
+            _fmt_spin(llm_ms,        llm_active, "llm"),
+            _fmt_spin(tts_ms,        tts_active, "tts"),
+            _fmt(pending.elapsed_ms, "total"),
+            Text(str(pending.tool_count), style="cyan") if pending.tool_count else Text(""),
+            Text(sp, style="yellow"),
+        )
 
     for turn in reversed(turns[-_MAX_TURNS:]):
         ok_icon = Text("✓", style="green") if turn.outcome == "success" else Text("✗", style="red")
@@ -255,21 +362,63 @@ def main() -> None:
 
     lines: Iterator[str] = _iter_file(args.file) if args.file else _iter_journald(args.unit)
     source_label = f"file:{args.file}" if args.file else f"journald:{args.unit}"
+    # Polling unit name for service status indicator (only relevant for journald mode).
+    watch_unit: Optional[str] = args.unit if not args.file else None
+
+    # Service status — polled every ~3 s by the refresh thread.
+    _svc_active: list[bool] = [True]   # mutable box so refresh thread can update it
+    _svc_last_check: list[float] = [0.0]
 
     def _render() -> Panel:
-        if not turns:
-            body = Text("Waiting for turns… (is ROBOT_INSTRUMENTATION=trace set?)", style="dim italic")
+        pending = buffer.latest_pending
+
+        # Service status indicator
+        if watch_unit is not None:
+            dot = "● " if _svc_active[0] else "○ "
+            dot_style = "green" if _svc_active[0] else "red"
+            svc_text = Text(dot, style=dot_style)
+            svc_text.append(watch_unit, style="bold" if _svc_active[0] else "dim")
+            title_suffix = f"  [dim]{source_label}[/dim]"
         else:
-            body = _build_table(turns)
+            svc_text = None
+            title_suffix = f"  [dim]{source_label}[/dim]"
+
+        if not turns and pending is None:
+            if watch_unit is not None and not _svc_active[0]:
+                body = Text("Service is stopped — start it to see turns.", style="dim italic")
+            else:
+                body = Text("Waiting for turns… (is ROBOT_INSTRUMENTATION=trace set?)", style="dim italic")
+        else:
+            body = _build_table(turns, pending)
+
+        n = len(turns)
+        title_parts = "[bold]robot-comic-monitor[/bold]" + title_suffix
+        subtitle = f"[dim]{n} turn{'s' if n != 1 else ''} recorded[/dim]"
         return Panel(
             body,
-            title=f"[bold]robot-comic-monitor[/bold]  [dim]{source_label}[/dim]",
-            subtitle=f"[dim]{len(turns)} turn{'s' if len(turns) != 1 else ''} recorded[/dim]",
-            border_style="dim",
+            title=title_parts,
+            subtitle=subtitle,
+            border_style="green" if (watch_unit is None or _svc_active[0]) else "red",
         )
+
+    stop_event = threading.Event()
+
+    def _auto_refresh() -> None:
+        while not stop_event.is_set():
+            # Re-check service status every ~3 s.
+            if watch_unit is not None:
+                now = time.time()
+                if now - _svc_last_check[0] >= 3.0:
+                    _svc_active[0] = _service_active(watch_unit)
+                    _svc_last_check[0] = now
+            live.update(_render())
+            stop_event.wait(0.15)   # ~6 fps for smooth spinner
 
     try:
         with Live(_render(), console=console, refresh_per_second=4, screen=False) as live:
+            refresh_thread = threading.Thread(target=_auto_refresh, daemon=True)
+            refresh_thread.start()
+
             for raw in lines:
                 span = _parse_span(raw)
                 if span is None:
@@ -278,5 +427,8 @@ def main() -> None:
                 if turn is not None:
                     turns.append(turn)
                 live.update(_render())
+
     except KeyboardInterrupt:
         pass
+    finally:
+        stop_event.set()
