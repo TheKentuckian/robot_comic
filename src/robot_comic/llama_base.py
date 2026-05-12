@@ -5,13 +5,13 @@ telemetry) without coupling to any specific TTS implementation.
 Concrete subclasses supply _synthesize_and_enqueue() and voice management.
 """
 
-import json
 import re
+import json
 import time
 import uuid
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, AsyncGenerator
 
 import httpx
 import numpy as np
@@ -21,10 +21,10 @@ from opentelemetry import context as _otel_context
 
 from robot_comic import telemetry
 from robot_comic.config import config
-from robot_comic.conversation_handler import ConversationHandler
-from robot_comic.history_trim import trim_history_in_place
 from robot_comic.prompts import get_session_instructions
+from robot_comic.history_trim import trim_history_in_place
 from robot_comic.tools.core_tools import ToolDependencies, get_active_tool_specs
+from robot_comic.conversation_handler import ConversationHandler
 from robot_comic.tools.background_tool_manager import (
     BackgroundTool,
     ToolCallRoutine,
@@ -32,10 +32,11 @@ from robot_comic.tools.background_tool_manager import (
     BackgroundToolManager,
 )
 
+
 logger = logging.getLogger(__name__)
 
 _OUTPUT_SAMPLE_RATE = 24000
-_CHUNK_SAMPLES = 2400           # 100 ms at 24 kHz
+_CHUNK_SAMPLES = 2400  # 100 ms at 24 kHz
 _LLM_MAX_RETRIES = 3
 _LLM_RETRY_BASE_DELAY = 1.0
 _TOOL_RESULT_TIMEOUT: float = 5.0
@@ -106,6 +107,7 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
     @property
     def _llama_cpp_url(self) -> str:
         from robot_comic.config import LLAMA_CPP_DEFAULT_URL
+
         return getattr(config, "LLAMA_CPP_URL", LLAMA_CPP_DEFAULT_URL)
 
     # ------------------------------------------------------------------ #
@@ -114,10 +116,9 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _prepare_startup_credentials(self) -> None:
         """Set up the shared HTTP client and tool manager. Subclasses should
-        call super() then add their own credential / client setup."""
-        self._http = httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0)
-        )
+        call super() then add their own credential / client setup.
+        """
+        self._http = httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0))
         self.tool_manager.start_up(tool_callbacks=[self._handle_tool_notification])
 
     async def start_up(self) -> None:
@@ -159,6 +160,7 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def apply_personality(self, profile: str | None) -> str:
         from robot_comic.config import set_custom_profile
+
         try:
             set_custom_profile(profile)
             self._conversation_history.clear()
@@ -185,6 +187,126 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _synthesize_and_enqueue(self, response_text: str, tts_start: float | None = None) -> None:
         raise NotImplementedError
+
+    async def _stream_response_and_synthesize(
+        self,
+        extra_messages: list[dict[str, Any]] | None = None,
+        tts_span: Any = None,
+    ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+        """Stream LLM response, synthesize sentences as they complete, return final result.
+
+        Yields text deltas, accumulates tool calls, and synthesizes complete sentences.
+        Returns (full_text, tool_calls, raw_message) like _call_llm but with streaming TTS.
+        """
+        text_parts: list[str] = []
+        tool_calls_by_idx: dict[int, dict[str, Any]] = {}
+        pending_text: str = ""
+        first_audio_logged = False
+
+        async for delta in self._stream_llm_deltas(extra_messages):
+            if delta["type"] == "text_delta":
+                content = delta["content"]
+                pending_text += content
+                text_parts.append(content)
+
+                # Check for complete sentences
+                while True:
+                    match = _SENTENCE_SPLIT_RE.search(pending_text)
+                    if match:
+                        sentence_end = match.start() + len(match.group())
+                        sentence = pending_text[:sentence_end].strip()
+                        pending_text = pending_text[sentence_end:].lstrip()
+
+                        if sentence:
+                            await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": sentence}))
+                            if tts_span is not None:
+                                _tts_span = telemetry.get_tracer().start_span(
+                                    "tts.synthesize",
+                                    attributes={"gen_ai.system": self._TTS_SYSTEM},
+                                )
+                            else:
+                                _tts_span = None
+
+                            _tts_start = time.perf_counter()
+                            try:
+                                await self._synthesize_and_enqueue(
+                                    sentence,
+                                    tts_start=_tts_start if not first_audio_logged else None,
+                                )
+                                if not first_audio_logged:
+                                    first_audio_logged = True
+                            finally:
+                                if _tts_span is not None:
+                                    _tts_span.end()
+                                    telemetry.record_tts(
+                                        time.perf_counter() - _tts_start,
+                                        {"gen_ai.system": self._TTS_SYSTEM},
+                                    )
+                    else:
+                        break
+
+            elif delta["type"] == "tool_call_delta":
+                idx = delta["index"]
+                if idx not in tool_calls_by_idx:
+                    tool_calls_by_idx[idx] = {
+                        "index": idx,
+                        "function": {"name": "", "arguments": ""},
+                    }
+                tool_calls_by_idx[idx]["function"]["arguments"] += delta["arguments"]
+
+            elif delta["type"] == "finish_reason":
+                pass  # Stream has ended
+
+        # Synthesize any remaining text (final incomplete sentence)
+        if pending_text.strip():
+            text_parts.append(pending_text)
+            await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": pending_text}))
+            if tts_span is not None:
+                _tts_span = telemetry.get_tracer().start_span(
+                    "tts.synthesize",
+                    attributes={"gen_ai.system": self._TTS_SYSTEM},
+                )
+            else:
+                _tts_span = None
+            _tts_start = time.perf_counter()
+            try:
+                await self._synthesize_and_enqueue(
+                    pending_text,
+                    tts_start=_tts_start if not first_audio_logged else None,
+                )
+            finally:
+                if _tts_span is not None:
+                    _tts_span.end()
+                    telemetry.record_tts(
+                        time.perf_counter() - _tts_start,
+                        {"gen_ai.system": self._TTS_SYSTEM},
+                    )
+
+        # Parse tool call arguments
+        raw_text = "".join(text_parts).strip()
+        text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+        tool_calls = list(tool_calls_by_idx.values())
+
+        if tool_calls:
+            for tc in tool_calls:
+                args_str = tc["function"]["arguments"]
+                try:
+                    tc["function"]["arguments"] = json.loads(args_str)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "Failed to parse tool_call[%d] arguments: %r",
+                        tc.get("index"),
+                        args_str[:100],
+                    )
+                    tc["function"]["arguments"] = {}
+
+        if not text and not tool_calls:
+            logger.warning("_stream_response_and_synthesize empty response")
+
+        raw_msg: dict[str, Any] = {"role": "assistant", "content": text or None}
+        if tool_calls:
+            raw_msg["tool_calls"] = tool_calls
+        return text, tool_calls, raw_msg
 
     async def _dispatch_completed_transcript(self, transcript: str) -> None:
         """LLM → tool dispatch → TTS → PCM frames (two-phase with query-tool feedback)."""
@@ -241,7 +363,7 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
             )
             _llm_start = time.perf_counter()
             try:
-                response_text, tool_calls, raw_message = await self._call_llm()
+                response_text, tool_calls, raw_message = await self._stream_response_and_synthesize(tts_span=_llm_span)
             except Exception as exc:
                 logger.warning("LLM call failed: %s", exc)
                 _outcome = "llm_error"
@@ -249,27 +371,13 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
             finally:
                 _llm_s = time.perf_counter() - _llm_start
                 _llm_span.end()
-                telemetry.record_llm_duration(
-                    _llm_s, {"gen_ai.system": "llama_cpp", "gen_ai.operation.name": "chat"}
-                )
+                telemetry.record_llm_duration(_llm_s, {"gen_ai.system": "llama_cpp", "gen_ai.operation.name": "chat"})
 
             self._conversation_history.append(raw_message)
 
             bg_tools: list[tuple[str, BackgroundTool]] = []
             if tool_calls:
                 bg_tools = await self._start_tool_calls(tool_calls)
-
-            await self.output_queue.put(
-                AdditionalOutputs({"role": "assistant", "content": response_text})
-            )
-            _tts_span = _tracer.start_span("tts.synthesize", attributes={"gen_ai.system": self._TTS_SYSTEM})
-            _tts_start = time.perf_counter()
-            try:
-                await self._synthesize_and_enqueue(response_text, tts_start=_tts_start)
-            finally:
-                _tts_s = time.perf_counter() - _tts_start
-                _tts_span.end()
-                telemetry.record_tts(_tts_s, {"gen_ai.system": self._TTS_SYSTEM})
 
             if not bg_tools:
                 return
@@ -286,11 +394,13 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                     return
 
                 for call_id, result in results_with_data.items():
-                    self._conversation_history.append({
-                        "role": "tool",
-                        "content": json.dumps(result),
-                        "tool_call_id": call_id,
-                    })
+                    self._conversation_history.append(
+                        {
+                            "role": "tool",
+                            "content": json.dumps(result),
+                            "tool_call_id": call_id,
+                        }
+                    )
 
                 _llm_fu_span = _tracer.start_span(
                     "llm.request",
@@ -319,13 +429,12 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                 if fu_tool_calls:
                     logger.info(
                         "Follow-up phase %d: dispatching %d more tool calls",
-                        _phase_n, len(fu_tool_calls),
+                        _phase_n,
+                        len(fu_tool_calls),
                     )
                     bg_tools = await self._start_tool_calls(fu_tool_calls)
                     if fu_text:
-                        await self.output_queue.put(
-                            AdditionalOutputs({"role": "assistant", "content": fu_text})
-                        )
+                        await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": fu_text}))
                         _tts_fu_span = _tracer.start_span(
                             "tts.synthesize", attributes={"gen_ai.system": self._TTS_SYSTEM}
                         )
@@ -350,19 +459,13 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                     )
                     return
 
-                await self.output_queue.put(
-                    AdditionalOutputs({"role": "assistant", "content": fu_text})
-                )
-                _tts_fu_span = _tracer.start_span(
-                    "tts.synthesize", attributes={"gen_ai.system": self._TTS_SYSTEM}
-                )
+                await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": fu_text}))
+                _tts_fu_span = _tracer.start_span("tts.synthesize", attributes={"gen_ai.system": self._TTS_SYSTEM})
                 _tts_fu_start = time.perf_counter()
                 try:
                     await self._synthesize_and_enqueue(fu_text, tts_start=_tts_fu_start)
                 finally:
-                    telemetry.record_tts(
-                        time.perf_counter() - _tts_fu_start, {"gen_ai.system": self._TTS_SYSTEM}
-                    )
+                    telemetry.record_tts(time.perf_counter() - _tts_fu_start, {"gen_ai.system": self._TTS_SYSTEM})
                     _tts_fu_span.end()
                 return
 
@@ -377,9 +480,7 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                 {"robot.mode": self._BACKEND_LABEL, "turn.outcome": _outcome},
             )
 
-    async def _start_tool_calls(
-        self, tool_calls: list[dict[str, Any]]
-    ) -> list[tuple[str, BackgroundTool]]:
+    async def _start_tool_calls(self, tool_calls: list[dict[str, Any]]) -> list[tuple[str, BackgroundTool]]:
         """Dispatch tool calls; return (call_id, BackgroundTool) pairs."""
         results: list[tuple[str, BackgroundTool]] = []
         for tc in tool_calls:
@@ -410,9 +511,8 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         timeout: float = _TOOL_RESULT_TIMEOUT,
     ) -> dict[str, dict[str, Any]]:
         """Await all tool tasks concurrently; return results that arrived within timeout."""
-        async def _wait_one(
-            call_id: str, bg_tool: BackgroundTool
-        ) -> tuple[str, dict[str, Any] | None]:
+
+        async def _wait_one(call_id: str, bg_tool: BackgroundTool) -> tuple[str, dict[str, Any] | None]:
             if bg_tool._task is None:
                 return call_id, None
             try:
@@ -424,14 +524,16 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         pairs = await asyncio.gather(*(_wait_one(cid, bt) for cid, bt in bg_tools))
         return {cid: result for cid, result in pairs if result is not None}
 
-    async def _call_llm(
+    async def _stream_llm_deltas(
         self,
         extra_messages: list[dict[str, Any]] | None = None,
-    ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
-        """Call llama-server /v1/chat/completions; returns (text, tool_calls, raw_message).
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Stream LLM deltas from /v1/chat/completions (SSE).
 
-        extra_messages are appended after conversation_history for this call only
-        (not stored in history). Used to inject nudges like /no_think for Phase-2.
+        Yields dicts with keys like:
+        - "type": "text_delta", "content": <str>
+        - "type": "tool_call_delta", "index": <int>, "arguments": <str fragment>
+        - "type": "finish_reason", "finish_reason": <str>, "tool_calls": <list>
         """
         assert self._http is not None
         system_prompt = get_session_instructions()
@@ -440,66 +542,153 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         if extra_messages:
             messages = messages + extra_messages
         logger.info(
-            "_call_llm: profile=%r tools=%d sys_chars=%d sys_head=%r",
+            "_stream_llm_deltas: profile=%r tools=%d sys_chars=%d sys_head=%r",
             getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None),
             len(tool_specs),
             len(system_prompt),
             system_prompt[:80],
         )
 
-        # Convert flat spec format → Chat Completions nested format:
-        # {"type":"function","name":..} → {"type":"function","function":{...}}
         chat_tools = [
-            {"type": "function", "function": {k: v for k, v in t.items() if k != "type"}}
-            for t in tool_specs
+            {"type": "function", "function": {k: v for k, v in t.items() if k != "type"}} for t in tool_specs
         ]
 
         payload: dict[str, Any] = {
             "messages": messages,
             "tools": chat_tools,
             "chat_template_kwargs": {"enable_thinking": False},
+            "stream": True,
         }
 
         delay = _LLM_RETRY_BASE_DELAY
+        first_token_time_recorded = False
+        request_sent_time = time.perf_counter()
         for attempt in range(_LLM_MAX_RETRIES):
             try:
-                r = await self._http.post(
+                async with self._http.stream(
+                    "POST",
                     f"{self._llama_cpp_url}/v1/chat/completions",
                     json=payload,
-                )
-                r.raise_for_status()
-                data = r.json()
-                msg = data["choices"][0]["message"]
-                raw_text = (msg.get("content") or "").strip()
-                # Strip Qwen3 thinking blocks — <think>...</think> may appear
-                # even when enable_thinking=false if the model emits empty ones.
-                text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
-                tool_calls: list[dict[str, Any]] = msg.get("tool_calls") or []
+                ) as r:
+                    r.raise_for_status()
+                    request_sent_time = time.perf_counter()
+                    # Read SSE stream
+                    async for line in r.aiter_lines():
+                        if not line.strip():
+                            continue
+                        if line.startswith("data: "):
+                            data_str = line[6:]
+                            if data_str == "[DONE]":
+                                return
+                            try:
+                                chunk = json.loads(data_str)
+                                delta = chunk["choices"][0]["delta"]
+                                finish_reason = chunk["choices"][0].get("finish_reason")
 
-                if not text and not tool_calls:
-                    logger.warning(
-                        "_call_llm empty response: finish_reason=%r raw=%r reasoning=%r",
-                        data["choices"][0].get("finish_reason"),
-                        raw_text[:300],
-                        (msg.get("reasoning_content") or "")[:300],
-                    )
+                                # Record time to first token on first non-empty delta
+                                if not first_token_time_recorded and ("content" in delta or "tool_calls" in delta):
+                                    ttft = time.perf_counter() - request_sent_time
+                                    telemetry.record_ttft(ttft, {"gen_ai.system": "llama_cpp"})
+                                    first_token_time_recorded = True
 
-                # Per OpenAI spec, content should be null when the message only has
-                # tool_calls (empty string can confuse some model templates on next call).
-                raw_msg: dict[str, Any] = {"role": "assistant", "content": text or None}
-                if tool_calls:
-                    raw_msg["tool_calls"] = tool_calls
-                return text, tool_calls, raw_msg
+                                # Emit text deltas
+                                if "content" in delta:
+                                    yield {
+                                        "type": "text_delta",
+                                        "content": delta["content"],
+                                    }
+
+                                # Emit tool call deltas
+                                if "tool_calls" in delta:
+                                    for tool_call in delta["tool_calls"]:
+                                        if "index" in tool_call:
+                                            idx = tool_call["index"]
+                                            if "function" in tool_call:
+                                                fn = tool_call["function"]
+                                                if "arguments" in fn:
+                                                    yield {
+                                                        "type": "tool_call_delta",
+                                                        "index": idx,
+                                                        "arguments": fn["arguments"],
+                                                    }
+
+                                # Emit finish when we have finish_reason
+                                if finish_reason is not None:
+                                    yield {
+                                        "type": "finish_reason",
+                                        "finish_reason": finish_reason,
+                                    }
+                            except json.JSONDecodeError:
+                                logger.warning("Failed to decode SSE line: %r", line)
+                return
             except Exception as exc:
                 if attempt == _LLM_MAX_RETRIES - 1:
                     raise
                 logger.warning(
-                    "LLM attempt %d/%d failed: %s: %s; retrying in %.1fs",
-                    attempt + 1, _LLM_MAX_RETRIES, type(exc).__name__, exc, delay,
+                    "LLM stream attempt %d/%d failed: %s: %s; retrying in %.1fs",
+                    attempt + 1,
+                    _LLM_MAX_RETRIES,
+                    type(exc).__name__,
+                    exc,
+                    delay,
                 )
                 await asyncio.sleep(delay)
                 delay *= 2
-        return "", [], {"role": "assistant", "content": ""}
+
+    async def _call_llm(
+        self,
+        extra_messages: list[dict[str, Any]] | None = None,
+    ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+        """Call llama-server streaming /v1/chat/completions; returns (text, tool_calls, raw_message).
+
+        Consumes the full streaming response and assembles the result.
+        extra_messages are appended after conversation_history for this call only
+        (not stored in history).
+        """
+        text_parts: list[str] = []
+        tool_calls_by_idx: dict[int, dict[str, Any]] = {}
+
+        async for delta in self._stream_llm_deltas(extra_messages):
+            if delta["type"] == "text_delta":
+                text_parts.append(delta["content"])
+
+            elif delta["type"] == "tool_call_delta":
+                idx = delta["index"]
+                if idx not in tool_calls_by_idx:
+                    tool_calls_by_idx[idx] = {
+                        "index": idx,
+                        "function": {"name": "", "arguments": ""},
+                    }
+                tool_calls_by_idx[idx]["function"]["arguments"] += delta["arguments"]
+
+            elif delta["type"] == "finish_reason":
+                # End of stream; parse tool calls if needed
+                if tool_calls_by_idx:
+                    # Try to parse and finalize tool_calls
+                    for idx, tc in sorted(tool_calls_by_idx.items()):
+                        args_str = tc["function"]["arguments"]
+                        try:
+                            tc["function"]["arguments"] = json.loads(args_str)
+                        except json.JSONDecodeError:
+                            logger.warning(
+                                "Failed to parse tool_call[%d] arguments: %r",
+                                idx,
+                                args_str[:100],
+                            )
+                            tc["function"]["arguments"] = {}
+
+        raw_text = "".join(text_parts).strip()
+        # Strip Qwen3 thinking blocks
+        text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+        tool_calls = list(tool_calls_by_idx.values())
+
+        if not text and not tool_calls:
+            logger.warning("_call_llm empty response")
+
+        raw_msg: dict[str, Any] = {"role": "assistant", "content": text or None}
+        if tool_calls:
+            raw_msg["tool_calls"] = tool_calls
+        return text, tool_calls, raw_msg
 
     # ------------------------------------------------------------------ #
     # Audio helpers                                                        #
@@ -514,7 +703,7 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
     def _pcm_to_frames(pcm_bytes: bytes) -> list[np.ndarray]:
         audio = np.frombuffer(pcm_bytes, dtype=np.int16)
         return [
-            audio[i: i + _CHUNK_SAMPLES]
+            audio[i : i + _CHUNK_SAMPLES]
             for i in range(0, len(audio), _CHUNK_SAMPLES)
-            if len(audio[i: i + _CHUNK_SAMPLES]) > 0
+            if len(audio[i : i + _CHUNK_SAMPLES]) > 0
         ]
