@@ -34,28 +34,13 @@ from robot_comic.llama_base import _CHUNK_SAMPLES, _OUTPUT_SAMPLE_RATE, BaseLlam
 from robot_comic.tools.core_tools import ToolDependencies
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.chatterbox_tag_translator import strip_gemini_tags
+from robot_comic.elevenlabs_voices import get_elevenlabs_voices
 
 
 logger = logging.getLogger(__name__)
 
 _TTS_MAX_RETRIES = 3
 _TTS_RETRY_BASE_DELAY = 0.5
-
-# Map voice names to ElevenLabs voice IDs
-_ELEVENLABS_VOICE_IDS = {
-    "Adam": "pNInz6obpgDQGcFmaJgB",
-    "Bella": "EXAVITQu4vr4xnSDxMaL",
-    "Antoni": "ErXwobaYp0GwwMsXgNVH",
-    "Domi": "AZnzlk1UV0MYJmxZNSD4",
-    "Elli": "MF3mGyEYCl7XYWbV7PZT",
-    "Gigi": "jsCqWAovK2LkecY7zXl4",
-    "Freya": "jKsUlyx0O5BjJQ0XfvjQ",
-    "Harry": "SOYHLrjzK2X1ezoeGApW",
-    "Liam": "FGKprHBWjP1d6XrNSZaE",
-    "Rachel": "21m00Tcm4ijWNoXd58YU",
-    "River": "SAz9YHcvj6GT2YYXdXnW",
-    "Sam": "2EiwWnXFnvU5JabPnv2n",
-}
 
 
 def load_profile_elevenlabs_config() -> dict[str, str]:
@@ -196,13 +181,15 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
         """Resolve the ElevenLabs voice ID.
 
         Profile config `voice_id=<id>` takes precedence (e.g. PVC clones).
-        Otherwise map the named voice via the prebuilt voice catalog.
+        Otherwise map the named voice via the dynamic voice catalog.
         """
         config_params = load_profile_elevenlabs_config()
         custom_id = config_params.get("voice_id")
         if custom_id:
             return custom_id
-        return _ELEVENLABS_VOICE_IDS.get(self.get_current_voice())
+        voice_name = self.get_current_voice()
+        voice_catalog = get_elevenlabs_voices()
+        return voice_catalog.get(voice_name)
 
     async def change_voice(self, voice: str) -> str:
         self._voice_override = voice

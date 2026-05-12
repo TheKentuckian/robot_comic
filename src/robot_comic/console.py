@@ -912,6 +912,14 @@ class LocalStream:
             # Capture loop for cross-thread personality actions
             loop = asyncio.get_running_loop()
             self._asyncio_loop = loop  # type: ignore[assignment]
+
+            # Fetch ElevenLabs voice catalog at startup (one-time, cached for process lifetime)
+            try:
+                from robot_comic import config
+                await config.refresh_elevenlabs_voices()
+            except Exception as e:
+                logger.debug("Failed to refresh ElevenLabs voice catalog: %s", e)
+
             # Mount personality routes now that loop and handler are available
             try:
                 if self._settings_app is not None:
