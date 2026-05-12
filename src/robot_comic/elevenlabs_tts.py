@@ -137,6 +137,10 @@ def apply_voice_settings_deltas(
 class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
     """Gemini Flash text model + ElevenLabs TTS voice output."""
 
+    # ElevenLabs Turbo v2.5 pricing: $0.50 per 1M characters (Creator tier)
+    # verify against current ElevenLabs pricing
+    ELEVENLABS_COST_PER_1M_CHARS: float = 0.50
+
     def __init__(
         self,
         deps: ToolDependencies,
@@ -159,6 +163,7 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         self._conversation_history: list[dict[str, Any]] = []
         self._last_tts_rate_limited: bool = False
         self.output_queue: asyncio.Queue = asyncio.Queue()
+        self.cumulative_cost: float = 0.0
 
         # Attributes referenced by LocalSTTInputMixin
         self._turn_user_done_at: float | None = None
@@ -426,6 +431,13 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         if not voice_id:
             logger.error("Could not resolve voice ID for %s", self.get_current_voice())
             return False
+
+        # Accumulate cost: ElevenLabs charges per character (text is already tag-stripped).
+        char_count = len(text)
+        cost = (char_count / 1_000_000) * self.ELEVENLABS_COST_PER_1M_CHARS
+        self.cumulative_cost += cost
+        if cost > 0:
+            logger.debug("ElevenLabs TTS cost: $%.4f (%d chars) | Cumulative: $%.4f", cost, char_count, self.cumulative_cost)
 
         config_params = load_profile_elevenlabs_config()
         base_stability = float(config_params.get("stability", "0.5"))

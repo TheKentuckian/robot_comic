@@ -121,6 +121,9 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
 
     _BACKEND_LABEL = "llama_elevenlabs_tts"
     _TTS_SYSTEM = "elevenlabs"
+    # ElevenLabs Turbo v2.5 pricing: $0.50 per 1M characters (Creator tier)
+    # verify against current ElevenLabs pricing
+    ELEVENLABS_COST_PER_1M_CHARS: float = 0.50
 
     def __init__(
         self,
@@ -132,6 +135,7 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
         super().__init__(deps, sim_mode, instance_path, startup_voice)
         self._http: httpx.AsyncClient | None = None
         self._last_tts_rate_limited: bool = False
+        self.cumulative_cost: float = 0.0
 
     def copy(self) -> "LlamaElevenLabsTTSResponseHandler":
         return LlamaElevenLabsTTSResponseHandler(
@@ -268,6 +272,13 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
         if not voice_id:
             logger.error("Could not resolve voice ID for %s", self.get_current_voice())
             return False
+
+        # Accumulate cost: ElevenLabs charges per character (text is already tag-stripped).
+        char_count = len(text)
+        cost = (char_count / 1_000_000) * self.ELEVENLABS_COST_PER_1M_CHARS
+        self.cumulative_cost += cost
+        if cost > 0:
+            logger.debug("ElevenLabs TTS cost: $%.4f (%d chars) | Cumulative: $%.4f", cost, char_count, self.cumulative_cost)
 
         config_params = load_profile_elevenlabs_config()
         base_stability = float(config_params.get("stability", "0.5"))
