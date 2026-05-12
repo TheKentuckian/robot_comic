@@ -110,8 +110,9 @@ class Greet(Tool):
     description = (
         "Two actions. "
         "action='scan': detect whether a face is present; executes a slow head sweep if not found immediately. "
-        "action='identify': fuzzy-match a spoken name against stored sessions from the last 30 days; "
-        "returns the returning visitor's profile and callback hints if matched."
+        "action='identify': fuzzy-match a spoken name against stored sessions from the last 30 days. "
+        "On match returns returning=true with profile and callback hints. "
+        "On no match returns returning=false and name_received=<name> — use name_received to address the new visitor by name without asking again."
     )
     parameters_schema = {
         "type": "object",
@@ -135,9 +136,8 @@ class Greet(Tool):
     def __init__(self, session_dir: Optional[Path] = None) -> None:
         """Initialise with an optional session directory override (for testing).
 
-        When no override is provided, the directory is resolved on first call
-        from ``deps.instance_path`` so on-robot sessions land in a stable
-        per-instance location rather than the launcher's CWD.
+        When no override is provided, the directory resolves to
+        ~/.robot_comic/.comedy_sessions/ on first call.
         """
         self._explicit_session_dir: Optional[Path] = session_dir
         self._session_dir: Optional[Path] = session_dir
@@ -146,7 +146,7 @@ class Greet(Tool):
         if self._explicit_session_dir is not None:
             return
         if self._session_dir is None:
-            self._session_dir = resolve_session_dir(deps.instance_path)
+            self._session_dir = resolve_session_dir()
 
     async def _scan(self, deps: ToolDependencies) -> Dict[str, Any]:
         if deps.camera_worker is None:
@@ -181,17 +181,17 @@ class Greet(Tool):
         assert self._session_dir is not None
         candidates = _load_candidates(self._session_dir)
         if not candidates:
-            return {"returning": False}
+            return {"returning": False, "name_received": name}
 
         matched_name, matched_path, _score = _fuzzy_match(name, candidates)
         if matched_name is None or matched_path is None:
-            return {"returning": False}
+            return {"returning": False, "name_received": name}
 
         try:
             state = json.loads(matched_path.read_text(encoding="utf-8"))
         except Exception:
             logger.warning("Failed to read matched session %s", matched_path)
-            return {"returning": False}
+            return {"returning": False, "name_received": name}
 
         last_seen = state.get("last_updated") or str(datetime.fromtimestamp(matched_path.stat().st_mtime).isoformat())
         profile = {

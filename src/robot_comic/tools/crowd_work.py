@@ -17,16 +17,11 @@ SESSION_DIRNAME = ".comedy_sessions"
 SESSION_WINDOW_HOURS = 24
 
 
-def resolve_session_dir(instance_path: Path | None) -> Path:
-    """Return the comedy-sessions directory under instance_path, or a CWD-relative fallback.
-
-    On-robot, instance_path is the stable per-instance directory used for
-    startup_settings.json. In dev/sim mode it may be None, in which case we
-    keep the legacy CWD-relative behaviour.
-    """
-    if instance_path is not None:
-        return Path(instance_path) / SESSION_DIRNAME
-    return Path(SESSION_DIRNAME)
+def resolve_session_dir() -> Path:
+    """Return the comedy-sessions directory, always rooted under ~/.robot_comic."""
+    session_dir = Path.home() / ".robot_comic" / SESSION_DIRNAME
+    session_dir.mkdir(parents=True, exist_ok=True)
+    return session_dir
 
 
 class CrowdWork(Tool):
@@ -61,9 +56,8 @@ class CrowdWork(Tool):
     def __init__(self, session_dir: Path | None = None) -> None:
         """Initialise state. Resume the most recent same-day session lazily on first call.
 
-        Resume is deferred so the session directory can be resolved against the
-        running instance path (``deps.instance_path``) — singleton tools are
-        constructed before that path is known. When ``session_dir`` is passed
+        Resume is deferred to first call since singleton tools are constructed
+        before the session dir is needed. When ``session_dir`` is passed
         explicitly (tests), eager-resume is preserved.
         """
         self._explicit_session_dir: Path | None = session_dir
@@ -89,7 +83,7 @@ class CrowdWork(Tool):
         if self._explicit_session_dir is not None:
             return
         if self._session_dir is None:
-            self._session_dir = resolve_session_dir(deps.instance_path)
+            self._session_dir = resolve_session_dir()
         if not self._resumed:
             self._load_recent_session()
             self._resumed = True
