@@ -147,7 +147,7 @@ class Greet(Tool):
         if self._explicit_session_dir is not None:
             return
         if self._session_dir is None:
-            self._session_dir = resolve_session_dir(deps.instance_path)
+            self._session_dir = resolve_session_dir()
 
     async def _scan(self, deps: ToolDependencies) -> Dict[str, Any]:
         if deps.camera_worker is None:

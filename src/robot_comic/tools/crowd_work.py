@@ -17,12 +17,8 @@ SESSION_DIRNAME = ".comedy_sessions"
 SESSION_WINDOW_HOURS = 24
 
 
-def resolve_session_dir(instance_path: Path | None) -> Path:
-    """Return the comedy-sessions directory, always rooted under ~/.robot_comic.
-
-    Ignores instance_path so sessions land in a location that is stable across
-    editable vs non-editable installs.
-    """
+def resolve_session_dir() -> Path:
+    """Return the comedy-sessions directory, always rooted under ~/.robot_comic."""
     session_dir = Path.home() / ".robot_comic" / SESSION_DIRNAME
     session_dir.mkdir(parents=True, exist_ok=True)
     return session_dir
@@ -88,7 +84,7 @@ class CrowdWork(Tool):
         if self._explicit_session_dir is not None:
             return
         if self._session_dir is None:
-            self._session_dir = resolve_session_dir(deps.instance_path)
+            self._session_dir = resolve_session_dir()
         if not self._resumed:
             self._load_recent_session()
             self._resumed = True
