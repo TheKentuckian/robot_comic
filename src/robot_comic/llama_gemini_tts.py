@@ -154,6 +154,9 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
                 telemetry.record_tts_first_audio(time.perf_counter() - tts_start, {"gen_ai.system": "gemini_tts"})
                 first_chunk = False
             for frame in self._pcm_to_frames(pcm_bytes):
+                from robot_comic.startup_timer import log_once
+
+                log_once("first TTS audio frame", logger)
                 await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
             any_audio = True
 
