@@ -296,7 +296,7 @@ async def test_second_llm_pass_fires_on_meaningful_result() -> None:
 
     call_count = 0
 
-    async def patched_llm():
+    async def patched_llm(extra_messages=None):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -345,7 +345,7 @@ async def test_no_second_pass_for_action_tools() -> None:
     )
     bg_tool._task = asyncio.create_task(instant_task())
 
-    async def patched_llm():
+    async def patched_llm(extra_messages=None):
         nonlocal llm_call_count
         llm_call_count += 1
         return (
@@ -394,7 +394,7 @@ async def test_tool_message_appended_to_history() -> None:
     )
     bg_tool._task = asyncio.create_task(instant_task())
 
-    async def patched_llm():
+    async def patched_llm(extra_messages=None):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -432,7 +432,7 @@ async def test_assistant_message_preserves_tool_calls_field() -> None:
     """When Ollama returns tool_calls, the history entry has a tool_calls field."""
     handler = _make_handler()
 
-    async def patched_llm():
+    async def patched_llm(extra_messages=None):
         raw_msg = {
             "role": "assistant",
             "content": "",

@@ -292,9 +292,13 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                     "llm.phase": "2",
                 },
             )
+            # Qwen3 /no_think nudge: after a tool result, the llama.cpp template
+            # may ignore enable_thinking=False and enter think-only mode. Injecting
+            # a user message with /no_think prefix is the Qwen3-native override.
+            _PHASE2_NUDGE = [{"role": "user", "content": "/no_think"}]
             _llm2_start = time.perf_counter()
             try:
-                follow_up_text, _, _ = await self._call_llm()
+                follow_up_text, _, _ = await self._call_llm(extra_messages=_PHASE2_NUDGE)
             except Exception as exc:
                 logger.warning("Phase-2 LLM call failed: %s", exc)
                 _outcome = "llm_error"
@@ -307,7 +311,7 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                 )
 
             if not follow_up_text:
-                logger.warning("Phase-2 LLM returned empty text (Qwen3 think-only?); retrying once")
+                logger.warning("Phase-2 LLM returned empty text despite /no_think nudge; retrying once")
                 _llm2r_span = _tracer.start_span(
                     "llm.request",
                     attributes={
@@ -318,7 +322,7 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                 )
                 _llm2r_start = time.perf_counter()
                 try:
-                    follow_up_text, _, _ = await self._call_llm()
+                    follow_up_text, _, _ = await self._call_llm(extra_messages=_PHASE2_NUDGE)
                 except Exception as exc:
                     logger.warning("Phase-2 LLM retry failed: %s", exc)
                     return
@@ -401,12 +405,21 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         pairs = await asyncio.gather(*(_wait_one(cid, bt) for cid, bt in bg_tools))
         return {cid: result for cid, result in pairs if result is not None}
 
-    async def _call_llm(self) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
-        """Call llama-server /v1/chat/completions; returns (text, tool_calls, raw_message)."""
+    async def _call_llm(
+        self,
+        extra_messages: list[dict[str, Any]] | None = None,
+    ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+        """Call llama-server /v1/chat/completions; returns (text, tool_calls, raw_message).
+
+        extra_messages are appended after conversation_history for this call only
+        (not stored in history). Used to inject nudges like /no_think for Phase-2.
+        """
         assert self._http is not None
         system_prompt = get_session_instructions()
         tool_specs = get_active_tool_specs(self.deps)
         messages = [{"role": "system", "content": system_prompt}] + self._conversation_history
+        if extra_messages:
+            messages = messages + extra_messages
         logger.info(
             "_call_llm: profile=%r tools=%d sys_chars=%d sys_head=%r",
             getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None),
@@ -444,7 +457,17 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                 text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
                 tool_calls: list[dict[str, Any]] = msg.get("tool_calls") or []
 
-                raw_msg: dict[str, Any] = {"role": "assistant", "content": text}
+                if not text and not tool_calls:
+                    logger.warning(
+                        "_call_llm empty response: finish_reason=%r raw=%r reasoning=%r",
+                        data["choices"][0].get("finish_reason"),
+                        raw_text[:300],
+                        (msg.get("reasoning_content") or "")[:300],
+                    )
+
+                # Per OpenAI spec, content should be null when the message only has
+                # tool_calls (empty string can confuse some model templates on next call).
+                raw_msg: dict[str, Any] = {"role": "assistant", "content": text or None}
                 if tool_calls:
                     raw_msg["tool_calls"] = tool_calls
                 return text, tool_calls, raw_msg
