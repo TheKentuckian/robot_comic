@@ -15,6 +15,7 @@ def _make_deps() -> ToolDependencies:
 
 def _make_handler():
     from robot_comic.gemini_tts import GeminiTTSResponseHandler
+
     deps = _make_deps()
     handler = GeminiTTSResponseHandler(deps)
     handler._client = MagicMock()
@@ -29,7 +30,7 @@ async def test_conversation_history_accumulates() -> None:
     async def fake_llm() -> str:
         return "You look like you comb your hair with a pork chop."
 
-    async def fake_tts(text: str) -> bytes:
+    async def fake_tts(text: str, system_instruction: str | None = None) -> bytes:
         return b"\x00\x01" * 2400  # 2400 samples of silence
 
     handler._run_llm_with_tools = fake_llm  # type: ignore[method-assign]
@@ -56,7 +57,7 @@ async def test_pcm_bytes_are_chunked_and_queued() -> None:
     async def fake_llm() -> str:
         return "Hockey puck."
 
-    async def fake_tts(text: str) -> bytes:
+    async def fake_tts(text: str, system_instruction: str | None = None) -> bytes:
         return pcm_bytes
 
     handler._run_llm_with_tools = fake_llm  # type: ignore[method-assign]
@@ -84,7 +85,7 @@ async def test_tts_failure_pushes_error_output() -> None:
     async def fake_llm() -> str:
         return "Beautiful."
 
-    async def failing_tts(text: str) -> None:
+    async def failing_tts(text: str, system_instruction: str | None = None) -> None:
         return None  # simulate all retries exhausted
 
     handler._run_llm_with_tools = fake_llm  # type: ignore[method-assign]
@@ -154,6 +155,7 @@ async def test_tts_call_includes_speed_system_instruction() -> None:
         captured_configs.append(config)
         fake_data = b"\x00" * 4800
         import base64
+
         encoded = base64.b64encode(fake_data).decode()
         part = MagicMock()
         part.inline_data.data = encoded

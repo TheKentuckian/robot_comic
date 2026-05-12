@@ -8,29 +8,35 @@ Select via:
     LOCAL_STT_RESPONSE_BACKEND=llama_gemini_tts
 """
 
-import asyncio
-import base64
-import logging
 import time
-from typing import Any, Optional
+import base64
+import asyncio
+import logging
+from typing import Optional
 
-import numpy as np
-from fastrtc import AdditionalOutputs
 from google import genai
+from fastrtc import AdditionalOutputs
 from google.genai import types
 
 from robot_comic import telemetry
-from robot_comic.chatterbox_tag_translator import translate
-from robot_comic.llama_base import BaseLlamaResponseHandler, _OUTPUT_SAMPLE_RATE, split_sentences
 from robot_comic.config import (
-    GEMINI_TTS_AVAILABLE_VOICES,
-    GEMINI_TTS_DEFAULT_VOICE,
     LLAMA_GEMINI_TTS_OUTPUT,
+    GEMINI_TTS_DEFAULT_VOICE,
+    GEMINI_TTS_AVAILABLE_VOICES,
     config,
 )
-from robot_comic.gemini_tts import GEMINI_TTS_MODEL, _TTS_EXCLUSIVE_VOICES
-from robot_comic.local_stt_realtime import LocalSTTInputMixin
+from robot_comic.gemini_tts import (
+    GEMINI_TTS_MODEL,
+    _TTS_EXCLUSIVE_VOICES,
+    extract_delivery_tags,
+    build_tts_system_instruction,
+    load_profile_tts_instruction,
+)
+from robot_comic.llama_base import _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
 from robot_comic.tools.core_tools import ToolDependencies
+from robot_comic.local_stt_realtime import LocalSTTInputMixin
+from robot_comic.chatterbox_tag_translator import strip_gemini_tags
+
 
 logger = logging.getLogger(__name__)
 
@@ -114,28 +120,22 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
     async def _synthesize_and_enqueue(self, response_text: str, tts_start: float | None = None) -> None:
         if not response_text:
             return
-        persona = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None) or "default"
-        segments = translate(response_text, persona=persona, use_turbo=False)
-        clean_text = " ".join(seg.text for seg in segments if seg.text).strip()
-
-        if not clean_text:
-            await self.output_queue.put(
-                AdditionalOutputs({"role": "assistant", "content": "[TTS error]"})
-            )
-            return
-
-        sentences = split_sentences(clean_text) or [clean_text]
+        base_instruction = load_profile_tts_instruction()
+        sentences = split_sentences(response_text) or [response_text]
         any_audio = False
         first_chunk = True
         for sentence in sentences:
-            pcm_bytes = await self._call_gemini_tts(sentence)
+            spoken = strip_gemini_tags(sentence)
+            if not spoken:
+                continue
+            tags = extract_delivery_tags(sentence)
+            instruction = build_tts_system_instruction(base_instruction, tags)
+            pcm_bytes = await self._call_gemini_tts(spoken, system_instruction=instruction)
             if pcm_bytes is None:
-                logger.warning("Gemini TTS returned None for sentence: %r", sentence[:60])
+                logger.warning("Gemini TTS returned None for sentence: %r", spoken[:60])
                 continue
             if first_chunk and tts_start is not None:
-                telemetry.record_tts_first_audio(
-                    time.perf_counter() - tts_start, {"gen_ai.system": "gemini_tts"}
-                )
+                telemetry.record_tts_first_audio(time.perf_counter() - tts_start, {"gen_ai.system": "gemini_tts"})
                 first_chunk = False
             for frame in self._pcm_to_frames(pcm_bytes):
                 await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
@@ -146,15 +146,15 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
                 AdditionalOutputs({"role": "assistant", "content": "[TTS error — Gemini TTS failed]"})
             )
 
-    async def _call_gemini_tts(self, text: str) -> bytes | None:
+    async def _call_gemini_tts(self, text: str, system_instruction: str | None = None) -> bytes | None:
         assert self._client is not None, "Gemini client not initialised"
+        instruction = system_instruction if system_instruction is not None else load_profile_tts_instruction()
         tts_config = types.GenerateContentConfig(
+            system_instruction=instruction,
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=self.get_current_voice()
-                    )
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.get_current_voice())
                 )
             ),
         )

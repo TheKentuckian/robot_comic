@@ -7,6 +7,7 @@ audio with gemini-3.1-flash-tts-preview (voice: Algenib by default).
 Audio output: 24 kHz, mono, 16-bit PCM — matches the existing pipeline.
 """
 
+import re
 import json
 import base64
 import asyncio
@@ -25,6 +26,8 @@ from robot_comic.config import (
     config,
     set_custom_profile,
 )
+from robot_comic.llama_base import split_sentences
+from robot_comic.chatterbox_tag_translator import strip_gemini_tags
 
 
 # Voices shared with Gemini Live may have been persisted for that backend.
@@ -48,6 +51,65 @@ _TTS_RETRY_DELAY = 0.5
 _LLM_MAX_RETRIES = 4
 _LLM_RETRY_BASE_DELAY = 1.0
 _LLM_MAX_TOOL_ROUNDS = 5
+
+# Fallback used when a profile does not provide its own gemini_tts.txt.
+DEFAULT_TTS_SYSTEM_INSTRUCTION = (
+    "Deliver this text at a fast, clipped Brooklyn pace — "
+    "rapid-fire on the insults, short crisp pauses only where marked. "
+    "Never drawl or over-enunciate. Keep the energy sharp."
+)
+
+# Delivery tags emitted by profile prompts (see e.g. profiles/don_rickles/instructions.txt).
+# Used to extract per-sentence style cues before the spoken text is cleaned of tags.
+_DELIVERY_TAGS: tuple[str, ...] = (
+    "fast",
+    "slow",
+    "annoyance",
+    "aggression",
+    "amusement",
+    "enthusiasm",
+    "short pause",
+)
+_DELIVERY_TAG_RE = re.compile(
+    r"\[(" + "|".join(re.escape(t) for t in _DELIVERY_TAGS) + r")\]",
+    re.IGNORECASE,
+)
+
+
+def extract_delivery_tags(text: str) -> list[str]:
+    """Return ordered, de-duplicated delivery-tag names found in *text*."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for match in _DELIVERY_TAG_RE.finditer(text):
+        tag = match.group(1).lower()
+        if tag not in seen:
+            seen.add(tag)
+            out.append(tag)
+    return out
+
+
+def build_tts_system_instruction(base: str, tags: list[str]) -> str:
+    """Append a short delivery-cue suffix to *base* for one TTS call."""
+    if not tags:
+        return base
+    cues = ", ".join(tags)
+    return f"{base}\n\nDelivery cues for this line: {cues}."
+
+
+def load_profile_tts_instruction() -> str:
+    """Read profiles/<name>/gemini_tts.txt, falling back to DEFAULT_TTS_SYSTEM_INSTRUCTION."""
+    profile: str | None = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
+    if not profile:
+        return DEFAULT_TTS_SYSTEM_INSTRUCTION
+    try:
+        path = config.PROFILES_DIRECTORY / profile / "gemini_tts.txt"
+        if path.exists():
+            text: str = path.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+    except Exception as exc:
+        logger.warning("Could not read gemini_tts.txt for profile %r: %s", profile, exc)
+    return DEFAULT_TTS_SYSTEM_INSTRUCTION
 
 
 class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
@@ -148,7 +210,9 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
     def get_current_voice(self) -> str:
         voice = self._voice_override or GEMINI_TTS_DEFAULT_VOICE
         if voice not in GEMINI_TTS_AVAILABLE_VOICES:
-            logger.warning("Voice %r is not a valid Gemini TTS voice; falling back to %s", voice, GEMINI_TTS_DEFAULT_VOICE)
+            logger.warning(
+                "Voice %r is not a valid Gemini TTS voice; falling back to %s", voice, GEMINI_TTS_DEFAULT_VOICE
+            )
             return GEMINI_TTS_DEFAULT_VOICE
         return voice
 
@@ -162,9 +226,7 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _dispatch_completed_transcript(self, transcript: str) -> None:
         """Gemini-native response cycle: LLM → tools → TTS → audio frames."""
-        self._conversation_history.append(
-            {"role": "user", "parts": [{"text": transcript}]}
-        )
+        self._conversation_history.append({"role": "user", "parts": [{"text": transcript}]})
 
         try:
             response_text = await self._run_llm_with_tools()
@@ -172,24 +234,29 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             logger.warning("LLM call failed: %s", exc)
             return
 
-        self._conversation_history.append(
-            {"role": "model", "parts": [{"text": response_text}]}
-        )
-        await self.output_queue.put(
-            AdditionalOutputs({"role": "assistant", "content": response_text})
-        )
+        self._conversation_history.append({"role": "model", "parts": [{"text": response_text}]})
+        await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": response_text}))
 
-        pcm_bytes = await self._call_tts_with_retry(response_text)
-        if pcm_bytes is None:
+        base_instruction = load_profile_tts_instruction()
+        sentences = split_sentences(response_text) or [response_text]
+        any_audio = False
+        for sentence in sentences:
+            spoken = strip_gemini_tags(sentence)
+            if not spoken:
+                continue
+            tags = extract_delivery_tags(sentence)
+            instruction = build_tts_system_instruction(base_instruction, tags)
+            pcm_bytes = await self._call_tts_with_retry(spoken, system_instruction=instruction)
+            if pcm_bytes is None:
+                continue
+            for frame in self._pcm_to_frames(pcm_bytes):
+                await self.output_queue.put((GEMINI_TTS_OUTPUT_SAMPLE_RATE, frame))
+            any_audio = True
+
+        if not any_audio:
             await self.output_queue.put(
-                AdditionalOutputs(
-                    {"role": "assistant", "content": "[TTS error — could not generate audio]"}
-                )
+                AdditionalOutputs({"role": "assistant", "content": "[TTS error — could not generate audio]"})
             )
-            return
-
-        for frame in self._pcm_to_frames(pcm_bytes):
-            await self.output_queue.put((GEMINI_TTS_OUTPUT_SAMPLE_RATE, frame))
 
     async def _llm_generate_with_backoff(self, contents: Any, config: Any) -> Any:
         """Call generate_content with exponential backoff on 503/UNAVAILABLE errors."""
@@ -209,7 +276,10 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                     raise
                 logger.warning(
                     "LLM attempt %d/%d failed (%s); retrying in %.1fs",
-                    attempt + 1, _LLM_MAX_RETRIES, msg.split("\n")[0], delay,
+                    attempt + 1,
+                    _LLM_MAX_RETRIES,
+                    msg.split("\n")[0],
+                    delay,
                 )
                 await asyncio.sleep(delay)
                 delay *= 2
@@ -220,11 +290,7 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
         tool_specs = get_active_tool_specs(self.deps)
         function_declarations = _openai_tool_specs_to_gemini(tool_specs)
-        tools_config = (
-            [types.Tool(function_declarations=function_declarations)]
-            if function_declarations
-            else []
-        )
+        tools_config = [types.Tool(function_declarations=function_declarations)] if function_declarations else []
         gen_config = types.GenerateContentConfig(
             system_instruction=get_session_instructions(),
             tools=tools_config,  # type: ignore[arg-type]
@@ -236,16 +302,10 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             response = await self._llm_generate_with_backoff(history, gen_config)
 
             candidate = response.candidates[0]
-            function_calls = [
-                p.function_call
-                for p in candidate.content.parts
-                if p.function_call is not None
-            ]
+            function_calls = [p.function_call for p in candidate.content.parts if p.function_call is not None]
 
             if not function_calls:
-                return "".join(
-                    p.text for p in candidate.content.parts if p.text
-                ).strip()
+                return "".join(p.text for p in candidate.content.parts if p.text).strip()
 
             # Append model's function-call turn to history
             history.append(candidate.content)
@@ -255,45 +315,32 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             for fc in function_calls:
                 logger.info("GeminiTTS tool call: %s args=%s", fc.name, dict(fc.args))
                 try:
-                    result = await dispatch_tool_call(
-                        fc.name, json.dumps(dict(fc.args)), self.deps
-                    )
+                    result = await dispatch_tool_call(fc.name, json.dumps(dict(fc.args)), self.deps)
                 except Exception as exc:
                     result = {"error": str(exc)}
 
                 response_parts.append(
-                    types.Part(
-                        function_response=types.FunctionResponse(
-                            name=fc.name, response=result
-                        )
-                    )
+                    types.Part(function_response=types.FunctionResponse(name=fc.name, response=result))
                 )
                 await self.output_queue.put(
-                    AdditionalOutputs(
-                        {"role": "assistant", "content": f"🛠️ Used tool {fc.name}"}
-                    )
+                    AdditionalOutputs({"role": "assistant", "content": f"🛠️ Used tool {fc.name}"})
                 )
 
             history.append(types.Content(role="user", parts=response_parts))
 
         return "[Response generation reached tool call limit]"
 
-    async def _call_tts_with_retry(self, text: str) -> bytes | None:
+    async def _call_tts_with_retry(self, text: str, system_instruction: str | None = None) -> bytes | None:
         """Call Gemini TTS, retrying up to 3 times on transient errors."""
         assert self._client is not None, "Client not initialised"
 
+        instruction = system_instruction if system_instruction is not None else load_profile_tts_instruction()
         tts_config = types.GenerateContentConfig(
-            system_instruction=(
-                "Deliver this text at a fast, clipped Brooklyn pace — "
-                "rapid-fire on the insults, short crisp pauses only where marked. "
-                "Never drawl or over-enunciate. Keep the energy sharp."
-            ),
+            system_instruction=instruction,
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=self.get_current_voice()
-                    )
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.get_current_voice())
                 )
             ),
         )
@@ -308,9 +355,7 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                 data = response.candidates[0].content.parts[0].inline_data.data
                 return base64.b64decode(data) if isinstance(data, str) else bytes(data)
             except Exception as exc:
-                logger.warning(
-                    "TTS attempt %d/%d failed: %s", attempt + 1, _TTS_MAX_RETRIES, exc
-                )
+                logger.warning("TTS attempt %d/%d failed: %s", attempt + 1, _TTS_MAX_RETRIES, exc)
                 if attempt < _TTS_MAX_RETRIES - 1:
                     await asyncio.sleep(_TTS_RETRY_DELAY)
 
@@ -321,9 +366,9 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         """Split raw 16-bit PCM bytes into ~100 ms numpy frames."""
         audio = np.frombuffer(pcm_bytes, dtype=np.int16)
         return [
-            audio[i: i + _CHUNK_SAMPLES]
+            audio[i : i + _CHUNK_SAMPLES]
             for i in range(0, len(audio), _CHUNK_SAMPLES)
-            if len(audio[i: i + _CHUNK_SAMPLES]) > 0
+            if len(audio[i : i + _CHUNK_SAMPLES]) > 0
         ]
 
 
