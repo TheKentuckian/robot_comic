@@ -600,17 +600,45 @@ def _print_mtp_metrics(before: str, after: str) -> None:
 
 
 def run_sanity_check(n_turns: int, temperature: float) -> None:
-    print(f"\n=== Task 5 Sanity Check: {n_turns} turns  temp={temperature} ──")
-    base_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages = base_messages + CONVERSATION_HISTORY[:]
+    """Run N independent turns, each starting from the same base history.
+
+    Each turn uses a different user message to probe diverse tool-call scenarios
+    without accumulating context that would overflow the 4096-token window.
+    """
+    print(f"\n=== Task 5 Sanity Check: {n_turns} turns  temp={temperature} ===")
+
+    user_messages = [
+        "I'm an accountant from Cleveland.",
+        "I work in software, out of Chicago.",
+        "Retired firefighter. New Jersey, born and raised.",
+        "I'm a dentist. Practice is in Scottsdale, Arizona.",
+        "High school gym teacher from Buffalo.",
+        "I sell insurance. Based in Tampa.",
+        "I'm a lawyer. Criminal defense, out of Boston.",
+        "Chef. Own a little place in Nashville.",
+        "I teach third grade in Sacramento.",
+        "Plumber. Pittsburgh, Pennsylvania.",
+        "I'm a nurse. Work nights at a hospital in Detroit.",
+        "Marketing director for a startup in Austin.",
+        "I'm a city bus driver. Denver.",
+        "Structural engineer. Works in Seattle.",
+        "I manage a car dealership in Charlotte.",
+        "I'm a veterinarian in Portland, Oregon.",
+        "Air traffic controller. O'Hare, Chicago.",
+        "Real estate agent. Suburbs of Dallas.",
+        "I'm a pharmacist in Minneapolis.",
+        "I run a landscaping company in Phoenix.",
+    ]
+
+    base_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + CONVERSATION_HISTORY[:]
 
     pass_count = 0
     fail_count = 0
     tool_call_turns = 0
 
     for i in range(n_turns):
-        user_msg = {"role": "user", "content": f"Turn {i+1}: I'm a software engineer from Chicago."}
-        messages.append(user_msg)
+        user_text = user_messages[i % len(user_messages)]
+        messages = base_messages + [{"role": "user", "content": user_text}]
 
         payload = {
             "model": MODEL_ID,
@@ -618,21 +646,21 @@ def run_sanity_check(n_turns: int, temperature: float) -> None:
             "tools": TOOLS,
             "tool_choice": "auto",
             "temperature": temperature,
-            "max_tokens": 300,
+            "max_tokens": 200,
             "chat_template_kwargs": {"enable_thinking": False},
         }
 
         try:
             result, elapsed = _post(f"{BASE_URL}/v1/chat/completions", payload)
         except Exception as e:
-            print(f"  Turn {i+1}: REQUEST FAILED — {e}")
+            print(f"  Turn {i+1:2d}: REQUEST FAILED — {e}")
             fail_count += 1
             continue
 
         choice = result.get("choices", [{}])[0]
         msg = choice.get("message", {})
         finish_reason = choice.get("finish_reason", "?")
-        tool_calls = msg.get("tool_calls", [])
+        tool_calls = msg.get("tool_calls") or []
         content = msg.get("content") or ""
 
         valid = True
@@ -644,7 +672,7 @@ def run_sanity_check(n_turns: int, temperature: float) -> None:
                 json.loads(args_str)
                 tc_summary.append(f"{fn.get('name')}({args_str[:60]})")
             except json.JSONDecodeError:
-                print(f"  Turn {i+1}: INVALID JSON in tool_call for {fn.get('name')}: {args_str!r}")
+                print(f"  Turn {i+1:2d}: INVALID JSON in tool_call for {fn.get('name')}: {args_str!r}")
                 valid = False
 
         status = "PASS" if valid else "FAIL"
@@ -656,20 +684,10 @@ def run_sanity_check(n_turns: int, temperature: float) -> None:
             tool_call_turns += 1
 
         tc_str = ", ".join(tc_summary) if tc_summary else "(none)"
-        content_preview = content[:80].replace("\n", " ") if content else ""
+        content_preview = content[:70].replace("\n", " ") if content else ""
         usage = result.get("usage", {})
         toks = usage.get("completion_tokens", 0)
         print(f"  Turn {i+1:2d}: {status}  {elapsed:.1f}s  {toks}tok  reason={finish_reason}  tools=[{tc_str}]  text={content_preview!r}")
-
-        # Feed response back into history
-        messages.append({"role": "assistant", "content": content or None, "tool_calls": tool_calls or None})
-        # Inject synthetic tool results so the next turn has a realistic context
-        for tc in tool_calls:
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.get("id", "call_x"),
-                "content": '{"status": "ok"}',
-            })
 
     print(f"\n=== Summary: {pass_count}/{n_turns} PASS  {fail_count} FAIL  tool_call_turns={tool_call_turns} ──")
 
