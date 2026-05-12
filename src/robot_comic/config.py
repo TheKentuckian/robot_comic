@@ -181,6 +181,12 @@ LOCAL_STT_DEFAULT_MODEL = "tiny_streaming"
 LOCAL_STT_MODEL_CHOICES = ("tiny_streaming", "small_streaming")
 LOCAL_STT_DEFAULT_UPDATE_INTERVAL = 0.35
 
+# Cap how many user turns are kept in handler-managed conversation history.
+# 0 disables trimming; live realtime backends (OpenAI/HF/Gemini Live) manage
+# history server-side and ignore this. See history_trim.py.
+MAX_HISTORY_TURNS_ENV = "REACHY_MINI_MAX_HISTORY_TURNS"
+DEFAULT_MAX_HISTORY_TURNS = 20
+
 logger = logging.getLogger(__name__)
 
 

@@ -68,6 +68,24 @@ When Pollen updates the upstream snapshot, check that the shared dep pins
 (`gradio`, `huggingface-hub`, `fastrtc`, `openai`, `reachy-mini`) remain
 compatible with the versions in this project's `pyproject.toml`.
 
+## Development workflow
+
+When working on this repo, **push incremental changes to your branch early and often**—don't wait to finish everything locally before validating. GitHub Actions will automatically run:
+
+- `pytest` — unit tests across Linux, macOS, and Windows
+- `ruff check` — linting
+- `ruff format` — code formatting
+- `mypy` — type checking
+
+**Workflow:**
+1. Create a feature branch: `feat/<issue>-<desc>` or `fix/<issue>-<desc>`
+2. Commit and push your changes
+3. Check the workflow results in the branch's commit checks or PR
+4. Address any failures and push fixes
+5. Once CI passes, open a PR or continue development
+
+This keeps iteration cycles tight and catches platform-specific or dependency issues early.
+
 ## Running on the robot
 
 The robot autostart flow:
