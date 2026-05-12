@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+torch = pytest.importorskip("torch", reason="torch not installed; skipping local vision tests")
+
 from robot_comic.vision.local_vision import (
     LOCAL_VISION_RESPONSE_INSTRUCTIONS,
     VisionConfig,

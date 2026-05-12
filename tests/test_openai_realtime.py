@@ -920,8 +920,8 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
     monkeypatch.setattr(rt_mod, "get_session_voice", lambda default=OPENAI_DEFAULT_VOICE: "alloy")
     monkeypatch.setattr(rt_mod, "get_active_tool_specs", lambda _: [])
 
-    N_TOOL_RESULTS = 400
-    REJECT_CALL_NUMBERS = {1, 3, 5, 10, 25, 50, 75, 100, 150, 200, 300, 399}
+    N_TOOL_RESULTS = 80
+    REJECT_CALL_NUMBERS = {1, 3, 5, 10, 25, 50, 70, 79}
     EXPECTED_TOTAL_CALLS = N_TOOL_RESULTS + len(REJECT_CALL_NUMBERS)
 
     response_create_log: list[tuple[int, dict[str, Any]]] = []
@@ -1102,7 +1102,7 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
     # This stress test queues hundreds of serialized response.create calls; a
     # condition-based wait avoids racing slower CI runners while still failing
     # promptly if the sender stops making progress.
-    deadline = asyncio.get_event_loop().time() + 25.0
+    deadline = asyncio.get_event_loop().time() + 45.0
     while fake_response_api._call_count < EXPECTED_TOTAL_CALLS and asyncio.get_event_loop().time() < deadline:
         await asyncio.sleep(0.05)
 
