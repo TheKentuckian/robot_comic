@@ -234,7 +234,13 @@ class Greet(Tool):
         if action == "identify":
             name = (kwargs.get("name") or "").strip()
             if not name:
-                return {"error": "name is required for action='identify'"}
+                return {
+                    "error": (
+                        "name parameter is required for identify. "
+                        "The person has not spoken their name yet. "
+                        "Greet them and ask for their name first — do NOT invent or guess a name."
+                    )
+                }
             return await self._identify(deps, name)
 
         return {"error": f"Unknown action {action!r}. Use 'scan' or 'identify'."}
