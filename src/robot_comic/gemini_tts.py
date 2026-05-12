@@ -32,6 +32,13 @@ from robot_comic.config import (
 _TTS_EXCLUSIVE_VOICES: frozenset[str] = frozenset(GEMINI_TTS_AVAILABLE_VOICES) - frozenset(GEMINI_AVAILABLE_VOICES)
 from robot_comic.prompts import get_session_instructions
 from robot_comic.gemini_live import _openai_tool_specs_to_gemini
+from robot_comic.gemini_retry import (
+    compute_backoff,
+    is_rate_limit_error,
+    describe_quota_failure,
+    extract_retry_after_seconds,
+)
+from robot_comic.history_trim import trim_history_in_place
 from robot_comic.tools.core_tools import ToolDependencies, dispatch_tool_call, get_active_tool_specs
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.conversation_handler import ConversationHandler
@@ -44,7 +51,7 @@ GEMINI_TTS_MODEL = "gemini-3.1-flash-tts-preview"
 GEMINI_TTS_OUTPUT_SAMPLE_RATE = 24000
 _CHUNK_SAMPLES = 2400  # 100 ms at 24 kHz
 _TTS_MAX_RETRIES = 3
-_TTS_RETRY_DELAY = 0.5
+_TTS_RETRY_BASE_DELAY = 0.5
 _LLM_MAX_RETRIES = 4
 _LLM_RETRY_BASE_DELAY = 1.0
 _LLM_MAX_TOOL_ROUNDS = 5
@@ -75,6 +82,10 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         self._client: genai.Client | None = None
         self._stop_event: asyncio.Event = asyncio.Event()
         self._conversation_history: list[dict[str, Any]] = []
+        # Tracks the most recent TTS-call outcome so the dispatch loop can
+        # surface a rate-limit-specific message to the chat UI.
+        self._last_tts_rate_limited: bool = False
+        self._last_tts_quota: str | None = None
         self.output_queue: asyncio.Queue = asyncio.Queue()
 
         # Attributes referenced by LocalSTTInputMixin (declared to satisfy type checker and MRO)
@@ -165,6 +176,9 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         self._conversation_history.append(
             {"role": "user", "parts": [{"text": transcript}]}
         )
+        # Trim BEFORE building the next request so long sessions don't blow the
+        # model's context window or rack up token cost.
+        trim_history_in_place(self._conversation_history, role_key="role")
 
         try:
             response_text = await self._run_llm_with_tools()
@@ -181,10 +195,12 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
         pcm_bytes = await self._call_tts_with_retry(response_text)
         if pcm_bytes is None:
+            if self._last_tts_rate_limited:
+                msg = f"[Gemini TTS rate-limited (quota={self._last_tts_quota or 'unknown'}); try again later]"
+            else:
+                msg = "[TTS error — could not generate audio]"
             await self.output_queue.put(
-                AdditionalOutputs(
-                    {"role": "assistant", "content": "[TTS error — could not generate audio]"}
-                )
+                AdditionalOutputs({"role": "assistant", "content": msg})
             )
             return
 
@@ -192,9 +208,8 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             await self.output_queue.put((GEMINI_TTS_OUTPUT_SAMPLE_RATE, frame))
 
     async def _llm_generate_with_backoff(self, contents: Any, config: Any) -> Any:
-        """Call generate_content with exponential backoff on 503/UNAVAILABLE errors."""
+        """Call generate_content with backoff on transient errors and 429s."""
         assert self._client is not None, "Client not initialised"
-        delay = _LLM_RETRY_BASE_DELAY
         for attempt in range(_LLM_MAX_RETRIES):
             try:
                 return await self._client.aio.models.generate_content(
@@ -204,15 +219,32 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                 )
             except Exception as exc:
                 msg = str(exc)
-                is_retryable = "503" in msg or "UNAVAILABLE" in msg or "429" in msg or "RESOURCE_EXHAUSTED" in msg
+                rate_limited = is_rate_limit_error(exc)
+                is_retryable = rate_limited or "503" in msg or "UNAVAILABLE" in msg
                 if not is_retryable or attempt == _LLM_MAX_RETRIES - 1:
+                    if rate_limited and attempt == _LLM_MAX_RETRIES - 1:
+                        logger.error(
+                            "Gemini LLM rate-limited (quota=%s) after %d attempts; giving up",
+                            describe_quota_failure(exc),
+                            _LLM_MAX_RETRIES,
+                        )
                     raise
-                logger.warning(
-                    "LLM attempt %d/%d failed (%s); retrying in %.1fs",
-                    attempt + 1, _LLM_MAX_RETRIES, msg.split("\n")[0], delay,
-                )
+                retry_after = extract_retry_after_seconds(exc) if rate_limited else None
+                delay = compute_backoff(attempt, _LLM_RETRY_BASE_DELAY, retry_after)
+                if rate_limited:
+                    logger.warning(
+                        "Gemini LLM 429 (quota=%s, attempt %d/%d); sleeping %.1fs before retry",
+                        describe_quota_failure(exc),
+                        attempt + 1,
+                        _LLM_MAX_RETRIES,
+                        delay,
+                    )
+                else:
+                    logger.warning(
+                        "Gemini LLM attempt %d/%d failed (%s); retrying in %.1fs",
+                        attempt + 1, _LLM_MAX_RETRIES, msg.split("\n")[0], delay,
+                    )
                 await asyncio.sleep(delay)
-                delay *= 2
 
     async def _run_llm_with_tools(self) -> str:
         """Call Gemini Flash with conversation history, handling tool round-trips."""
@@ -298,6 +330,8 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             ),
         )
 
+        self._last_tts_rate_limited = False
+        self._last_tts_quota = None
         for attempt in range(_TTS_MAX_RETRIES):
             try:
                 response = await self._client.aio.models.generate_content(
@@ -308,11 +342,41 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                 data = response.candidates[0].content.parts[0].inline_data.data
                 return base64.b64decode(data) if isinstance(data, str) else bytes(data)
             except Exception as exc:
-                logger.warning(
-                    "TTS attempt %d/%d failed: %s", attempt + 1, _TTS_MAX_RETRIES, exc
-                )
+                rate_limited = is_rate_limit_error(exc)
+                if rate_limited:
+                    quota = describe_quota_failure(exc)
+                    retry_after = extract_retry_after_seconds(exc)
+                    self._last_tts_rate_limited = True
+                    self._last_tts_quota = quota
+                    logger.warning(
+                        "Gemini TTS 429 (quota=%s, attempt %d/%d); retry-after=%s",
+                        quota,
+                        attempt + 1,
+                        _TTS_MAX_RETRIES,
+                        f"{retry_after:.1f}s" if retry_after is not None else "n/a",
+                    )
+                else:
+                    retry_after = None
+                    logger.warning(
+                        "TTS attempt %d/%d failed: %s", attempt + 1, _TTS_MAX_RETRIES, exc
+                    )
                 if attempt < _TTS_MAX_RETRIES - 1:
-                    await asyncio.sleep(_TTS_RETRY_DELAY)
+                    delay = compute_backoff(attempt, _TTS_RETRY_BASE_DELAY, retry_after)
+                    await asyncio.sleep(delay)
+                elif rate_limited:
+                    logger.error(
+                        "Gemini TTS exhausted %d retries on 429 (quota=%s); "
+                        "skipping audio for this turn",
+                        _TTS_MAX_RETRIES,
+                        describe_quota_failure(exc),
+                    )
+                else:
+                    logger.error(
+                        "Gemini TTS exhausted %d retries (last error: %s); "
+                        "skipping audio for this turn",
+                        _TTS_MAX_RETRIES,
+                        exc,
+                    )
 
         return None
 

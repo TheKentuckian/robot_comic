@@ -28,6 +28,12 @@ from robot_comic.config import (
     LLAMA_GEMINI_TTS_OUTPUT,
     config,
 )
+from robot_comic.gemini_retry import (
+    compute_backoff,
+    is_rate_limit_error,
+    describe_quota_failure,
+    extract_retry_after_seconds,
+)
 from robot_comic.gemini_tts import GEMINI_TTS_MODEL, _TTS_EXCLUSIVE_VOICES
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.tools.core_tools import ToolDependencies
@@ -35,7 +41,7 @@ from robot_comic.tools.core_tools import ToolDependencies
 logger = logging.getLogger(__name__)
 
 _TTS_MAX_RETRIES = 3
-_TTS_RETRY_DELAY = 0.5
+_TTS_RETRY_BASE_DELAY = 0.5
 
 
 class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
@@ -55,6 +61,10 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
         self._client: genai.Client | None = None
         # Only restore voices valid for Gemini TTS (not Gemini Live voices)
         self._voice_override = startup_voice if startup_voice in _TTS_EXCLUSIVE_VOICES else None
+        # Tracks the most recent TTS-call outcome so the synthesizer can
+        # surface a rate-limit-specific message to the chat UI.
+        self._last_tts_rate_limited: bool = False
+        self._last_tts_quota: str | None = None
 
     def copy(self) -> "LlamaGeminiTTSResponseHandler":
         return LlamaGeminiTTSResponseHandler(
@@ -142,8 +152,12 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
             any_audio = True
 
         if not any_audio:
+            if self._last_tts_rate_limited:
+                msg = f"[Gemini TTS rate-limited (quota={self._last_tts_quota or 'unknown'}); try again later]"
+            else:
+                msg = "[TTS error — Gemini TTS failed]"
             await self.output_queue.put(
-                AdditionalOutputs({"role": "assistant", "content": "[TTS error — Gemini TTS failed]"})
+                AdditionalOutputs({"role": "assistant", "content": msg})
             )
 
     async def _call_gemini_tts(self, text: str) -> bytes | None:
@@ -158,6 +172,8 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
                 )
             ),
         )
+        self._last_tts_rate_limited = False
+        self._last_tts_quota = None
         for attempt in range(_TTS_MAX_RETRIES):
             try:
                 response = await self._client.aio.models.generate_content(
@@ -168,9 +184,39 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
                 data = response.candidates[0].content.parts[0].inline_data.data  # type: ignore[index,union-attr]
                 return base64.b64decode(data) if isinstance(data, str) else bytes(data)  # type: ignore[arg-type]
             except Exception as exc:
-                logger.warning("Gemini TTS attempt %d/%d failed: %s", attempt + 1, _TTS_MAX_RETRIES, exc)
+                rate_limited = is_rate_limit_error(exc)
+                if rate_limited:
+                    quota = describe_quota_failure(exc)
+                    retry_after = extract_retry_after_seconds(exc)
+                    self._last_tts_rate_limited = True
+                    self._last_tts_quota = quota
+                    logger.warning(
+                        "Gemini TTS 429 (quota=%s, attempt %d/%d); retry-after=%s",
+                        quota,
+                        attempt + 1,
+                        _TTS_MAX_RETRIES,
+                        f"{retry_after:.1f}s" if retry_after is not None else "n/a",
+                    )
+                else:
+                    retry_after = None
+                    logger.warning("Gemini TTS attempt %d/%d failed: %s", attempt + 1, _TTS_MAX_RETRIES, exc)
                 if attempt < _TTS_MAX_RETRIES - 1:
-                    await asyncio.sleep(_TTS_RETRY_DELAY)
+                    delay = compute_backoff(attempt, _TTS_RETRY_BASE_DELAY, retry_after)
+                    await asyncio.sleep(delay)
+                elif rate_limited:
+                    logger.error(
+                        "Gemini TTS exhausted %d retries on 429 (quota=%s); "
+                        "skipping audio for this turn",
+                        _TTS_MAX_RETRIES,
+                        describe_quota_failure(exc),
+                    )
+                else:
+                    logger.error(
+                        "Gemini TTS exhausted %d retries (last error: %s); "
+                        "skipping audio for this turn",
+                        _TTS_MAX_RETRIES,
+                        exc,
+                    )
         return None
 
 

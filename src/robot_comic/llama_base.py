@@ -22,6 +22,7 @@ from opentelemetry import context as _otel_context
 from robot_comic import telemetry
 from robot_comic.config import config
 from robot_comic.conversation_handler import ConversationHandler
+from robot_comic.history_trim import trim_history_in_place
 from robot_comic.prompts import get_session_instructions
 from robot_comic.tools.core_tools import ToolDependencies, get_active_tool_specs
 from robot_comic.tools.background_tool_manager import (
@@ -188,6 +189,9 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
     async def _dispatch_completed_transcript(self, transcript: str) -> None:
         """LLM → tool dispatch → TTS → PCM frames (two-phase with query-tool feedback)."""
         self._conversation_history.append({"role": "user", "content": transcript})
+        # Trim BEFORE building the next LLM request so unbounded sessions don't
+        # blow up the context window mid-turn.
+        trim_history_in_place(self._conversation_history)
 
         # Capture the outer span NOW — self._turn_span may be overwritten by the
         # mixin when the next STT event fires while we're blocked on the turn lock.
