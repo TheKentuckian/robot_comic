@@ -307,8 +307,30 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                 )
 
             if not follow_up_text:
-                logger.warning("Phase-2 LLM returned empty text (Qwen3 think-only?); skipping TTS")
-                return
+                logger.warning("Phase-2 LLM returned empty text (Qwen3 think-only?); retrying once")
+                _llm2r_span = _tracer.start_span(
+                    "llm.request",
+                    attributes={
+                        "gen_ai.system": "llama_cpp",
+                        "gen_ai.operation.name": "chat",
+                        "llm.phase": "2-retry",
+                    },
+                )
+                _llm2r_start = time.perf_counter()
+                try:
+                    follow_up_text, _, _ = await self._call_llm()
+                except Exception as exc:
+                    logger.warning("Phase-2 LLM retry failed: %s", exc)
+                    return
+                finally:
+                    _llm2r_span.end()
+                    telemetry.record_llm_duration(
+                        time.perf_counter() - _llm2r_start,
+                        {"gen_ai.system": "llama_cpp", "gen_ai.operation.name": "chat"},
+                    )
+                if not follow_up_text:
+                    logger.warning("Phase-2 LLM retry also returned empty text; skipping TTS")
+                    return
             self._conversation_history.append({"role": "assistant", "content": follow_up_text})
             await self.output_queue.put(
                 AdditionalOutputs({"role": "assistant", "content": follow_up_text})
