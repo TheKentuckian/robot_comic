@@ -461,13 +461,14 @@ class RobotComic(ReachyMiniApp):  # type: ignore[misc]
 
         args, _ = parse_args()
 
-        instance_path = self._get_instance_path().parent
+        data_dir = Path.home() / ".robot_comic"
+        data_dir.mkdir(exist_ok=True)
         run(
             args,
             robot=reachy_mini,
             app_stop_event=stop_event,
             settings_app=self.settings_app,
-            instance_path=instance_path,
+            instance_path=str(data_dir),
         )
 
 

@@ -18,15 +18,14 @@ SESSION_WINDOW_HOURS = 24
 
 
 def resolve_session_dir(instance_path: Path | None) -> Path:
-    """Return the comedy-sessions directory under instance_path, or a CWD-relative fallback.
+    """Return the comedy-sessions directory, always rooted under ~/.robot_comic.
 
-    On-robot, instance_path is the stable per-instance directory used for
-    startup_settings.json. In dev/sim mode it may be None, in which case we
-    keep the legacy CWD-relative behaviour.
+    Ignores instance_path so sessions land in a location that is stable across
+    editable vs non-editable installs.
     """
-    if instance_path is not None:
-        return Path(instance_path) / SESSION_DIRNAME
-    return Path(SESSION_DIRNAME)
+    session_dir = Path.home() / ".robot_comic" / SESSION_DIRNAME
+    session_dir.mkdir(parents=True, exist_ok=True)
+    return session_dir
 
 
 class CrowdWork(Tool):

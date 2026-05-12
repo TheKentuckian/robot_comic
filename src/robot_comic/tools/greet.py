@@ -110,8 +110,9 @@ class Greet(Tool):
     description = (
         "Two actions. "
         "action='scan': detect whether a face is present; executes a slow head sweep if not found immediately. "
-        "action='identify': fuzzy-match a spoken name against stored sessions from the last 30 days; "
-        "returns the returning visitor's profile and callback hints if matched."
+        "action='identify': fuzzy-match a spoken name against stored sessions from the last 30 days. "
+        "On match returns returning=true with profile and callback hints. "
+        "On no match returns returning=false and name_received=<name> — use name_received to address the new visitor by name without asking again."
     )
     parameters_schema = {
         "type": "object",
@@ -181,17 +182,17 @@ class Greet(Tool):
         assert self._session_dir is not None
         candidates = _load_candidates(self._session_dir)
         if not candidates:
-            return {"returning": False}
+            return {"returning": False, "name_received": name}
 
         matched_name, matched_path, _score = _fuzzy_match(name, candidates)
         if matched_name is None or matched_path is None:
-            return {"returning": False}
+            return {"returning": False, "name_received": name}
 
         try:
             state = json.loads(matched_path.read_text(encoding="utf-8"))
         except Exception:
             logger.warning("Failed to read matched session %s", matched_path)
-            return {"returning": False}
+            return {"returning": False, "name_received": name}
 
         last_seen = state.get("last_updated") or str(datetime.fromtimestamp(matched_path.stat().st_mtime).isoformat())
         profile = {
