@@ -46,7 +46,7 @@ def test_active_transcripts_are_dispatched():
 def test_stop_word_clears_queue_and_enters_paused():
     """Hearing the stop word transitions to paused and clears the move queue."""
     controller, clear, shutdown, switch = _make_controller()
-    result = controller.handle_transcript("System pause, please.")
+    result = controller.handle_transcript("Reachy pause, please.")
     assert result is TranscriptDisposition.HANDLED
     assert controller.is_paused
     clear.assert_called_once()
@@ -57,7 +57,7 @@ def test_stop_word_clears_queue_and_enters_paused():
 def test_stop_word_match_is_punctuation_insensitive():
     """Trailing punctuation does not prevent stop-word detection."""
     controller, clear, _, _ = _make_controller()
-    assert controller.handle_transcript("Robot pause!!!") is TranscriptDisposition.HANDLED
+    assert controller.handle_transcript("Reachy pause!!!") is TranscriptDisposition.HANDLED
     assert controller.is_paused
     clear.assert_called_once()
 
@@ -65,7 +65,7 @@ def test_stop_word_match_is_punctuation_insensitive():
 def test_unrelated_words_inside_paused_are_still_handled():
     """While paused, off-menu transcripts are consumed and not dispatched."""
     controller, clear, shutdown, switch = _make_controller()
-    controller.handle_transcript("system pause")
+    controller.handle_transcript("reachy pause")
     clear.reset_mock()
     result = controller.handle_transcript("tell me a joke")
     assert result is TranscriptDisposition.HANDLED
@@ -78,7 +78,7 @@ def test_unrelated_words_inside_paused_are_still_handled():
 def test_continue_resumes_active():
     """A resume phrase returns the controller to the active state."""
     controller, _, shutdown, switch = _make_controller()
-    controller.handle_transcript("system pause")
+    controller.handle_transcript("reachy pause")
     assert controller.is_paused
     result = controller.handle_transcript("Continue.")
     assert result is TranscriptDisposition.HANDLED
@@ -90,8 +90,7 @@ def test_continue_resumes_active():
 def test_shutdown_invokes_callback_and_marks_state():
     """A shutdown phrase fires the callback exactly once and locks the state."""
     controller, _, shutdown, _ = _make_controller()
-    controller.handle_transcript("system pause")
-    result = controller.handle_transcript("Shut down now")
+    result = controller.handle_transcript("reachy shutdown")
     assert result is TranscriptDisposition.HANDLED
     assert controller.state is PauseState.SHUTTING_DOWN
     shutdown.assert_called_once()
@@ -100,7 +99,7 @@ def test_shutdown_invokes_callback_and_marks_state():
 def test_switch_phrase_invokes_callback_and_stays_paused():
     """A switch phrase fires the optional callback but does not auto-resume."""
     controller, _, _, switch = _make_controller()
-    controller.handle_transcript("system pause")
+    controller.handle_transcript("reachy pause")
     result = controller.handle_transcript("switch comic")
     assert result is TranscriptDisposition.HANDLED
     assert controller.is_paused
@@ -110,8 +109,8 @@ def test_switch_phrase_invokes_callback_and_stays_paused():
 def test_after_shutdown_further_transcripts_are_silently_handled():
     """Once shutting down, later transcripts are absorbed and do not re-trigger callbacks."""
     controller, clear, shutdown, switch = _make_controller()
-    controller.handle_transcript("system pause")
-    controller.handle_transcript("shutdown")
+    controller.handle_transcript("reachy pause")
+    controller.handle_transcript("reachy shutdown")
     shutdown.assert_called_once()
     shutdown.reset_mock()
     clear.reset_mock()
@@ -132,7 +131,7 @@ def test_clear_move_queue_exceptions_are_swallowed():
         raise RuntimeError("boom")
 
     controller, _, _, _ = _make_controller(clear_move_queue=bad_clear)
-    result = controller.handle_transcript("system pause")
+    result = controller.handle_transcript("reachy pause")
     assert result is TranscriptDisposition.HANDLED
     assert controller.is_paused
 
@@ -225,7 +224,7 @@ async def test_local_stt_skips_dispatch_when_paused():
     handler = LocalSTTRealtimeHandler(deps)
     handler._dispatch_completed_transcript = AsyncMock()  # type: ignore[method-assign]
 
-    await handler._handle_local_stt_event("completed", "system pause")
+    await handler._handle_local_stt_event("completed", "reachy pause")
 
     handler._dispatch_completed_transcript.assert_not_awaited()
     assert controller.is_paused

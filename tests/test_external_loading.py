@@ -37,6 +37,7 @@ def test_external_profile_can_use_builtin_tools(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr(config_mod.config, "AUTOLOAD_EXTERNAL_TOOLS", False)
 
     core_tools_mod = _reload_core_tools()
+    core_tools_mod.get_tool_specs()  # trigger lazy init
 
     assert "dance" in core_tools_mod.ALL_TOOLS
     assert "dance" not in sys.modules
@@ -74,6 +75,7 @@ def test_external_tools_can_be_loaded_without_external_profile(
     monkeypatch.setattr(config_mod.config, "AUTOLOAD_EXTERNAL_TOOLS", True)
 
     core_tools_mod = _reload_core_tools()
+    core_tools_mod.get_tool_specs()  # trigger lazy init
 
     assert "ext_ping" in core_tools_mod.ALL_TOOLS
 
@@ -88,5 +90,6 @@ def test_builtin_profile_can_load_profile_local_tools(
     monkeypatch.setattr(config_mod.config, "AUTOLOAD_EXTERNAL_TOOLS", False)
 
     core_tools_mod = _reload_core_tools()
+    core_tools_mod.get_tool_specs()  # trigger lazy init
 
     assert "sweep_look" in core_tools_mod.ALL_TOOLS

@@ -49,8 +49,8 @@ def test_write_and_read_round_trip(tmp_path: Path) -> None:
     assert written == initial
 
     loaded = read_pause_settings(tmp_path)
-    assert loaded.stop == ("System Pause", "Robot Stop")
-    assert loaded.shutdown == ("Power Off",)
+    assert loaded.stop == ("system pause", "robot stop")
+    assert loaded.shutdown == ("power off",)
     assert loaded.resume is None
     assert loaded.switch == ("switch comic",)
     assert loaded.resolved_resume() == DEFAULT_RESUME_PHRASES

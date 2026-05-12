@@ -3,6 +3,22 @@ import os
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _restore_config_object():
+    """Save the original config singleton and restore it after each test.
+
+    importlib.reload() replaces robot_comic.config.__dict__['config'] with a
+    new Config instance. Imported functions (get_backend_choice etc.) look up
+    'config' via __globals__ which IS that same __dict__, so they start reading
+    the new instance. Restoring the original object keeps all callers
+    consistent after the test.
+    """
+    cfg_mod = importlib.import_module("robot_comic.config")
+    original = cfg_mod.config
+    yield
+    cfg_mod.config = original
+
+
 def _reload_config(monkeypatch, env: dict):
     for k, v in env.items():
         monkeypatch.setenv(k, v)
@@ -21,9 +37,9 @@ def test_gemini_live_video_streaming_env_true(monkeypatch):
     assert cfg.GEMINI_LIVE_VIDEO_STREAMING is True
 
 
-def test_movement_speed_factor_defaults_0_6(monkeypatch):
+def test_movement_speed_factor_defaults_0_3(monkeypatch):
     cfg = _reload_config(monkeypatch, {})
-    assert cfg.MOVEMENT_SPEED_FACTOR == pytest.approx(0.6)
+    assert cfg.MOVEMENT_SPEED_FACTOR == pytest.approx(0.3)
 
 
 def test_movement_speed_factor_clamped_high(monkeypatch):
