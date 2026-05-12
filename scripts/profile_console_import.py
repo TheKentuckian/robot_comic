@@ -34,7 +34,6 @@ CONSOLE_TOP_LEVEL = [
     "typing",
     "pathlib",
     "fastrtc",
-    "scipy",
     "reachy_mini",
     "robot_comic.config",
     "robot_comic.pause_settings",
