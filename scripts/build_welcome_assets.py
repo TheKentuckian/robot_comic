@@ -409,6 +409,10 @@ _GEMINI_MAX_ATTEMPTS = 4
 _last_gemini_call = 0.0
 
 
+class DailyQuotaExhausted(RuntimeError):
+    """Raised when Gemini returns a per-day quota exhaustion. Don't retry."""
+
+
 def _extract_pcm(resp: Any) -> bytes | None:
     """Pull inline audio bytes from a Gemini response, or None if absent."""
     try:
@@ -464,6 +468,10 @@ def gemini_tts(text: str, voice: str) -> bytes:
             msg = str(exc)
             last_exc = exc
             if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                if "per_day" in msg or "PerDay" in msg:
+                    raise DailyQuotaExhausted(
+                        "Gemini TTS daily quota exhausted — retry tomorrow or swap API keys"
+                    ) from exc
                 m = re.search(r"retryDelay['\"]?\s*[:=]\s*['\"]?(\d+(?:\.\d+)?)\s*s", msg)
                 raw = float(m.group(1)) if m else 30.0
                 delay = min(70.0, raw + 1.0)  # cap: 60s quota window
@@ -615,7 +623,11 @@ def cmd_generate_narrator(args: argparse.Namespace) -> int:
         print(f"[narrator] {key}.wav  voice={NARRATOR_VOICE}  text={text!r}")
         if args.dry_run:
             continue
-        pcm = gemini_tts(text, NARRATOR_VOICE)
+        try:
+            pcm = gemini_tts(text, NARRATOR_VOICE)
+        except DailyQuotaExhausted as exc:
+            print(f"  {exc}. Stopping; rerun once quota resets.")
+            return 1
         write_wav_pcm16(out, pcm)
         print(f"  -> {out.relative_to(REPO_ROOT)}  {out.stat().st_size} bytes  sha256={sha256_file(out)}")
     return 0
@@ -662,6 +674,9 @@ def cmd_generate_character(args: argparse.Namespace) -> int:
             continue
         try:
             pcm = gemini_tts(name, voice)
+        except DailyQuotaExhausted as exc:
+            print(f"  {exc}. Stopping; rerun once quota resets.")
+            break
         except Exception as exc:
             print(f"  TTS failed: {exc}")
             continue
