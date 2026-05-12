@@ -123,8 +123,8 @@ class CameraWorker:
                             h, w, _ = frame.shape
                             eye_center_norm = (eye_center + 1) / 2
                             eye_center_pixels = [
-                                eye_center_norm[0] * w,
-                                eye_center_norm[1] * h,
+                                max(0.0, min(float(w), eye_center_norm[0] * w)),
+                                max(0.0, min(float(h), eye_center_norm[1] * h)),
                             ]
 
                             target_pose = self.reachy_mini.look_at_image(
