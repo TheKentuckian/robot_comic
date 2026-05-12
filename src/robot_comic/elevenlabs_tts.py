@@ -189,12 +189,29 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             return self._voice_override
         config_params = load_profile_elevenlabs_config()
         voice = config_params.get("voice") or ELEVENLABS_DEFAULT_VOICE
+        # Custom voice_id (e.g. a PVC clone) is permitted and takes precedence over
+        # the named-voice list. The cloned voice has its own ID; the "voice" name
+        # is informational only.
+        if config_params.get("voice_id"):
+            return voice
         if voice not in ELEVENLABS_AVAILABLE_VOICES:
             logger.warning(
                 "Voice %r is not a valid ElevenLabs voice; falling back to %s", voice, ELEVENLABS_DEFAULT_VOICE
             )
             return ELEVENLABS_DEFAULT_VOICE
         return voice
+
+    def _resolve_voice_id(self) -> str | None:
+        """Resolve the ElevenLabs voice ID.
+
+        Profile config `voice_id=<id>` takes precedence (e.g. PVC clones).
+        Otherwise map the named voice via the prebuilt voice catalog.
+        """
+        config_params = load_profile_elevenlabs_config()
+        custom_id = config_params.get("voice_id")
+        if custom_id:
+            return custom_id
+        return _ELEVENLABS_VOICE_IDS.get(self.get_current_voice())
 
     async def change_voice(self, voice: str) -> str:
         self._voice_override = voice
@@ -334,7 +351,7 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             logger.error("ELEVENLABS_API_KEY not configured")
             return None
 
-        voice_id = _ELEVENLABS_VOICE_IDS.get(self.get_current_voice())
+        voice_id = self._resolve_voice_id()
         if not voice_id:
             logger.error("Could not resolve voice ID for %s", self.get_current_voice())
             return None

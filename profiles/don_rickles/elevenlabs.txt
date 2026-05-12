@@ -1,11 +1,20 @@
 # ElevenLabs TTS configuration for the Don Rickles profile
 # Format: key=value (one per line, comments start with #)
 
-# Voice name: Harry for a confident, mature male voice (eventual target: cloned Don Rickles voice)
+# Voice name: informational when voice_id is set; otherwise must be a named voice
+# from the prebuilt catalog (Harry is the placeholder until PVC clone is trained).
 voice=Harry
 
-# Voice stability: slightly lower for more personality/variation in comedic delivery
+# Custom voice ID for a Professional Voice Clone (PVC).
+# To create: cd voice_prep && python pvc_clone.py create "Don Rickles" <wavs...>
+# Then:      python pvc_clone.py train <voice_id>
+#            python pvc_clone.py status <voice_id>   # wait for "completed"
+# Once trained, paste the voice_id below and the handler will use the clone.
+# voice_id=
+
+# Voice stability: lower = more variation/personality, higher = more consistent.
+# Rickles' delivery has big dynamic range — keep this lowish.
 stability=0.4
 
-# Similarity boost: lower for more variation in tone and emotion
+# Similarity boost: how closely to match training data tone.
 similarity_boost=0.65
