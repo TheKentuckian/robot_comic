@@ -30,6 +30,7 @@ from robot_comic.config import (
     CHATTERBOX_OUTPUT,
     GEMINI_TTS_OUTPUT,
     ELEVENLABS_OUTPUT,
+    LLAMA_ELEVENLABS_TTS_OUTPUT,
     LOCAL_STT_BACKEND,
     CHATTERBOX_URL_ENV,
     LOCAL_STT_MODEL_ENV,
@@ -225,6 +226,8 @@ class LocalStream:
                 return self._has_key(config.GEMINI_API_KEY)
             if response_backend == ELEVENLABS_OUTPUT:
                 return self._has_key(config.ELEVENLABS_API_KEY)
+            if response_backend == LLAMA_ELEVENLABS_TTS_OUTPUT:
+                return self._has_key(config.ELEVENLABS_API_KEY)
             if response_backend == CHATTERBOX_OUTPUT:
                 return True  # no API key needed; server URL has a usable default
             return self._has_key(config.OPENAI_API_KEY)
@@ -244,6 +247,8 @@ class LocalStream:
             if response_backend == GEMINI_TTS_OUTPUT:
                 return "GEMINI_API_KEY"
             if response_backend == ELEVENLABS_OUTPUT:
+                return "ELEVENLABS_API_KEY"
+            if response_backend == LLAMA_ELEVENLABS_TTS_OUTPUT:
                 return "ELEVENLABS_API_KEY"
             return "OPENAI_API_KEY"
         return "OPENAI_API_KEY"
