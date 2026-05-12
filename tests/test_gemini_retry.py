@@ -233,7 +233,7 @@ async def test_dispatch_surfaces_rate_limit_specific_message_to_ui() -> None:
     async def fake_llm() -> str:
         return "hello world"
 
-    async def failing_tts(text: str) -> bytes | None:
+    async def failing_tts(text: str, system_instruction: str | None = None) -> bytes | None:
         # Simulate _call_tts_with_retry having exhausted retries on 429.
         handler._last_tts_rate_limited = True
         handler._last_tts_quota = "generativelanguage.googleapis.com/generate_content_free_tier_requests"
@@ -321,7 +321,7 @@ async def test_dispatch_uses_generic_message_for_non_rate_limit_failure() -> Non
     async def fake_llm() -> str:
         return "hello world"
 
-    async def failing_tts(text: str) -> bytes | None:
+    async def failing_tts(text: str, system_instruction: str | None = None) -> bytes | None:
         # _call_tts_with_retry resets these at the start of every call;
         # leaving them False simulates a non-rate-limit failure.
         handler._last_tts_rate_limited = False

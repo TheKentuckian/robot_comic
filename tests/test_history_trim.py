@@ -165,7 +165,7 @@ async def test_gemini_tts_handler_trims_history_on_dispatch(monkeypatch) -> None
     async def fake_llm() -> str:
         return "response"
 
-    async def fake_tts(text: str) -> bytes:
+    async def fake_tts(text: str, system_instruction: str | None = None) -> bytes:
         return b""
 
     handler._run_llm_with_tools = fake_llm  # type: ignore[method-assign]

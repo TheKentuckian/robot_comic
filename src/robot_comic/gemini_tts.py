@@ -7,6 +7,7 @@ audio with gemini-3.1-flash-tts-preview (voice: Algenib by default).
 Audio output: 24 kHz, mono, 16-bit PCM — matches the existing pipeline.
 """
 
+import re
 import json
 import base64
 import asyncio
@@ -25,6 +26,8 @@ from robot_comic.config import (
     config,
     set_custom_profile,
 )
+from robot_comic.llama_base import split_sentences
+from robot_comic.chatterbox_tag_translator import strip_gemini_tags
 
 
 # Voices shared with Gemini Live may have been persisted for that backend.
@@ -55,6 +58,82 @@ _TTS_RETRY_BASE_DELAY = 0.5
 _LLM_MAX_RETRIES = 4
 _LLM_RETRY_BASE_DELAY = 1.0
 _LLM_MAX_TOOL_ROUNDS = 5
+
+# Fallback used when a profile does not provide its own gemini_tts.txt.
+DEFAULT_TTS_SYSTEM_INSTRUCTION = (
+    "Deliver this text at a fast, clipped Brooklyn pace — "
+    "rapid-fire on the insults, short crisp pauses only where marked. "
+    "Never drawl or over-enunciate. Keep the energy sharp."
+)
+
+# Delivery tags emitted by profile prompts (see e.g. profiles/don_rickles/instructions.txt).
+# Each tag maps to a human-readable phrase used in the system_instruction suffix —
+# the TTS model has more to work with than the raw tag name.
+_DELIVERY_TAG_PHRASES: dict[str, str] = {
+    "fast": "rapid-fire, clipped delivery",
+    "slow": "slower, more deliberate pacing",
+    "annoyance": "exasperated, contemptuous edge",
+    "aggression": "sharp, biting attack",
+    "amusement": "self-satisfied, savouring the line",
+    "enthusiasm": "warm, energised lift",
+}
+# [short pause] is special: handled as a real audio gap before the sentence,
+# not as a TTS cue (otherwise the model would add its own pause on top of the silence).
+SHORT_PAUSE_TAG = "short pause"
+SHORT_PAUSE_MS = 400
+
+_ALL_TAGS = (*_DELIVERY_TAG_PHRASES.keys(), SHORT_PAUSE_TAG)
+_DELIVERY_TAG_RE = re.compile(
+    r"\[(" + "|".join(re.escape(t) for t in _ALL_TAGS) + r")\]",
+    re.IGNORECASE,
+)
+
+
+def extract_delivery_tags(text: str) -> list[str]:
+    """Return ordered, de-duplicated delivery-tag names found in *text*."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for match in _DELIVERY_TAG_RE.finditer(text):
+        tag = match.group(1).lower()
+        if tag not in seen:
+            seen.add(tag)
+            out.append(tag)
+    return out
+
+
+def build_tts_system_instruction(base: str, tags: list[str]) -> str:
+    """Append a short delivery-cue suffix to *base* for one TTS call.
+
+    [short pause] is excluded — it becomes a real silence gap in the audio,
+    not a hint to the model.
+    """
+    cue_tags = [t for t in tags if t != SHORT_PAUSE_TAG]
+    if not cue_tags:
+        return base
+    cues = "; ".join(_DELIVERY_TAG_PHRASES.get(t, t) for t in cue_tags)
+    return f"{base}\n\nDelivery cues for this line: {cues}."
+
+
+def _silence_pcm(duration_ms: int, sample_rate: int = GEMINI_TTS_OUTPUT_SAMPLE_RATE) -> bytes:
+    """Return raw int16 PCM bytes of silence at *sample_rate* for *duration_ms*."""
+    n_samples = int(sample_rate * duration_ms / 1000)
+    return bytes(np.zeros(n_samples, dtype=np.int16).tobytes())
+
+
+def load_profile_tts_instruction() -> str:
+    """Read profiles/<name>/gemini_tts.txt, falling back to DEFAULT_TTS_SYSTEM_INSTRUCTION."""
+    profile: str | None = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
+    if not profile:
+        return DEFAULT_TTS_SYSTEM_INSTRUCTION
+    try:
+        path = config.PROFILES_DIRECTORY / profile / "gemini_tts.txt"
+        if path.exists():
+            text: str = path.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+    except Exception as exc:
+        logger.warning("Could not read gemini_tts.txt for profile %r: %s", profile, exc)
+    return DEFAULT_TTS_SYSTEM_INSTRUCTION
 
 
 class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
@@ -159,7 +238,9 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
     def get_current_voice(self) -> str:
         voice = self._voice_override or GEMINI_TTS_DEFAULT_VOICE
         if voice not in GEMINI_TTS_AVAILABLE_VOICES:
-            logger.warning("Voice %r is not a valid Gemini TTS voice; falling back to %s", voice, GEMINI_TTS_DEFAULT_VOICE)
+            logger.warning(
+                "Voice %r is not a valid Gemini TTS voice; falling back to %s", voice, GEMINI_TTS_DEFAULT_VOICE
+            )
             return GEMINI_TTS_DEFAULT_VOICE
         return voice
 
@@ -173,9 +254,7 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _dispatch_completed_transcript(self, transcript: str) -> None:
         """Gemini-native response cycle: LLM → tools → TTS → audio frames."""
-        self._conversation_history.append(
-            {"role": "user", "parts": [{"text": transcript}]}
-        )
+        self._conversation_history.append({"role": "user", "parts": [{"text": transcript}]})
         # Trim BEFORE building the next request so long sessions don't blow the
         # model's context window or rack up token cost.
         trim_history_in_place(self._conversation_history, role_key="role")
@@ -186,26 +265,34 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             logger.warning("LLM call failed: %s", exc)
             return
 
-        self._conversation_history.append(
-            {"role": "model", "parts": [{"text": response_text}]}
-        )
-        await self.output_queue.put(
-            AdditionalOutputs({"role": "assistant", "content": response_text})
-        )
+        self._conversation_history.append({"role": "model", "parts": [{"text": response_text}]})
+        await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": response_text}))
 
-        pcm_bytes = await self._call_tts_with_retry(response_text)
-        if pcm_bytes is None:
+        base_instruction = load_profile_tts_instruction()
+        sentences = split_sentences(response_text) or [response_text]
+        any_audio = False
+        for sentence in sentences:
+            spoken = strip_gemini_tags(sentence)
+            if not spoken:
+                continue
+            tags = extract_delivery_tags(sentence)
+            if SHORT_PAUSE_TAG in tags:
+                for frame in self._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS)):
+                    await self.output_queue.put((GEMINI_TTS_OUTPUT_SAMPLE_RATE, frame))
+            instruction = build_tts_system_instruction(base_instruction, tags)
+            pcm_bytes = await self._call_tts_with_retry(spoken, system_instruction=instruction)
+            if pcm_bytes is None:
+                continue
+            for frame in self._pcm_to_frames(pcm_bytes):
+                await self.output_queue.put((GEMINI_TTS_OUTPUT_SAMPLE_RATE, frame))
+            any_audio = True
+
+        if not any_audio:
             if self._last_tts_rate_limited:
                 msg = f"[Gemini TTS rate-limited (quota={self._last_tts_quota or 'unknown'}); try again later]"
             else:
                 msg = "[TTS error — could not generate audio]"
-            await self.output_queue.put(
-                AdditionalOutputs({"role": "assistant", "content": msg})
-            )
-            return
-
-        for frame in self._pcm_to_frames(pcm_bytes):
-            await self.output_queue.put((GEMINI_TTS_OUTPUT_SAMPLE_RATE, frame))
+            await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": msg}))
 
     async def _llm_generate_with_backoff(self, contents: Any, config: Any) -> Any:
         """Call generate_content with backoff on transient errors and 429s."""
@@ -242,7 +329,10 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                 else:
                     logger.warning(
                         "Gemini LLM attempt %d/%d failed (%s); retrying in %.1fs",
-                        attempt + 1, _LLM_MAX_RETRIES, msg.split("\n")[0], delay,
+                        attempt + 1,
+                        _LLM_MAX_RETRIES,
+                        msg.split("\n")[0],
+                        delay,
                     )
                 await asyncio.sleep(delay)
 
@@ -252,11 +342,7 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
         tool_specs = get_active_tool_specs(self.deps)
         function_declarations = _openai_tool_specs_to_gemini(tool_specs)
-        tools_config = (
-            [types.Tool(function_declarations=function_declarations)]
-            if function_declarations
-            else []
-        )
+        tools_config = [types.Tool(function_declarations=function_declarations)] if function_declarations else []
         gen_config = types.GenerateContentConfig(
             system_instruction=get_session_instructions(),
             tools=tools_config,  # type: ignore[arg-type]
@@ -268,16 +354,10 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             response = await self._llm_generate_with_backoff(history, gen_config)
 
             candidate = response.candidates[0]
-            function_calls = [
-                p.function_call
-                for p in candidate.content.parts
-                if p.function_call is not None
-            ]
+            function_calls = [p.function_call for p in candidate.content.parts if p.function_call is not None]
 
             if not function_calls:
-                return "".join(
-                    p.text for p in candidate.content.parts if p.text
-                ).strip()
+                return "".join(p.text for p in candidate.content.parts if p.text).strip()
 
             # Append model's function-call turn to history
             history.append(candidate.content)
@@ -287,45 +367,32 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             for fc in function_calls:
                 logger.info("GeminiTTS tool call: %s args=%s", fc.name, dict(fc.args))
                 try:
-                    result = await dispatch_tool_call(
-                        fc.name, json.dumps(dict(fc.args)), self.deps
-                    )
+                    result = await dispatch_tool_call(fc.name, json.dumps(dict(fc.args)), self.deps)
                 except Exception as exc:
                     result = {"error": str(exc)}
 
                 response_parts.append(
-                    types.Part(
-                        function_response=types.FunctionResponse(
-                            name=fc.name, response=result
-                        )
-                    )
+                    types.Part(function_response=types.FunctionResponse(name=fc.name, response=result))
                 )
                 await self.output_queue.put(
-                    AdditionalOutputs(
-                        {"role": "assistant", "content": f"🛠️ Used tool {fc.name}"}
-                    )
+                    AdditionalOutputs({"role": "assistant", "content": f"🛠️ Used tool {fc.name}"})
                 )
 
             history.append(types.Content(role="user", parts=response_parts))
 
         return "[Response generation reached tool call limit]"
 
-    async def _call_tts_with_retry(self, text: str) -> bytes | None:
+    async def _call_tts_with_retry(self, text: str, system_instruction: str | None = None) -> bytes | None:
         """Call Gemini TTS, retrying up to 3 times on transient errors."""
         assert self._client is not None, "Client not initialised"
 
+        instruction = system_instruction if system_instruction is not None else load_profile_tts_instruction()
         tts_config = types.GenerateContentConfig(
-            system_instruction=(
-                "Deliver this text at a fast, clipped Brooklyn pace — "
-                "rapid-fire on the insults, short crisp pauses only where marked. "
-                "Never drawl or over-enunciate. Keep the energy sharp."
-            ),
+            system_instruction=instruction,
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=self.get_current_voice()
-                    )
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.get_current_voice())
                 )
             ),
         )
@@ -357,23 +424,19 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                     )
                 else:
                     retry_after = None
-                    logger.warning(
-                        "TTS attempt %d/%d failed: %s", attempt + 1, _TTS_MAX_RETRIES, exc
-                    )
+                    logger.warning("TTS attempt %d/%d failed: %s", attempt + 1, _TTS_MAX_RETRIES, exc)
                 if attempt < _TTS_MAX_RETRIES - 1:
                     delay = compute_backoff(attempt, _TTS_RETRY_BASE_DELAY, retry_after)
                     await asyncio.sleep(delay)
                 elif rate_limited:
                     logger.error(
-                        "Gemini TTS exhausted %d retries on 429 (quota=%s); "
-                        "skipping audio for this turn",
+                        "Gemini TTS exhausted %d retries on 429 (quota=%s); skipping audio for this turn",
                         _TTS_MAX_RETRIES,
                         describe_quota_failure(exc),
                     )
                 else:
                     logger.error(
-                        "Gemini TTS exhausted %d retries (last error: %s); "
-                        "skipping audio for this turn",
+                        "Gemini TTS exhausted %d retries (last error: %s); skipping audio for this turn",
                         _TTS_MAX_RETRIES,
                         exc,
                     )
@@ -385,9 +448,9 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         """Split raw 16-bit PCM bytes into ~100 ms numpy frames."""
         audio = np.frombuffer(pcm_bytes, dtype=np.int16)
         return [
-            audio[i: i + _CHUNK_SAMPLES]
+            audio[i : i + _CHUNK_SAMPLES]
             for i in range(0, len(audio), _CHUNK_SAMPLES)
-            if len(audio[i: i + _CHUNK_SAMPLES]) > 0
+            if len(audio[i : i + _CHUNK_SAMPLES]) > 0
         ]
 
 
