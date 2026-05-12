@@ -30,6 +30,13 @@ from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.tools.core_tools import ToolDependencies, dispatch_tool_call, get_active_tool_specs
 from robot_comic.prompts import get_session_instructions
 from robot_comic.gemini_live import _openai_tool_specs_to_gemini
+from robot_comic.chatterbox_tag_translator import strip_gemini_tags
+from robot_comic.gemini_tts import (
+    SHORT_PAUSE_MS,
+    SHORT_PAUSE_TAG,
+    _silence_pcm,
+    extract_delivery_tags,
+)
 from robot_comic.gemini_retry import (
     compute_backoff,
     is_rate_limit_error,
@@ -238,9 +245,16 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         sentences = split_sentences(response_text) or [response_text]
         any_audio = False
         for sentence in sentences:
-            if not sentence:
+            # Strip Gemini-style delivery tags ([fast], [annoyance], etc.) so they
+            # aren't spoken literally. [short pause] becomes a real silence gap.
+            # Tag-driven voice_settings adjustments are tracked in a follow-up issue.
+            spoken = strip_gemini_tags(sentence)
+            if not spoken:
                 continue
-            pcm_bytes = await self._call_elevenlabs_tts(sentence)
+            if SHORT_PAUSE_TAG in extract_delivery_tags(sentence):
+                for frame in self._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS, ELEVENLABS_OUTPUT_SAMPLE_RATE)):
+                    await self.output_queue.put((ELEVENLABS_OUTPUT_SAMPLE_RATE, frame))
+            pcm_bytes = await self._call_elevenlabs_tts(spoken)
             if pcm_bytes is None:
                 continue
             for frame in self._pcm_to_frames(pcm_bytes):

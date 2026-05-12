@@ -26,6 +26,13 @@ from robot_comic.config import (
 from robot_comic.llama_base import _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.tools.core_tools import ToolDependencies
+from robot_comic.chatterbox_tag_translator import strip_gemini_tags
+from robot_comic.gemini_tts import (
+    SHORT_PAUSE_MS,
+    SHORT_PAUSE_TAG,
+    _silence_pcm,
+    extract_delivery_tags,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -169,11 +176,17 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
         any_audio = False
         first_chunk = True
         for sentence in sentences:
-            if not sentence:
+            # Strip Gemini-style delivery tags ([fast], [annoyance], etc.) so they
+            # aren't spoken literally. [short pause] becomes a real silence gap.
+            spoken = strip_gemini_tags(sentence)
+            if not spoken:
                 continue
-            pcm_bytes = await self._call_elevenlabs_tts(sentence)
+            if SHORT_PAUSE_TAG in extract_delivery_tags(sentence):
+                for frame in self._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS, _OUTPUT_SAMPLE_RATE)):
+                    await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
+            pcm_bytes = await self._call_elevenlabs_tts(spoken)
             if pcm_bytes is None:
-                logger.warning("ElevenLabs TTS returned None for sentence: %r", sentence[:60])
+                logger.warning("ElevenLabs TTS returned None for sentence: %r", spoken[:60])
                 continue
             if first_chunk and tts_start is not None:
                 telemetry.record_tts_first_audio(time.perf_counter() - tts_start, {"gen_ai.system": "elevenlabs"})
