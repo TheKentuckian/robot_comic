@@ -1,8 +1,8 @@
 """Chatterbox TTS response handler for the local-STT audio path.
 
-Receives transcripts from Moonshine STT (via LocalSTTInputMixin), calls an
-Ollama LLM via /api/chat for text generation and tool dispatch, then synthesises
-audio with the Chatterbox TTS server's /tts endpoint (voice cloning mode).
+Receives transcripts from Moonshine STT (via LocalSTTInputMixin), calls a
+llama-server LLM via /v1/chat/completions for text generation and tool dispatch,
+then synthesises audio with the Chatterbox TTS server's /tts endpoint (voice cloning mode).
 
 Audio output: 24 kHz, mono, 16-bit PCM — matches the existing pipeline.
 """
@@ -60,90 +60,8 @@ _TTS_RETRY_DELAY = 0.5
 # Split at whitespace that follows a sentence-ending punctuation mark.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
-# Hermes3 sometimes emits tool calls as plain text: {function:name, key:val, ...}
-_TEXT_TOOL_CALL_RE = re.compile(
-    r"^\s*\{\s*function\s*:\s*(\w+)\s*(?:,\s*(.*?))?\s*\}\s*$",
-    re.DOTALL,
-)
-
-_TOOL_USE_ADDENDUM = (
-    "\n\n## TOOL CALL RULES\n"
-    "Always invoke tools using the structured tool_calls mechanism — never embed tool calls as text.\n"
-    "When a tool call is required, emit only the tool call; do not add explanatory prose alongside it.\n"
-    "Never write {function: name, ...} or any text representation of a tool call."
-)
-
 _TOOL_RESULT_TIMEOUT: float = 5.0
 _MEANINGFUL_RESULT_MIN_LEN: int = 20
-
-
-def _parse_text_tool_args(kv_str: str) -> dict[str, Any]:
-    """Parse args from a Hermes3 text-format tool call.
-
-    Tries json.loads() first (handles quoted values and commas in values),
-    then falls back to bare key:value comma-split.
-    """
-    kv_str = kv_str.strip()
-    if kv_str:
-        try:
-            parsed = json.loads(kv_str)
-            if isinstance(parsed, dict):
-                return parsed
-        except (json.JSONDecodeError, ValueError):
-            pass
-    args: dict[str, Any] = {}
-    for pair in kv_str.split(","):
-        pair = pair.strip()
-        if ":" in pair:
-            k, _, v = pair.partition(":")
-            args[k.strip()] = v.strip()
-    return args
-
-
-def _parse_json_content_tool_call(text: str) -> tuple[str, dict[str, Any]] | None:
-    """Try to extract a tool call from JSON-formatted content text.
-
-    Handles two shapes Hermes3 may emit:
-      OpenAI-style: {"function": {"name": "...", "arguments": {...}}}
-      Flat-style:   {"name": "...", "arguments": {...}}
-
-    Returns (fn_name, args) or None if the text is not a recognisable tool call.
-    """
-    text = text.strip()
-    if not text.startswith("{"):
-        return None
-    try:
-        data = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(data, dict):
-        return None
-
-    # OpenAI-style: {"function": {"name": "...", "arguments": {...}}}
-    fn = data.get("function")
-    if isinstance(fn, dict):
-        name = fn.get("name")
-        if name and isinstance(name, str):
-            args = fn.get("arguments") or {}
-            if isinstance(args, str):
-                try:
-                    args = json.loads(args)
-                except (json.JSONDecodeError, ValueError):
-                    args = {}
-            return name, args if isinstance(args, dict) else {}
-
-    # Flat-style: {"name": "...", "arguments": {...}}
-    name = data.get("name")
-    if name and isinstance(name, str) and "arguments" in data:
-        args = data.get("arguments") or {}
-        if isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except (json.JSONDecodeError, ValueError):
-                args = {}
-        return name, args if isinstance(args, dict) else {}
-
-    return None
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -155,7 +73,7 @@ def _split_sentences(text: str) -> list[str]:
 
 
 class ChatterboxTTSResponseHandler(ConversationHandler):
-    """Ollama LLM + Chatterbox TTS voice output with tool dispatch."""
+    """llama-server LLM + Chatterbox TTS voice output with tool dispatch."""
 
     def __init__(
         self,
@@ -247,10 +165,9 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         return float(params.get("gain", getattr(config, "CHATTERBOX_GAIN", CHATTERBOX_DEFAULT_GAIN)))
 
     @property
-    def _ollama_base_url(self) -> str:
-        import urllib.parse
-        parsed = urllib.parse.urlparse(self._chatterbox_url)
-        return f"{parsed.scheme}://{parsed.hostname}:11434"
+    def _llama_cpp_url(self) -> str:
+        from robot_comic.config import LLAMA_CPP_DEFAULT_URL
+        return getattr(config, "LLAMA_CPP_URL", LLAMA_CPP_DEFAULT_URL)
 
     async def _prepare_startup_credentials(self) -> None:
         self._http = httpx.AsyncClient(
@@ -258,8 +175,8 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         )
         self.tool_manager.start_up(tool_callbacks=[self._handle_tool_notification])
         logger.info(
-            "ChatterboxTTS handler initialised: llm=%s/api/chat tts=%s voice=%s exag=%.2f cfg=%.2f temp=%.2f",
-            self._ollama_base_url,
+            "ChatterboxTTS handler initialised: llm=%s/v1/chat/completions tts=%s voice=%s exag=%.2f cfg=%.2f temp=%.2f",
+            self._llama_cpp_url,
             self._chatterbox_url,
             self._chatterbox_voice,
             self._exaggeration,
@@ -366,10 +283,9 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         self._conversation_history.append({"role": "user", "content": transcript})
 
         _tracer = telemetry.get_tracer()
-        _model = getattr(config, "OLLAMA_MODEL", "hermes3")
         _turn_span = _tracer.start_span(
             "turn",
-            attributes={"robot.mode": "chatterbox", "gen_ai.request.model": _model},
+            attributes={"robot.mode": "chatterbox", "gen_ai.system": "llama_cpp"},
         )
         _turn_start = time.perf_counter()
         _turn_ctx_token = _otel_context.attach(_otel_trace.set_span_in_context(_turn_span))
@@ -379,9 +295,8 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             _llm_span = _tracer.start_span(
                 "llm.request",
                 attributes={
-                    "gen_ai.system": "ollama",
+                    "gen_ai.system": "llama_cpp",
                     "gen_ai.operation.name": "chat",
-                    "gen_ai.request.model": _model,
                 },
             )
             _llm_start = time.perf_counter()
@@ -395,7 +310,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                 _llm_s = time.perf_counter() - _llm_start
                 _llm_span.end()
                 telemetry.record_llm_duration(
-                    _llm_s, {"gen_ai.system": "ollama", "gen_ai.operation.name": "chat", "gen_ai.request.model": _model}
+                    _llm_s, {"gen_ai.system": "llama_cpp", "gen_ai.operation.name": "chat"}
                 )
 
             self._conversation_history.append(raw_message)
@@ -434,9 +349,8 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             _llm2_span = _tracer.start_span(
                 "llm.request",
                 attributes={
-                    "gen_ai.system": "ollama",
+                    "gen_ai.system": "llama_cpp",
                     "gen_ai.operation.name": "chat",
-                    "gen_ai.request.model": _model,
                     "llm.phase": "2",
                 },
             )
@@ -451,7 +365,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                 _llm2_span.end()
                 telemetry.record_llm_duration(
                     time.perf_counter() - _llm2_start,
-                    {"gen_ai.system": "ollama", "gen_ai.operation.name": "chat", "gen_ai.request.model": _model},
+                    {"gen_ai.system": "llama_cpp", "gen_ai.operation.name": "chat"},
                 )
 
             self._conversation_history.append({"role": "assistant", "content": follow_up_text})
@@ -480,7 +394,7 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
             tool_name = fn.get("name", "")
             args = fn.get("arguments", {})
             args_json = json.dumps(args) if isinstance(args, dict) else str(args)
-            call_id = uuid.uuid4().hex[:8]
+            call_id = tc.get("id") or uuid.uuid4().hex[:8]
             try:
                 bg_tool = await self.tool_manager.start_tool(
                     call_id=call_id,
@@ -520,69 +434,6 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         pairs = await asyncio.gather(*(_wait_one(cid, bt) for cid, bt in bg_tools))
         return {cid: result for cid, result in pairs if result is not None}
 
-    # Maximum enum values to keep per parameter. Larger enums (e.g. 81 emotions) dominate
-    # the tools payload and push the combined prompt past Hermes3 8B's effective persona
-    # range (~2500 tokens), causing it to ignore the system-prompt character entirely.
-    _MAX_ENUM_VALUES = 8
-
-    @staticmethod
-    def _trim_tool_spec(s: dict[str, Any]) -> dict[str, Any]:
-        """Strip verbose content from tool specs to keep the tools payload compact.
-
-        Hermes3 8B ignores its system-prompt persona when the combined prompt exceeds
-        ~2500 tokens. Trimming strategies:
-          - Top-level description → 80 chars
-          - Per-property description → 50 chars
-          - Enum arrays → first _MAX_ENUM_VALUES entries (large enums, e.g. 81 emotions,
-            cost ~250 tokens on their own and are the main culprit)
-        """
-        import copy
-        params = copy.deepcopy(s.get("parameters", {}))
-        for prop in params.get("properties", {}).values():
-            desc = prop.get("description", "")
-            if len(desc) > 50:
-                prop["description"] = desc[:50]
-            enum_vals = prop.get("enum")
-            if isinstance(enum_vals, list) and len(enum_vals) > ChatterboxTTSResponseHandler._MAX_ENUM_VALUES:
-                prop["enum"] = enum_vals[:ChatterboxTTSResponseHandler._MAX_ENUM_VALUES]
-        return {
-            "type": "function",
-            "function": {
-                "name": s["name"],
-                "description": s["description"][:80],
-                "parameters": params,
-            },
-        }
-
-    @staticmethod
-    def _coerce_text_tool_call(
-        text: str,
-        tool_calls: list[dict[str, Any]],
-    ) -> tuple[str, list[dict[str, Any]]]:
-        """Apply text-format and JSON-in-content fallback detection in one place."""
-        if not tool_calls and text:
-            m = _TEXT_TOOL_CALL_RE.match(text)
-            if m:
-                fn_name = m.group(1)
-                args = _parse_text_tool_args(m.group(2) or "")
-                tool_calls = [{"function": {"name": fn_name, "arguments": args}}]
-                logger.warning(
-                    "Hermes3 text-format tool call in content field: %s(%r) — dispatching and suppressing TTS",
-                    fn_name, args,
-                )
-                text = ""
-        if not tool_calls and text:
-            json_tc = _parse_json_content_tool_call(text)
-            if json_tc is not None:
-                fn_name, args = json_tc
-                tool_calls = [{"function": {"name": fn_name, "arguments": args}}]
-                logger.warning(
-                    "Hermes3 JSON-format tool call in content field: %s(%r) — dispatching and suppressing TTS",
-                    fn_name, args,
-                )
-                text = ""
-        return text, tool_calls
-
     @staticmethod
     def _is_meaningful_result(result: dict[str, Any]) -> bool:
         return any(
@@ -591,49 +442,37 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
         )
 
     async def _call_llm(self) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
-        """Call Ollama /api/chat with tool specs; returns (text, tool_calls, raw_message)."""
+        """Call llama-server /v1/chat/completions; returns (text, tool_calls, raw_message)."""
         assert self._http is not None
-        system_prompt = get_session_instructions() + _TOOL_USE_ADDENDUM
+        system_prompt = get_session_instructions()
         tool_specs = get_active_tool_specs(self.deps)
-        ollama_tools = [self._trim_tool_spec(s) for s in tool_specs]
         messages = [{"role": "system", "content": system_prompt}] + self._conversation_history
         logger.info(
-            "_call_llm: profile=%r model=%s tools=%d sys_chars=%d sys_head=%r",
+            "_call_llm: profile=%r tools=%d sys_chars=%d sys_head=%r",
             getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None),
-            getattr(config, "OLLAMA_MODEL", "hermes3:8b-llama3.1-q4_K_M"),
-            len(ollama_tools),
+            len(tool_specs),
             len(system_prompt),
             system_prompt[:80],
         )
 
         payload: dict[str, Any] = {
-            "model": getattr(config, "OLLAMA_MODEL", "hermes3:8b-llama3.1-q4_K_M"),
             "messages": messages,
-            "tools": ollama_tools,
-            "stream": False,
+            "tools": tool_specs,
+            "chat_template_kwargs": {"enable_thinking": False},
         }
-
-        nudge_attempted = False
 
         delay = _LLM_RETRY_BASE_DELAY
         for attempt in range(_LLM_MAX_RETRIES):
             try:
                 r = await self._http.post(
-                    f"{self._ollama_base_url}/api/chat",
+                    f"{self._llama_cpp_url}/v1/chat/completions",
                     json=payload,
                 )
                 r.raise_for_status()
                 data = r.json()
-                msg = data.get("message", {})
+                msg = data["choices"][0]["message"]
                 text = (msg.get("content") or "").strip()
                 tool_calls: list[dict[str, Any]] = msg.get("tool_calls") or []
-
-                text, tool_calls = self._coerce_text_tool_call(text, tool_calls)
-
-                if not tool_calls and not text and not nudge_attempted:
-                    nudge_attempted = True
-                    logger.info("Hermes3 returned empty response — attempting nudge")
-                    text, tool_calls = await self._nudge_llm(messages, payload)
 
                 raw_msg: dict[str, Any] = {"role": "assistant", "content": text}
                 if tool_calls:
@@ -647,49 +486,6 @@ class ChatterboxTTSResponseHandler(ConversationHandler):
                 await asyncio.sleep(delay)
                 delay *= 2
         return "", [], {"role": "assistant", "content": ""}
-
-    async def _nudge_llm(
-        self,
-        original_messages: list[dict[str, Any]],
-        payload: dict[str, Any],
-    ) -> tuple[str, list[dict[str, Any]]]:
-        """One ephemeral retry with a tool-use nudge appended to the conversation.
-
-        The nudge messages are not saved to _conversation_history.
-        Applies the same text-format and JSON-in-content detection as _call_llm().
-        If the nudge HTTP call itself fails, returns ("", []) and the turn is silently
-        dropped — the caller's retry loop is not re-entered after a nudge attempt.
-        """
-        assert self._http is not None
-        nudge_messages = original_messages + [
-            {"role": "assistant", "content": ""},
-            {"role": "user", "content": "Please use a tool call now."},
-        ]
-        try:
-            r = await self._http.post(
-                f"{self._ollama_base_url}/api/chat",
-                json={**payload, "messages": nudge_messages},
-            )
-            r.raise_for_status()
-            data = r.json()
-            msg = data.get("message", {})
-            text = (msg.get("content") or "").strip()
-            tool_calls: list[dict[str, Any]] = msg.get("tool_calls") or []
-
-            text, tool_calls = self._coerce_text_tool_call(text, tool_calls)
-
-            if not tool_calls and not text:
-                logger.warning("Hermes3 still empty after nudge — skipping turn")
-            else:
-                logger.info(
-                    "Nudge recovered: text=%r tool_calls=%d",
-                    text[:60] if text else "",
-                    len(tool_calls),
-                )
-            return text, tool_calls
-        except Exception as exc:
-            logger.warning("Nudge LLM call failed: %s", exc)
-            return "", []
 
     async def _call_chatterbox_tts(
         self,
