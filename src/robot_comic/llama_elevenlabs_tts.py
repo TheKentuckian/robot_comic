@@ -14,25 +14,27 @@ import logging
 from typing import Optional
 
 import httpx
+import numpy as np
 from fastrtc import AdditionalOutputs
 
 from robot_comic import telemetry
 from robot_comic.config import (
-    LLAMA_ELEVENLABS_TTS_OUTPUT,
     ELEVENLABS_DEFAULT_VOICE,
     ELEVENLABS_AVAILABLE_VOICES,
+    LLAMA_ELEVENLABS_TTS_OUTPUT,
     config,
 )
-from robot_comic.llama_base import _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
-from robot_comic.local_stt_realtime import LocalSTTInputMixin
-from robot_comic.tools.core_tools import ToolDependencies
-from robot_comic.chatterbox_tag_translator import strip_gemini_tags
 from robot_comic.gemini_tts import (
     SHORT_PAUSE_MS,
     SHORT_PAUSE_TAG,
     _silence_pcm,
     extract_delivery_tags,
 )
+from robot_comic.llama_base import _CHUNK_SAMPLES, _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
+from robot_comic.tools.core_tools import ToolDependencies
+from robot_comic.local_stt_realtime import LocalSTTInputMixin
+from robot_comic.chatterbox_tag_translator import strip_gemini_tags
+
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +176,9 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
             return
         sentences = split_sentences(response_text) or [response_text]
         any_audio = False
-        first_chunk = True
+        # List used as a one-shot first-audio marker shared with _stream_tts_to_queue.
+        # When non-empty, the first PCM chunk fires record_tts_first_audio and clears it.
+        first_audio_marker: list[float] = [tts_start] if tts_start is not None else []
         for sentence in sentences:
             # Strip Gemini-style delivery tags ([fast], [annoyance], etc.) so they
             # aren't spoken literally. [short pause] becomes a real silence gap.
@@ -184,16 +188,9 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
             if SHORT_PAUSE_TAG in extract_delivery_tags(sentence):
                 for frame in self._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS, _OUTPUT_SAMPLE_RATE)):
                     await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
-            pcm_bytes = await self._call_elevenlabs_tts(spoken)
-            if pcm_bytes is None:
-                logger.warning("ElevenLabs TTS returned None for sentence: %r", spoken[:60])
-                continue
-            if first_chunk and tts_start is not None:
-                telemetry.record_tts_first_audio(time.perf_counter() - tts_start, {"gen_ai.system": "elevenlabs"})
-                first_chunk = False
-            for frame in self._pcm_to_frames(pcm_bytes):
-                await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
-            any_audio = True
+            sentence_had_audio = await self._stream_tts_to_queue(spoken, first_audio_marker)
+            if sentence_had_audio:
+                any_audio = True
 
         if not any_audio:
             if self._last_tts_rate_limited:
@@ -202,24 +199,39 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
                 msg = "[TTS error — ElevenLabs TTS failed]"
             await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": msg}))
 
-    async def _call_elevenlabs_tts(self, text: str) -> bytes | None:
+    async def _stream_tts_to_queue(
+        self,
+        text: str,
+        first_audio_marker: list[float] | None = None,
+    ) -> bool:
+        """Stream ElevenLabs TTS PCM chunks directly into ``output_queue``.
+
+        Uses the ``/stream`` endpoint with ``output_format=pcm_24000`` so first
+        audio arrives in ~100-200ms instead of ~500-1000ms with full-body POST.
+
+        ``first_audio_marker``: when non-empty, the first PCM chunk fires
+        ``telemetry.record_tts_first_audio`` (perf_counter - marker[0]) and the
+        marker is cleared so subsequent sentences in the same turn don't refire.
+
+        Returns True if any audio was streamed for this call.
+        """
         assert self._http is not None, "HTTP client not initialised"
 
         api_key = config.ELEVENLABS_API_KEY
         if not api_key:
             logger.error("ELEVENLABS_API_KEY not configured")
-            return None
+            return False
 
         voice_id = self._resolve_voice_id()
         if not voice_id:
             logger.error("Could not resolve voice ID for %s", self.get_current_voice())
-            return None
+            return False
 
         config_params = load_profile_elevenlabs_config()
         stability = float(config_params.get("stability", "0.5"))
         similarity_boost = float(config_params.get("similarity_boost", "0.75"))
 
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream?output_format=pcm_{_OUTPUT_SAMPLE_RATE}"
         headers = {"xi-api-key": api_key, "Content-Type": "application/json"}
         payload = {
             "text": text,
@@ -231,11 +243,34 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
         }
 
         self._last_tts_rate_limited = False
+        frame_bytes = _CHUNK_SAMPLES * 2  # int16 = 2 bytes/sample
         for attempt in range(_TTS_MAX_RETRIES):
             try:
-                response = await self._http.post(url, json=payload, headers=headers)
-                response.raise_for_status()
-                return response.content
+                got_audio = False
+                leftover = b""
+                async with self._http.stream("POST", url, json=payload, headers=headers) as response:
+                    response.raise_for_status()
+                    async for chunk in response.aiter_bytes():
+                        if not chunk:
+                            continue
+                        if not got_audio:
+                            got_audio = True
+                            if first_audio_marker:
+                                telemetry.record_tts_first_audio(
+                                    time.perf_counter() - first_audio_marker[0],
+                                    {"gen_ai.system": "elevenlabs"},
+                                )
+                                first_audio_marker.clear()
+                        leftover += chunk
+                        while len(leftover) >= frame_bytes:
+                            frame = np.frombuffer(leftover[:frame_bytes], dtype=np.int16)
+                            await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
+                            leftover = leftover[frame_bytes:]
+                if leftover:
+                    tail = np.frombuffer(leftover[: (len(leftover) // 2) * 2], dtype=np.int16)
+                    if len(tail) > 0:
+                        await self.output_queue.put((_OUTPUT_SAMPLE_RATE, tail))
+                return got_audio
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code == 429:
                     self._last_tts_rate_limited = True
@@ -243,13 +278,13 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
                         "ElevenLabs TTS 429 (attempt %d/%d); sleeping %.1fs before retry",
                         attempt + 1,
                         _TTS_MAX_RETRIES,
-                        _TTS_RETRY_BASE_DELAY * (2 ** attempt),
+                        _TTS_RETRY_BASE_DELAY * (2**attempt),
                     )
                     if attempt < _TTS_MAX_RETRIES - 1:
-                        await asyncio.sleep(_TTS_RETRY_BASE_DELAY * (2 ** attempt))
+                        await asyncio.sleep(_TTS_RETRY_BASE_DELAY * (2**attempt))
                 elif exc.response.status_code == 401:
                     logger.error("ElevenLabs API key invalid or expired")
-                    return None
+                    return False
                 else:
                     logger.warning("ElevenLabs TTS attempt %d/%d failed: %s", attempt + 1, _TTS_MAX_RETRIES, exc)
                     if attempt < _TTS_MAX_RETRIES - 1:
@@ -263,7 +298,7 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
             logger.error("ElevenLabs TTS exhausted %d retries on 429; skipping audio for this turn", _TTS_MAX_RETRIES)
         else:
             logger.error("ElevenLabs TTS exhausted %d retries; skipping audio for this turn", _TTS_MAX_RETRIES)
-        return None
+        return False
 
 
 class LocalSTTLlamaElevenLabsHandler(LocalSTTInputMixin, LlamaElevenLabsTTSResponseHandler):  # type: ignore[misc]
