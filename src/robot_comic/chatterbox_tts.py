@@ -8,21 +8,14 @@ Audio output: 24 kHz, mono, 16-bit PCM — matches the existing pipeline.
 """
 
 import re
-import json
 import time
-import uuid
 import asyncio
 import logging
 from typing import Any, Optional
 
-import httpx
 import numpy as np
-from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item
-from scipy.signal import resample
-from opentelemetry import trace as _otel_trace
-from opentelemetry import context as _otel_context
+from fastrtc import AdditionalOutputs
 
-from robot_comic import telemetry
 from robot_comic.config import (
     CHATTERBOX_OUTPUT,
     CHATTERBOX_DEFAULT_URL,
@@ -34,34 +27,19 @@ from robot_comic.config import (
     config,
     set_custom_profile,
 )
-from robot_comic.prompts import get_session_instructions
-from robot_comic.tools.core_tools import ToolDependencies, get_active_tool_specs
+from robot_comic.llama_base import BaseLlamaResponseHandler, _OUTPUT_SAMPLE_RATE
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
-from robot_comic.conversation_handler import ConversationHandler
 from robot_comic.chatterbox_tag_translator import translate
-from robot_comic.tools.background_tool_manager import (
-    BackgroundTool,
-    ToolCallRoutine,
-    ToolNotification,
-    BackgroundToolManager,
-)
-
+from robot_comic.tools.core_tools import ToolDependencies
 
 logger = logging.getLogger(__name__)
 
-_OUTPUT_SAMPLE_RATE = 24000
-_CHUNK_SAMPLES = 2400          # 100 ms at 24 kHz
 _CHATTERBOX_SAMPLE_RATE = 24000
-_LLM_MAX_RETRIES = 3
-_LLM_RETRY_BASE_DELAY = 1.0
 _TTS_MAX_RETRIES = 3
 _TTS_RETRY_DELAY = 0.5
 
 # Split at whitespace that follows a sentence-ending punctuation mark.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
-
-_TOOL_RESULT_TIMEOUT: float = 5.0
-_MEANINGFUL_RESULT_MIN_LEN: int = 20
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -72,38 +50,11 @@ def _split_sentences(text: str) -> list[str]:
     return [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
 
 
-class ChatterboxTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
+class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
     """llama-server LLM + Chatterbox TTS voice output with tool dispatch."""
 
-    def __init__(
-        self,
-        deps: ToolDependencies,
-        sim_mode: bool = False,
-        instance_path: Optional[str] = None,
-        startup_voice: Optional[str] = None,
-    ) -> None:
-        super().__init__(
-            expected_layout="mono",
-            output_sample_rate=_OUTPUT_SAMPLE_RATE,
-            input_sample_rate=16000,
-        )
-        self.deps = deps
-        self.sim_mode = sim_mode
-        self.instance_path = instance_path
-        self._voice_override: str | None = startup_voice
-        self._http: httpx.AsyncClient | None = None
-        self._stop_event: asyncio.Event = asyncio.Event()
-        self._conversation_history: list[dict[str, Any]] = []
-        self.tool_manager = BackgroundToolManager()
-        self.output_queue: asyncio.Queue = asyncio.Queue()
-
-        # Attributes referenced by LocalSTTInputMixin
-        self._turn_user_done_at: float | None = None
-        self._turn_response_created_at: float | None = None
-        self._turn_first_audio_at: float | None = None
-
-    def _mark_activity(self, label: str) -> None:
-        logger.debug("Activity: %s", label)
+    _BACKEND_LABEL = "chatterbox"
+    _TTS_SYSTEM = "chatterbox"
 
     def copy(self) -> "ChatterboxTTSResponseHandler":
         return ChatterboxTTSResponseHandler(
@@ -164,16 +115,8 @@ class ChatterboxTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         params = self._load_profile_params()
         return float(params.get("gain", getattr(config, "CHATTERBOX_GAIN", CHATTERBOX_DEFAULT_GAIN)))
 
-    @property
-    def _llama_cpp_url(self) -> str:
-        from robot_comic.config import LLAMA_CPP_DEFAULT_URL
-        return getattr(config, "LLAMA_CPP_URL", LLAMA_CPP_DEFAULT_URL)
-
     async def _prepare_startup_credentials(self) -> None:
-        self._http = httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0)
-        )
-        self.tool_manager.start_up(tool_callbacks=[self._handle_tool_notification])
+        await super()._prepare_startup_credentials()
         logger.info(
             "ChatterboxTTS handler initialised: llm=%s/v1/chat/completions tts=%s voice=%s exag=%.2f cfg=%.2f temp=%.2f",
             self._llama_cpp_url,
@@ -184,41 +127,9 @@ class ChatterboxTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             self._temperature,
         )
 
-    async def start_up(self) -> None:
-        await self._prepare_startup_credentials()
-        self._stop_event.clear()
-        asyncio.create_task(self._send_startup_trigger(), name="chatterbox-startup-trigger")
-        await self._stop_event.wait()
-
-    async def _send_startup_trigger(self) -> None:
-        await self._dispatch_completed_transcript("[conversation started]")
-
-    async def shutdown(self) -> None:
-        self._stop_event.set()
-        await self.tool_manager.shutdown()
-        if self._http is not None:
-            await self._http.aclose()
-            self._http = None
-        while not self.output_queue.empty():
-            try:
-                self.output_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-
-    async def receive(self, frame: Any) -> None:
-        """No-op: audio input is handled by LocalSTTInputMixin.receive()."""
-
-    async def emit(self) -> Any:
-        return await wait_for_item(self.output_queue)
-
-    async def apply_personality(self, profile: str | None) -> str:
-        try:
-            set_custom_profile(profile)
-            self._conversation_history.clear()
-            return f"Applied personality {profile!r}. Conversation history reset."
-        except Exception as exc:
-            logger.error("Error applying personality %r: %s", profile, exc)
-            return f"Failed to apply personality: {exc}"
+    # ------------------------------------------------------------------ #
+    # Voice management                                                     #
+    # ------------------------------------------------------------------ #
 
     async def get_available_voices(self) -> list[str]:
         """Return predefined voice filenames from the Chatterbox server."""
@@ -239,16 +150,14 @@ class ChatterboxTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         return f"Voice changed to {voice}."
 
     # ------------------------------------------------------------------ #
-    # Response cycle                                                       #
+    # TTS synthesis                                                        #
     # ------------------------------------------------------------------ #
-
-    async def _handle_tool_notification(self, notification: ToolNotification) -> None:
-        logger.info("Tool %s finished: status=%s", notification.tool_name, notification.status.value)
 
     async def _synthesize_and_enqueue(self, response_text: str, tts_start: float | None = None) -> None:
         """Translate response_text to TTS segments and enqueue PCM frames."""
         if not response_text:
             return
+        from robot_comic import telemetry
         persona = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None) or "default"
         segments = translate(response_text, persona=persona, use_turbo=False)
         any_audio = False
@@ -277,215 +186,6 @@ class ChatterboxTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             await self.output_queue.put(
                 AdditionalOutputs({"role": "assistant", "content": "[TTS error]"})
             )
-
-    async def _dispatch_completed_transcript(self, transcript: str) -> None:
-        """LLM → tool dispatch → TTS → PCM frames (two-phase with query-tool feedback)."""
-        self._conversation_history.append({"role": "user", "content": transcript})
-
-        _tracer = telemetry.get_tracer()
-        _turn_span = _tracer.start_span(
-            "turn",
-            attributes={"robot.mode": "chatterbox", "gen_ai.system": "llama_cpp"},
-        )
-        _turn_start = time.perf_counter()
-        _turn_ctx_token = _otel_context.attach(_otel_trace.set_span_in_context(_turn_span))
-
-        _outcome = "success"
-        try:
-            _llm_span = _tracer.start_span(
-                "llm.request",
-                attributes={
-                    "gen_ai.system": "llama_cpp",
-                    "gen_ai.operation.name": "chat",
-                },
-            )
-            _llm_start = time.perf_counter()
-            try:
-                response_text, tool_calls, raw_message = await self._call_llm()
-            except Exception as exc:
-                logger.warning("LLM call failed: %s", exc)
-                _outcome = "llm_error"
-                return
-            finally:
-                _llm_s = time.perf_counter() - _llm_start
-                _llm_span.end()
-                telemetry.record_llm_duration(
-                    _llm_s, {"gen_ai.system": "llama_cpp", "gen_ai.operation.name": "chat"}
-                )
-
-            self._conversation_history.append(raw_message)
-
-            bg_tools: list[tuple[str, BackgroundTool]] = []
-            if tool_calls:
-                bg_tools = await self._start_tool_calls(tool_calls)
-
-            await self.output_queue.put(
-                AdditionalOutputs({"role": "assistant", "content": response_text})
-            )
-            _tts_start = time.perf_counter()
-            await self._synthesize_and_enqueue(response_text, tts_start=_tts_start)
-            _tts_s = time.perf_counter() - _tts_start
-            telemetry.record_tts(_tts_s, {"gen_ai.system": "chatterbox"})
-
-            if not bg_tools:
-                return
-
-            tool_results = await self._await_tool_results(bg_tools)
-            meaningful = {
-                cid: result
-                for cid, result in tool_results.items()
-                if self._is_meaningful_result(result)
-            }
-            if not meaningful:
-                return
-
-            for call_id, result in meaningful.items():
-                self._conversation_history.append({
-                    "role": "tool",
-                    "content": json.dumps(result),
-                    "tool_call_id": call_id,
-                })
-
-            _llm2_span = _tracer.start_span(
-                "llm.request",
-                attributes={
-                    "gen_ai.system": "llama_cpp",
-                    "gen_ai.operation.name": "chat",
-                    "llm.phase": "2",
-                },
-            )
-            _llm2_start = time.perf_counter()
-            try:
-                follow_up_text, _, _ = await self._call_llm()
-            except Exception as exc:
-                logger.warning("Phase-2 LLM call failed: %s", exc)
-                _outcome = "llm_error"
-                return
-            finally:
-                _llm2_span.end()
-                telemetry.record_llm_duration(
-                    time.perf_counter() - _llm2_start,
-                    {"gen_ai.system": "llama_cpp", "gen_ai.operation.name": "chat"},
-                )
-
-            self._conversation_history.append({"role": "assistant", "content": follow_up_text})
-            await self.output_queue.put(
-                AdditionalOutputs({"role": "assistant", "content": follow_up_text})
-            )
-            _tts2_start = time.perf_counter()
-            await self._synthesize_and_enqueue(follow_up_text, tts_start=_tts2_start)
-            telemetry.record_tts(time.perf_counter() - _tts2_start, {"gen_ai.system": "chatterbox"})
-
-        finally:
-            _otel_context.detach(_turn_ctx_token)
-            _turn_span.set_attribute("turn.outcome", _outcome)
-            _turn_span.end()
-            telemetry.record_turn(
-                time.perf_counter() - _turn_start, {"robot.mode": "chatterbox", "turn.outcome": _outcome}
-            )
-
-    async def _start_tool_calls(
-        self, tool_calls: list[dict[str, Any]]
-    ) -> list[tuple[str, BackgroundTool]]:
-        """Dispatch tool calls; return (call_id, BackgroundTool) pairs."""
-        results: list[tuple[str, BackgroundTool]] = []
-        for tc in tool_calls:
-            fn = tc.get("function", {})
-            tool_name = fn.get("name", "")
-            args = fn.get("arguments", {})
-            args_json = json.dumps(args) if isinstance(args, dict) else str(args)
-            call_id = tc.get("id") or uuid.uuid4().hex[:8]
-            try:
-                bg_tool = await self.tool_manager.start_tool(
-                    call_id=call_id,
-                    tool_call_routine=ToolCallRoutine(
-                        tool_name=tool_name,
-                        args_json_str=args_json,
-                        deps=self.deps,
-                    ),
-                    is_idle_tool_call=False,
-                )
-                results.append((call_id, bg_tool))
-                logger.info("Dispatched tool: %s (call_id=%s)", tool_name, call_id)
-            except Exception as exc:
-                logger.warning("Failed to dispatch tool %s: %s", tool_name, exc)
-        return results
-
-    async def _await_tool_results(
-        self,
-        bg_tools: list[tuple[str, BackgroundTool]],
-        timeout: float = _TOOL_RESULT_TIMEOUT,
-    ) -> dict[str, dict[str, Any]]:
-        """Await all tool tasks concurrently; return results that arrived within timeout.
-
-        asyncio.shield prevents task cancellation on timeout — tool continues in background.
-        """
-        async def _wait_one(
-            call_id: str, bg_tool: BackgroundTool
-        ) -> tuple[str, dict[str, Any] | None]:
-            if bg_tool._task is None:
-                return call_id, None
-            try:
-                await asyncio.wait_for(asyncio.shield(bg_tool._task), timeout=timeout)
-                return call_id, bg_tool.result
-            except Exception:
-                return call_id, None
-
-        pairs = await asyncio.gather(*(_wait_one(cid, bt) for cid, bt in bg_tools))
-        return {cid: result for cid, result in pairs if result is not None}
-
-    @staticmethod
-    def _is_meaningful_result(result: dict[str, Any]) -> bool:
-        return any(
-            isinstance(v, str) and len(v) > _MEANINGFUL_RESULT_MIN_LEN
-            for v in result.values()
-        )
-
-    async def _call_llm(self) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
-        """Call llama-server /v1/chat/completions; returns (text, tool_calls, raw_message)."""
-        assert self._http is not None
-        system_prompt = get_session_instructions()
-        tool_specs = get_active_tool_specs(self.deps)
-        messages = [{"role": "system", "content": system_prompt}] + self._conversation_history
-        logger.info(
-            "_call_llm: profile=%r tools=%d sys_chars=%d sys_head=%r",
-            getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None),
-            len(tool_specs),
-            len(system_prompt),
-            system_prompt[:80],
-        )
-
-        payload: dict[str, Any] = {
-            "messages": messages,
-            "tools": tool_specs,
-            "chat_template_kwargs": {"enable_thinking": False},
-        }
-
-        delay = _LLM_RETRY_BASE_DELAY
-        for attempt in range(_LLM_MAX_RETRIES):
-            try:
-                r = await self._http.post(
-                    f"{self._llama_cpp_url}/v1/chat/completions",
-                    json=payload,
-                )
-                r.raise_for_status()
-                data = r.json()
-                msg = data["choices"][0]["message"]
-                text = (msg.get("content") or "").strip()
-                tool_calls: list[dict[str, Any]] = msg.get("tool_calls") or []
-
-                raw_msg: dict[str, Any] = {"role": "assistant", "content": text}
-                if tool_calls:
-                    raw_msg["tool_calls"] = tool_calls
-                return text, tool_calls, raw_msg
-            except Exception as exc:
-                if attempt == _LLM_MAX_RETRIES - 1:
-                    raise
-                logger.warning("LLM attempt %d/%d failed: %s: %s; retrying in %.1fs",
-                               attempt + 1, _LLM_MAX_RETRIES, type(exc).__name__, exc, delay)
-                await asyncio.sleep(delay)
-                delay *= 2
-        return "", [], {"role": "assistant", "content": ""}
 
     async def _call_chatterbox_tts(
         self,
@@ -521,15 +221,11 @@ class ChatterboxTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         return None
 
     @staticmethod
-    def _silence_pcm(duration_ms: int) -> bytes:
-        n_samples = int(_OUTPUT_SAMPLE_RATE * duration_ms / 1000)
-        return np.zeros(n_samples, dtype=np.int16).tobytes()
-
-    @staticmethod
     def _wav_to_pcm(wav_bytes: bytes, gain: float = 1.0) -> bytes:
         """Strip WAV header, resample to 24 kHz mono int16 PCM, and apply gain."""
         import io
         import wave
+        from scipy.signal import resample
         with wave.open(io.BytesIO(wav_bytes)) as wf:
             src_rate = wf.getframerate()
             n_channels = wf.getnchannels()
@@ -545,15 +241,6 @@ class ChatterboxTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             audio = audio * gain
         return np.clip(audio, -32768, 32767).astype(np.int16).tobytes()
 
-    @staticmethod
-    def _pcm_to_frames(pcm_bytes: bytes) -> list[np.ndarray]:
-        audio = np.frombuffer(pcm_bytes, dtype=np.int16)
-        return [
-            audio[i: i + _CHUNK_SAMPLES]
-            for i in range(0, len(audio), _CHUNK_SAMPLES)
-            if len(audio[i: i + _CHUNK_SAMPLES]) > 0
-        ]
-
 
 class LocalSTTChatterboxHandler(LocalSTTInputMixin, ChatterboxTTSResponseHandler):
     """Moonshine STT input + Chatterbox TTS voice output."""
@@ -561,6 +248,5 @@ class LocalSTTChatterboxHandler(LocalSTTInputMixin, ChatterboxTTSResponseHandler
     BACKEND_PROVIDER = CHATTERBOX_OUTPUT
 
     async def _dispatch_completed_transcript(self, transcript: str) -> None:
-        # Route explicitly past LocalSTTInputMixin's OpenAI-specific override (same
-        # pattern as LocalSTTGeminiTTSHandler).
+        # Route explicitly past LocalSTTInputMixin's OpenAI-specific override.
         await ChatterboxTTSResponseHandler._dispatch_completed_transcript(self, transcript)

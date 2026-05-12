@@ -1,11 +1,10 @@
 """llama-server LLM + Gemini 3.1 Flash TTS response handler.
 
 Combines:
-- LLM: llama-server /v1/chat/completions (local Qwen3, via ChatterboxTTSResponseHandler)
+- LLM: llama-server /v1/chat/completions (local Qwen3)
 - TTS: gemini-3.1-flash-tts-preview (cloud, via Gemini client)
 
-Swap-in replacement for LocalSTTGeminiTTSHandler (Gemini LLM + Gemini TTS) or
-LocalSTTChatterboxHandler (llama-server LLM + local TTS). Select via:
+Select via:
     LOCAL_STT_RESPONSE_BACKEND=llama_gemini_tts
 """
 
@@ -22,7 +21,7 @@ from google.genai import types
 
 from robot_comic import telemetry
 from robot_comic.chatterbox_tag_translator import translate
-from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler, _OUTPUT_SAMPLE_RATE
+from robot_comic.llama_base import BaseLlamaResponseHandler, _OUTPUT_SAMPLE_RATE
 from robot_comic.config import (
     GEMINI_TTS_AVAILABLE_VOICES,
     GEMINI_TTS_DEFAULT_VOICE,
@@ -38,15 +37,12 @@ logger = logging.getLogger(__name__)
 _TTS_MAX_RETRIES = 3
 _TTS_RETRY_DELAY = 0.5
 
-_TTS_SYSTEM_INSTRUCTION = (
-    "Deliver this text at a fast, clipped Brooklyn pace — "
-    "rapid-fire on the insults, short crisp pauses only where marked. "
-    "Never drawl or over-enunciate. Keep the energy sharp."
-)
 
-
-class LlamaGeminiTTSResponseHandler(ChatterboxTTSResponseHandler):
+class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
     """llama-server LLM + Gemini 3.1 Flash TTS voice output with tool dispatch."""
+
+    _BACKEND_LABEL = "llama_gemini_tts"
+    _TTS_SYSTEM = "gemini_tts"
 
     def __init__(
         self,
@@ -72,15 +68,30 @@ class LlamaGeminiTTSResponseHandler(ChatterboxTTSResponseHandler):
         await super()._prepare_startup_credentials()
         api_key = config.GEMINI_API_KEY or "DUMMY"
         self._client = genai.Client(api_key=api_key)
+
+        llm_model = await self._fetch_llm_model_name()
+        stt_model = getattr(config, "LOCAL_STT_MODEL", "unknown")
         logger.info(
-            "LlamaGeminiTTS handler initialised: llm=%s/v1/chat/completions tts=%s voice=%s",
+            "Pipeline: Moonshine (%s) → llama-server (%s @ %s) → Gemini TTS (%s, voice=%s)",
+            stt_model,
+            llm_model,
             self._llama_cpp_url,
             GEMINI_TTS_MODEL,
             self.get_current_voice(),
         )
 
+    async def _fetch_llm_model_name(self) -> str:
+        assert self._http is not None
+        try:
+            r = await self._http.get(f"{self._llama_cpp_url}/v1/models", timeout=3.0)
+            r.raise_for_status()
+            data = r.json()
+            return data["data"][0]["id"]
+        except Exception:
+            return self._llama_cpp_url
+
     # ------------------------------------------------------------------ #
-    # Voice management (Gemini TTS voices, not Chatterbox)                #
+    # Voice management (Gemini TTS voices)                                 #
     # ------------------------------------------------------------------ #
 
     async def get_available_voices(self) -> list[str]:
@@ -130,7 +141,6 @@ class LlamaGeminiTTSResponseHandler(ChatterboxTTSResponseHandler):
     async def _call_gemini_tts(self, text: str) -> bytes | None:
         assert self._client is not None, "Gemini client not initialised"
         tts_config = types.GenerateContentConfig(
-            system_instruction=_TTS_SYSTEM_INSTRUCTION,
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(

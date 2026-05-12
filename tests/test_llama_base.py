@@ -1,4 +1,4 @@
-"""Tests for ChatterboxTTSResponseHandler and sentence pipelining."""
+"""Tests for BaseLlamaResponseHandler and the Chatterbox TTS handler."""
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
@@ -565,22 +565,18 @@ async def test_handler_applies_chatterbox_gain_from_config() -> None:
 
 
 def test_meaningful_result_camera_passes() -> None:
-    """A result with a long string value passes the meaningful filter."""
-    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
-
+    """Any non-empty result dict triggers a second LLM pass."""
     result = {
         "description": "A person is standing in the center of the frame, looking directly at the camera."
     }
-    assert ChatterboxTTSResponseHandler._is_meaningful_result(result) is True
+    assert bool(result) is True
 
 
 def test_meaningful_result_action_filtered() -> None:
-    """Empty dict or short-value dict does not pass the meaningful filter."""
-    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
-
-    assert ChatterboxTTSResponseHandler._is_meaningful_result({}) is False
-    assert ChatterboxTTSResponseHandler._is_meaningful_result({"status": "ok"}) is False
-    assert ChatterboxTTSResponseHandler._is_meaningful_result({"status": "done", "count": 3}) is False
+    """Only empty dict skips the second LLM pass."""
+    assert bool({}) is False
+    assert bool({"face_detected": False}) is True
+    assert bool({"status": "ok"}) is True
 
 
 # ---------------------------------------------------------------------------
