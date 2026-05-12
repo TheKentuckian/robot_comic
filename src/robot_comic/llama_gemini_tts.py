@@ -21,7 +21,7 @@ from google.genai import types
 
 from robot_comic import telemetry
 from robot_comic.chatterbox_tag_translator import translate
-from robot_comic.llama_base import BaseLlamaResponseHandler, _OUTPUT_SAMPLE_RATE
+from robot_comic.llama_base import BaseLlamaResponseHandler, _OUTPUT_SAMPLE_RATE, split_sentences
 from robot_comic.config import (
     GEMINI_TTS_AVAILABLE_VOICES,
     GEMINI_TTS_DEFAULT_VOICE,
@@ -124,19 +124,27 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
             )
             return
 
-        pcm_bytes = await self._call_gemini_tts(clean_text)
-        if pcm_bytes is None:
+        sentences = split_sentences(clean_text) or [clean_text]
+        any_audio = False
+        first_chunk = True
+        for sentence in sentences:
+            pcm_bytes = await self._call_gemini_tts(sentence)
+            if pcm_bytes is None:
+                logger.warning("Gemini TTS returned None for sentence: %r", sentence[:60])
+                continue
+            if first_chunk and tts_start is not None:
+                telemetry.record_tts_first_audio(
+                    time.perf_counter() - tts_start, {"gen_ai.system": "gemini_tts"}
+                )
+                first_chunk = False
+            for frame in self._pcm_to_frames(pcm_bytes):
+                await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
+            any_audio = True
+
+        if not any_audio:
             await self.output_queue.put(
                 AdditionalOutputs({"role": "assistant", "content": "[TTS error — Gemini TTS failed]"})
             )
-            return
-
-        if tts_start is not None:
-            telemetry.record_tts_first_audio(
-                time.perf_counter() - tts_start, {"gen_ai.system": "gemini_tts"}
-            )
-        for frame in self._pcm_to_frames(pcm_bytes):
-            await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
 
     async def _call_gemini_tts(self, text: str) -> bytes | None:
         assert self._client is not None, "Gemini client not initialised"

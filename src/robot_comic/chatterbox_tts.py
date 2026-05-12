@@ -7,7 +7,6 @@ then synthesises audio with the Chatterbox TTS server's /tts endpoint (voice clo
 Audio output: 24 kHz, mono, 16-bit PCM — matches the existing pipeline.
 """
 
-import re
 import time
 import asyncio
 import logging
@@ -27,7 +26,7 @@ from robot_comic.config import (
     config,
     set_custom_profile,
 )
-from robot_comic.llama_base import BaseLlamaResponseHandler, _OUTPUT_SAMPLE_RATE
+from robot_comic.llama_base import BaseLlamaResponseHandler, _OUTPUT_SAMPLE_RATE, split_sentences
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.chatterbox_tag_translator import translate
 from robot_comic.tools.core_tools import ToolDependencies
@@ -38,16 +37,8 @@ _CHATTERBOX_SAMPLE_RATE = 24000
 _TTS_MAX_RETRIES = 3
 _TTS_RETRY_DELAY = 0.5
 
-# Split at whitespace that follows a sentence-ending punctuation mark.
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
-
-
-def _split_sentences(text: str) -> list[str]:
-    """Split text at sentence boundaries for per-sentence TTS pipelining."""
-    text = text.strip()
-    if not text:
-        return []
-    return [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
+# Keep the private alias so the test-suite import (from robot_comic.chatterbox_tts import _split_sentences) still works.
+_split_sentences = split_sentences
 
 
 class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):

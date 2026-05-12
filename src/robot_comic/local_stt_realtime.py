@@ -292,6 +292,13 @@ class LocalSTTInputMixin:
             if disposition is TranscriptDisposition.HANDLED:
                 return
 
+        # Echo guard: suppress transcripts that arrive while TTS is still playing.
+        # Pause commands are intentionally exempted (handled above).
+        speaking_until = getattr(self, "_speaking_until", 0.0)
+        if time.perf_counter() < speaking_until:
+            logger.info("Echo guard: discarding transcript during TTS playback: %r", transcript[:60])
+            return
+
         await self._dispatch_completed_transcript(transcript)
 
     async def _dispatch_completed_transcript(self, transcript: str) -> None:

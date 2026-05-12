@@ -70,13 +70,25 @@ def _fuzzy_match(
     query: str,
     candidates: List[Tuple[str, Path]],
 ) -> Tuple[Optional[str], Optional[Path], float]:
-    """Return (best_name, best_path, score) for the highest match >= MATCH_THRESHOLD, else (None, None, score)."""
+    """Return (best_name, best_path, score) for the highest match >= MATCH_THRESHOLD, else (None, None, score).
+
+    Tries both the full query and the first word so that "Tony Anzelmo" still
+    matches a stored name of "Tony" (full-string ratio would be ~0.5; first-word
+    ratio is 1.0).
+    """
     best_name: Optional[str] = None
     best_path: Optional[Path] = None
     best_score = 0.0
-    q = query.lower().strip()
+    q_full = query.lower().strip()
+    q_tokens = q_full.split()
     for name, path in candidates:
-        score = difflib.SequenceMatcher(None, q, name.lower().strip()).ratio()
+        n = name.lower().strip()
+        n_first = n.split()[0] if n else n
+        scores = [difflib.SequenceMatcher(None, q_full, n).ratio()]
+        for tok in q_tokens:
+            scores.append(difflib.SequenceMatcher(None, tok, n).ratio())
+            scores.append(difflib.SequenceMatcher(None, tok, n_first).ratio())
+        score = max(scores)
         if score > best_score:
             best_score, best_name, best_path = score, name, path
     if best_score >= MATCH_THRESHOLD:

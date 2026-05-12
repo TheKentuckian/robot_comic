@@ -38,6 +38,19 @@ _CHUNK_SAMPLES = 2400           # 100 ms at 24 kHz
 _LLM_MAX_RETRIES = 3
 _LLM_RETRY_BASE_DELAY = 1.0
 _TOOL_RESULT_TIMEOUT: float = 5.0
+# Extra seconds added after the last audio frame to cover device-buffer latency.
+_ECHO_COOLDOWN_S: float = 0.5
+
+# Split at whitespace that follows a sentence-ending punctuation mark.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def split_sentences(text: str) -> list[str]:
+    """Split text at sentence boundaries for per-sentence TTS pipelining."""
+    text = text.strip()
+    if not text:
+        return []
+    return [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
 
 
 class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
@@ -79,22 +92,12 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         # share the same trace as stt.infer.
         self._turn_span: Any = None
         self._turn_ctx_token: Any = None
+        # Echo guard: time.perf_counter() deadline after which TTS is done playing.
+        # Checked by LocalSTTInputMixin to suppress transcripts caused by speaker echo.
+        self._speaking_until: float = 0.0
 
     def _mark_activity(self, label: str) -> None:
         logger.debug("Activity: %s", label)
-
-    def _close_turn_span(self, outcome: str) -> None:
-        """Close the OTel turn span opened by LocalSTTInputMixin.
-
-        Note: _turn_ctx_token holds the mixin's stale token from a different asyncio
-        task — we do NOT detach it here (causes "Failed to detach context" errors).
-        The re-attach token created in _dispatch_completed_transcript is detached there.
-        """
-        self._turn_ctx_token = None
-        if self._turn_span is not None:
-            self._turn_span.set_attribute("turn.outcome", outcome)
-            self._turn_span.end()
-            self._turn_span = None
 
     def copy(self) -> "BaseLlamaResponseHandler":
         raise NotImplementedError
@@ -141,7 +144,13 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         """No-op: audio input is handled by LocalSTTInputMixin.receive()."""
 
     async def emit(self) -> Any:
-        return await wait_for_item(self.output_queue)
+        item = await wait_for_item(self.output_queue)
+        if isinstance(item, tuple):
+            # Update the speaking deadline: remaining queued frames + this frame + device buffer.
+            remaining = self.output_queue.qsize()
+            frame_s = _CHUNK_SAMPLES / _OUTPUT_SAMPLE_RATE  # 0.1 s per frame
+            self._speaking_until = time.perf_counter() + (remaining + 1) * frame_s + _ECHO_COOLDOWN_S
+        return item
 
     # ------------------------------------------------------------------ #
     # Personality / voice (common plumbing; voice specifics in subclasses)#
@@ -180,9 +189,9 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         """LLM → tool dispatch → TTS → PCM frames (two-phase with query-tool feedback)."""
         self._conversation_history.append({"role": "user", "content": transcript})
 
-        # Re-attach the OTel context from the mixin's turn span (set by
-        # LocalSTTInputMixin) so that llm.request and tts.synthesize spans
-        # land in the same trace as stt.infer — making the monitor display them.
+        # Capture the outer span NOW — self._turn_span may be overwritten by the
+        # mixin when the next STT event fires while we're blocked on the turn lock.
+        # Using the local reference in the finally block avoids closing the wrong span.
         _outer_span = self._turn_span
         _reattach_token: Any = None
         if _outer_span is not None:
@@ -190,20 +199,23 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
 
         try:
             async with self._turn_lock:
-                await self._run_turn()
+                await self._run_turn(_outer_span)
         finally:
             if _reattach_token is not None:
                 _otel_context.detach(_reattach_token)
-            if self._turn_span is not None:
-                self._close_turn_span("success")
+            if _outer_span is not None:
+                _outer_span.set_attribute("turn.outcome", "success")
+                _outer_span.end()
+                # Clear only if it still points to our span (not the next turn's).
+                if self._turn_span is _outer_span:
+                    self._turn_span = None
 
-    async def _run_turn(self) -> None:
+    async def _run_turn(self, outer_span: Any = None) -> None:
         _tracer = telemetry.get_tracer()
-        # Stamp the outer mixin turn span with the actual backend so the monitor
-        # shows the right mode (e.g. "llama_gemini_tts" instead of "local_stt").
-        if self._turn_span is not None:
-            self._turn_span.set_attribute("robot.mode", self._BACKEND_LABEL)
-            self._turn_span.set_attribute("gen_ai.system", "llama_cpp")
+        # Stamp the outer mixin turn span so the monitor shows the right backend.
+        if outer_span is not None:
+            outer_span.set_attribute("robot.mode", self._BACKEND_LABEL)
+            outer_span.set_attribute("gen_ai.system", "llama_cpp")
         _turn_span = _tracer.start_span(
             "turn",
             attributes={"robot.mode": self._BACKEND_LABEL, "gen_ai.system": "llama_cpp"},
@@ -211,7 +223,7 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         _turn_start = time.perf_counter()
         _turn_ctx_token = _otel_context.attach(_otel_trace.set_span_in_context(_turn_span))
         # For startup trigger (no mixin span), tag this span directly so monitor shows "greeting".
-        if self._turn_span is None:
+        if outer_span is None:
             _turn_span.set_attribute("turn.excerpt", "greeting")
 
         _outcome = "success"
