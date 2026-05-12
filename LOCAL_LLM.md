@@ -7,12 +7,11 @@
 
 ## Current State
 
-- **Active model:** `hermes3:8b-llama3.1-q4_K_M` via Ollama v0.23.2 on port 11434
-- **Why changing:** Hermes3 8B rejects system prompts > ~2500 tokens; breaks the full Don
-  Rickles persona. Also: Ollama has no MTP/speculative decoding path.
-- **Stack direction:** Replace Ollama with **llama.cpp + MTP PR #22673** for native
-  speculative decoding. llama-server exposes an OpenAI-compatible `/v1/chat/completions`
-  endpoint — same wire format, just a different URL.
+- **Active model:** `Qwen3-14B-UD-Q4_K_XL.gguf` via llama-server on port 11434
+- **Previous model:** Hermes3 8B (Ollama) — broke on system prompts > 2500 tokens
+- **Scrapped:** Qwen3 35B-A3B MoE — CPU MoE offload bottlenecked prefill at 86 tok/s,
+  decode at 17 tok/s; MTP PR #22673 crashes after first request (checkpoint size mismatch)
+- **Stack:** llama.cpp (no MTP), OpenAI-compatible `/v1/chat/completions` endpoint
 
 ---
 
@@ -31,27 +30,33 @@ applied, and llama.cpp's single-slot mode is a better fit anyway.
 **Service wrapper:** PowerShell script added to `Start-RobotServices.ps1`. No systemd.
 **Build location:** `D:\Projects\llama.cpp\` (Dev Drive, NVMe-optimized).
 
-### 2. Model: Qwen3 35B-A3B Q4_K_M (MoE)
+### 2. Model: Qwen3 14B Dense (UD-Q4_K_XL)
 
-**Decision:** Qwen3 MoE over Qwen2.5 14B dense or Qwen3 14B dense.
+**Decision:** Qwen3-14B-UD-Q4_K_XL over the original Qwen3 35B-A3B MoE.
 
 **Rationale:**
-- MoE shape: ~35B total weights, ~3.6B active params per forward pass.
-  Compute cost ≈ a 3.6B dense model; quality ≈ a much larger model on
-  conversational tasks.
-- 3–4K input tokens + short <200-token output + one tool call/turn is ideal
-  for MoE inference — low memory bandwidth per token, high throughput.
-- Q4_K_M: ~20–22 GB model file. With `--n-cpu-moe` offloading MoE expert
-  layers to CPU RAM, attention and non-MoE layers fit in 12 GB VRAM.
-- **CUDA 13.2 is known to produce gibberish with Qwen3.** Pin CUDA 12.4
-  (already installed for Chatterbox). Do not upgrade.
+- 35B MoE was scrapped: CPU MoE offload bottlenecked prefill at 86 tok/s; MTP
+  PR #22673 crashes after first request (checkpoint size mismatch bug).
+- 14B dense fits entirely in 12 GB VRAM — no CPU offload, no prefill penalty.
+  Expected ~600-1000 tok/s prefill, ~25-35 tok/s decode.
+- UD (Unsloth Dynamic) quantization uses mixed precision per layer for better
+  accuracy at identical file size vs standard Q4_K_M (~9.16 GB).
+- Strong instruction following and tool use (Tau2-Bench 65.1). Beats Gemma 2
+  27B and Phi-4 14B on 2026 leaderboards.
+- **CUDA 13.2 is known to produce gibberish with Qwen3.** Pin CUDA 12.4.
+  Do not upgrade.
 
-**Source:** Unsloth GGUF on HuggingFace (or equivalent). Must verify MTP tensors are
-present in the file before building the MTP code path (some GGUFs advertise
-`nextn_predict_layers` metadata but ship without the actual draft-head weights).
+**Source:** `unsloth/Qwen3-14B-GGUF` on HuggingFace.
+**Download command:**
+```powershell
+curl.exe -L -o "D:\Projects\models\Qwen3-14B-UD-Q4_K_XL.gguf" `
+    "https://huggingface.co/unsloth/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-UD-Q4_K_XL.gguf"
+```
 
-**Exact Ollama pull command:** N/A — no longer using Ollama for this model.
-**Download command:** `huggingface-cli download` or direct GGUF URL (confirm at Task 2).
+**Next in queue if 14B underperforms:**
+1. **Llama 3.3 8B** (~5 GB at Q4) — specifically cited for structured output + tool-call patterns; smaller size leaves more headroom and runs faster
+2. **Gemma 3 12B** (~7 GB at Q4) — strong prose/alignment, good fallback if Llama 3.3 lacks persona depth
+- Gemma 3 27B (~15-16 GB) and Gemma 4 26B won't fit in 12 GB VRAM without CPU offload — skip those tiers
 
 ### 3. LLM Server: llama.cpp + MTP PR #22673
 
@@ -89,15 +94,17 @@ MoE expert layers are the main spill candidate — they're large, used sparsely.
 Attention and shared layers stay on GPU. CPU RAM on this laptop is ample for expert
 spill; the RTX 4080 Mobile's 12 GB carries the hot path.
 
-### 6. ElevenLabs TTS (Issue #60 — tracked separately)
+### 6. TTS Pairing: Gemini TTS (Issue #60 — tracked separately)
 
-Chatterbox is **parked** (not removed) while ElevenLabs becomes the primary TTS output.
-This frees ~4.5 GB VRAM, which is what makes a 35B MoE model viable in the 12 GB budget.
+Chatterbox is **parked** (not removed). The planned TTS pairing for the llama-server LLM
+path is **Gemini TTS** (`gemini-3.1-flash-tts-preview`), already implemented in `gemini_tts.py`.
 
-Implementation tracked in GitHub issue #60. Config keys: `ELEVENLABS_API_KEY`,
-`ELEVENLABS_VOICE_ID`. New handler file modeled on `gemini_tts.py`.
+Plan: create a `LlamaServerGeminiTTSHandler` that combines:
+- LLM: llama-server `_call_llm()` from `ChatterboxTTSResponseHandler`
+- TTS: `_call_tts_with_retry()` from `GeminiTTSResponseHandler`
 
-ElevenLabs is a cloud API — 0 VRAM overhead.
+ElevenLabs is deprioritised (parked, not closed) — may revisit for voice cloning fidelity.
+Both are cloud APIs — 0 VRAM overhead.
 
 ---
 
@@ -105,32 +112,29 @@ ElevenLabs is a cloud API — 0 VRAM overhead.
 
 | Process                          | Est. VRAM     |
 |----------------------------------|---------------|
-| llama.cpp (35B MoE, GPU layers)  | ~7–9 GB       |
-| MTP draft head                   | ~0.3–0.5 GB   |
+| llama.cpp (14B dense, all GPU)   | ~8–9 GB       |
+| KV cache (q8_0, 16K context)     | ~0.5–1.0 GB   |
 | Windows compositor + Chrome      | ~0.5–1.0 GB   |
 | ElevenLabs TTS                   | 0 (cloud API) |
 | Chatterbox (parked)              | 0             |
-| **Total**                        | **~8–10.5 GB**|
+| **Total**                        | **~9–11 GB**  |
 
-~1.5–4 GB headroom vs. the 12 GB cap. Tune `--n-cpu-moe` to reclaim headroom.
+~1–3 GB headroom vs. the 12 GB cap. Can expand context to 32K if VRAM holds.
 
 ---
 
 ## Launch Script (Windows/PowerShell)
 
 ```powershell
-# llama-server launch — to be added to Start-RobotServices.ps1
-# Tune --n-cpu-moe after benchmarking (see Task 4)
+# llama-server launch — in Start-RobotServices.ps1
 $env:CUDA_VISIBLE_DEVICES = "0"  # Single GPU, explicit
-& "D:\Projects\llama.cpp\build\bin\Release\llama-server.exe" `
-    -m "D:\Projects\models\qwen3-35b-a3b-q4_k_m-mtp.gguf" `
-    -c 8192 `
+& "D:\Projects\llama.cpp\build\bin\llama-server.exe" `
+    -m "D:\Projects\models\Qwen3-14B-UD-Q4_K_XL.gguf" `
+    -c 16384 `
     -ngl 999 `
-    --n-cpu-moe 30 `
     -fa on `
     --cache-type-k q8_0 `
-    --spec-type mtp `
-    --spec-num-draft 3 `
+    --cache-type-v q8_0 `
     -t 8 `
     -b 2048 `
     -ub 2048 `
@@ -198,56 +202,44 @@ The class and module are named `ChatterboxTTS*` but will be serving llama.cpp LL
 - **Binary:** `D:\Projects\llama.cpp\build\bin\llama-server.exe`
 - **Note:** Run with `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin` on PATH (handled in Start-RobotServices.ps1)
 
-### Task 2: Download Qwen3 35B-A3B Q4_K_M GGUF ✅
+### Task 2: Download model GGUF ✅
 
-- [x] Source: `unsloth/Qwen3.6-35B-A3B-GGUF-MTP` on HuggingFace
-- [x] File: `Qwen3.6-35B-A3B-UD-Q4_K_M.gguf` — 22.7 GB (21.11 binary GB on disk)
-- [x] Downloaded to `D:\Projects\models\` via `curl.exe`
-- [x] MTP tensors confirmed: `nextn_predict_layers` metadata key present ✓
-- **Drive choice:** D (ReFS Dev Drive) over C (faster Samsung NTFS) — Defender AV bypass closes the speed gap on large cold loads
+#### 35B MoE (scrapped — too slow)
+- [x] `Qwen3.6-35B-A3B-UD-Q4_K_M.gguf` — 22.7 GB, downloaded to `D:\Projects\models\`
+- Prefill: 86 tok/s (CPU MoE bottleneck), Decode: 17 tok/s, MTP: crashes after 1st request
 
-### Task 3: Wire up Start-RobotServices.ps1 ✅
+#### 14B Dense (current target)
+- [ ] `Qwen3-14B-UD-Q4_K_XL.gguf` — 9.16 GB, download to `D:\Projects\models\`
+  ```powershell
+  curl.exe -L -o "D:\Projects\models\Qwen3-14B-UD-Q4_K_XL.gguf" `
+      "https://huggingface.co/unsloth/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-UD-Q4_K_XL.gguf"
+  ```
 
-- [x] llama-server launch added to `C:\Services\scripts\Start-RobotServices.ps1`
+### Task 3: Wire up Start/Stop-RobotServices.ps1 ✅
+
+- [x] llama-server launch in `Start-RobotServices.ps1` — updated for Qwen3-14B, dropped MTP/MoE flags, added `--cache-type-v q8_0`, context 16384
 - [x] Ollama launch removed; Chatterbox commented out (parked)
-- [ ] Update Stop-RobotServices.ps1 to kill `llama-server.exe`
-- [ ] Test: stop all services, start via shortcut, confirm llama-server log shows model loaded (requires Task 2 model download)
+- [x] `Stop-RobotServices.ps1` updated to kill `llama-server.exe` (was still killing Ollama)
+- [ ] Test: stop all services, start via shortcut, confirm llama-server log shows model loaded (requires Task 2 download)
 
 ### Task 4: Benchmark on actual workload ⏸️ SHOW RESULTS BEFORE PROCEEDING
 
 Run with representative Don Rickles system prompt (full, no trimming):
-- [ ] Prefill time on a 3.5K-token prompt:
-  ```powershell
-  # Use llama-bench or curl timing on /v1/chat/completions
-  # Record: prefill tok/s, time-to-first-token
+- [x] **Results (Qwen3-14B-UD-Q4_K_XL, 2026-05-12):**
   ```
-- [ ] Decode tok/s with MTP on vs off:
-  ```powershell
-  # MTP on:  --spec-type mtp --spec-num-draft 3
-  # MTP off: remove those flags, restart server
+  Prompt tokens:   3276
+  Prefill:         1675 tok/s  |  TTFT: ~1956ms
+  Decode:            29 tok/s  |  Total turn: 5.5s
+  vs 35B MoE:      19× faster prefill, 1.7× faster decode
   ```
-- [ ] MTP acceptance rate (check llama-server logs or `/metrics` endpoint):
-  - Specifically during the tool-call JSON portion of output
-  - If < 40% → fall back to non-MTP and note here
-- [ ] Tune `--n-cpu-moe` (start at 30, decrease toward 20, watch `nvidia-smi`):
-  ```powershell
-  # Target: VRAM usage stable, GPU utilization high, no OOM
-  nvidia-smi dmon -s mu -d 2
-  ```
-- [ ] **Results:**
-  ```
-  Prefill:     ___  tok/s  |  TTFT: ___ ms
-  Decode MTP:  ___  tok/s  |  Acceptance: ___% (tool-call portion: ___%  )
-  Decode base: ___  tok/s  |  Speedup: ___×
-  VRAM used:   ___ GB      |  --n-cpu-moe final: ___
-  ```
+- No MTP (scrapped — PR #22673 checkpoint bug). No `--n-cpu-moe` (dense model, full GPU).
+- **Decision: adopt 14B as production model.** Meets ≤5s warm-turn target.
 
-### Task 5: Sanity-check tool-call JSON well-formedness
+### Task 5: Sanity-check tool-call JSON well-formedness ✅
 
-- [ ] Run 20 representative turns with MTP enabled, greedy decoding (`temperature=0`)
-- [ ] Verify every turn produces valid JSON tool_calls (no text-format fallback needed)
-- [ ] Compare output vs. non-MTP run — should be byte-identical (greedy = deterministic)
-- [ ] If Qwen3 is clean: remove Hermes3 workarounds from `chatterbox_tts.py` (see Code Changes §3)
+- [x] 20/20 PASS — all turns valid tool_call JSON, greedy decoding, temperature=0
+- [x] Consistent 3.2–4.4s per turn; 2 turns used text-only (correct behaviour for those prompts)
+- [x] Hermes3 workarounds already removed in Task 6
 
 ### Task 6: Update config.py and chatterbox_tts.py
 

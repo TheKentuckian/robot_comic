@@ -689,7 +689,7 @@ def run_sanity_check(n_turns: int, temperature: float) -> None:
         toks = usage.get("completion_tokens", 0)
         print(f"  Turn {i+1:2d}: {status}  {elapsed:.1f}s  {toks}tok  reason={finish_reason}  tools=[{tc_str}]  text={content_preview!r}")
 
-    print(f"\n=== Summary: {pass_count}/{n_turns} PASS  {fail_count} FAIL  tool_call_turns={tool_call_turns} ──")
+    print(f"\n=== Summary: {pass_count}/{n_turns} PASS  {fail_count} FAIL  tool_call_turns={tool_call_turns} --")
 
 
 def main() -> None:
