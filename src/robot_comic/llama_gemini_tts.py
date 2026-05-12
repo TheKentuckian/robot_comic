@@ -26,8 +26,11 @@ from robot_comic.config import (
     config,
 )
 from robot_comic.gemini_tts import (
+    SHORT_PAUSE_MS,
+    SHORT_PAUSE_TAG,
     GEMINI_TTS_MODEL,
     _TTS_EXCLUSIVE_VOICES,
+    _silence_pcm,
     extract_delivery_tags,
     build_tts_system_instruction,
     load_profile_tts_instruction,
@@ -129,6 +132,9 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
             if not spoken:
                 continue
             tags = extract_delivery_tags(sentence)
+            if SHORT_PAUSE_TAG in tags:
+                for frame in self._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS, _OUTPUT_SAMPLE_RATE)):
+                    await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
             instruction = build_tts_system_instruction(base_instruction, tags)
             pcm_bytes = await self._call_gemini_tts(spoken, system_instruction=instruction)
             if pcm_bytes is None:

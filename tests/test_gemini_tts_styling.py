@@ -43,11 +43,33 @@ def test_build_tts_system_instruction_no_tags_returns_base() -> None:
 
 
 def test_build_tts_system_instruction_appends_cue_suffix() -> None:
-    """Tag names are joined into a 'Delivery cues for this line:' suffix."""
+    """Tags map to human-readable phrases in the 'Delivery cues' suffix."""
     base = "Base prompt."
     result = build_tts_system_instruction(base, ["fast", "annoyance"])
     assert result.startswith(base)
-    assert "Delivery cues for this line: fast, annoyance." in result
+    assert "Delivery cues for this line:" in result
+    assert "rapid-fire" in result
+    assert "exasperated" in result
+
+
+def test_build_tts_system_instruction_unknown_tag_falls_back_to_name() -> None:
+    """Unknown tag names pass through verbatim rather than being dropped."""
+    result = build_tts_system_instruction("Base.", ["mystery"])
+    assert "mystery" in result
+
+
+def test_build_tts_system_instruction_short_pause_alone_returns_base() -> None:
+    """[short pause] is handled as real silence, not as a TTS cue."""
+    base = "Base prompt."
+    assert build_tts_system_instruction(base, ["short pause"]) == base
+
+
+def test_build_tts_system_instruction_short_pause_with_other_tags_only_cues_others() -> None:
+    """When [short pause] mixes with other tags, only the others appear in cues."""
+    result = build_tts_system_instruction("Base.", ["short pause", "fast"])
+    assert "rapid-fire" in result
+    assert "brief beat" not in result.lower()
+    assert "short pause" not in result
 
 
 def test_load_profile_tts_instruction_no_profile_falls_back() -> None:

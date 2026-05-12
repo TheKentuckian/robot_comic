@@ -145,6 +145,39 @@ async def test_apply_personality_clears_history() -> None:
 
 
 @pytest.mark.asyncio
+async def test_short_pause_tag_inserts_silence_before_sentence() -> None:
+    """A sentence carrying [short pause] gets a silence frame burst before its TTS audio."""
+    handler = _make_handler()
+
+    raw_samples = np.zeros(2400, dtype=np.int16)
+    pcm_bytes = raw_samples.tobytes()
+    captured: list[str] = []
+
+    async def fake_llm() -> str:
+        return "First line. [short pause] Second line."
+
+    async def fake_tts(text: str, system_instruction: str | None = None) -> bytes:
+        captured.append(text)
+        return pcm_bytes
+
+    handler._run_llm_with_tools = fake_llm  # type: ignore[method-assign]
+    handler._call_tts_with_retry = fake_tts  # type: ignore[method-assign]
+
+    await handler._dispatch_completed_transcript("go")
+
+    audio_frames = []
+    while not handler.output_queue.empty():
+        item = handler.output_queue.get_nowait()
+        if isinstance(item, tuple):
+            audio_frames.append(item)
+
+    # Two sentences (one PCM frame each) plus silence frames for the [short pause]
+    # before the second sentence. Expect more than 2 audio frames total.
+    assert len(audio_frames) > 2
+    assert captured == ["First line.", "Second line."]
+
+
+@pytest.mark.asyncio
 async def test_tts_call_includes_speed_system_instruction() -> None:
     """_call_tts_with_retry must pass a fast-delivery system_instruction to TTS."""
     handler = _make_handler()

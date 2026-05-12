@@ -60,18 +60,24 @@ DEFAULT_TTS_SYSTEM_INSTRUCTION = (
 )
 
 # Delivery tags emitted by profile prompts (see e.g. profiles/don_rickles/instructions.txt).
-# Used to extract per-sentence style cues before the spoken text is cleaned of tags.
-_DELIVERY_TAGS: tuple[str, ...] = (
-    "fast",
-    "slow",
-    "annoyance",
-    "aggression",
-    "amusement",
-    "enthusiasm",
-    "short pause",
-)
+# Each tag maps to a human-readable phrase used in the system_instruction suffix —
+# the TTS model has more to work with than the raw tag name.
+_DELIVERY_TAG_PHRASES: dict[str, str] = {
+    "fast": "rapid-fire, clipped delivery",
+    "slow": "slower, more deliberate pacing",
+    "annoyance": "exasperated, contemptuous edge",
+    "aggression": "sharp, biting attack",
+    "amusement": "self-satisfied, savouring the line",
+    "enthusiasm": "warm, energised lift",
+}
+# [short pause] is special: handled as a real audio gap before the sentence,
+# not as a TTS cue (otherwise the model would add its own pause on top of the silence).
+SHORT_PAUSE_TAG = "short pause"
+SHORT_PAUSE_MS = 400
+
+_ALL_TAGS = (*_DELIVERY_TAG_PHRASES.keys(), SHORT_PAUSE_TAG)
 _DELIVERY_TAG_RE = re.compile(
-    r"\[(" + "|".join(re.escape(t) for t in _DELIVERY_TAGS) + r")\]",
+    r"\[(" + "|".join(re.escape(t) for t in _ALL_TAGS) + r")\]",
     re.IGNORECASE,
 )
 
@@ -89,11 +95,22 @@ def extract_delivery_tags(text: str) -> list[str]:
 
 
 def build_tts_system_instruction(base: str, tags: list[str]) -> str:
-    """Append a short delivery-cue suffix to *base* for one TTS call."""
-    if not tags:
+    """Append a short delivery-cue suffix to *base* for one TTS call.
+
+    [short pause] is excluded — it becomes a real silence gap in the audio,
+    not a hint to the model.
+    """
+    cue_tags = [t for t in tags if t != SHORT_PAUSE_TAG]
+    if not cue_tags:
         return base
-    cues = ", ".join(tags)
+    cues = "; ".join(_DELIVERY_TAG_PHRASES.get(t, t) for t in cue_tags)
     return f"{base}\n\nDelivery cues for this line: {cues}."
+
+
+def _silence_pcm(duration_ms: int, sample_rate: int = GEMINI_TTS_OUTPUT_SAMPLE_RATE) -> bytes:
+    """Return raw int16 PCM bytes of silence at *sample_rate* for *duration_ms*."""
+    n_samples = int(sample_rate * duration_ms / 1000)
+    return bytes(np.zeros(n_samples, dtype=np.int16).tobytes())
 
 
 def load_profile_tts_instruction() -> str:
@@ -245,6 +262,9 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             if not spoken:
                 continue
             tags = extract_delivery_tags(sentence)
+            if SHORT_PAUSE_TAG in tags:
+                for frame in self._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS)):
+                    await self.output_queue.put((GEMINI_TTS_OUTPUT_SAMPLE_RATE, frame))
             instruction = build_tts_system_instruction(base_instruction, tags)
             pcm_bytes = await self._call_tts_with_retry(spoken, system_instruction=instruction)
             if pcm_bytes is None:
