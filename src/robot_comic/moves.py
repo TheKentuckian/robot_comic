@@ -250,10 +250,12 @@ class MovementManager:
         self,
         current_robot: ReachyMini,
         camera_worker: "Any" = None,
+        startup_hold_s: float = 5.0,
     ):
         """Initialize movement manager."""
         self.current_robot = current_robot
         self.camera_worker = camera_worker
+        self._startup_hold_s = startup_hold_s
 
         # Single timing source for durations
         self._now = time.monotonic
@@ -876,6 +878,17 @@ class MovementManager:
             logger.debug("Motors enabled")
         except Exception as e:
             logger.warning("Could not enable motors at startup: %s", e)
+
+        # The autostart launcher plays a wake_up animation on the daemon immediately
+        # before exec()-ing into this process. If we start issuing set_target() calls
+        # while the animation is still running, the two compete and cause shuddering.
+        # Holding for startup_hold_s lets the animation finish before we take over.
+        _hold_end = self._now() + self._startup_hold_s
+        while self._now() < _hold_end and not self._stop_event.is_set():
+            time.sleep(0.05)
+        if self._stop_event.is_set():
+            return
+        logger.debug("Startup hold complete; beginning control loop")
 
         loop_count = 0
         prev_loop_start = self._now()

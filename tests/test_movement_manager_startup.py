@@ -19,7 +19,8 @@ def _make_manager():
     robot.get_current_head_pose.return_value = np.eye(4, dtype=np.float32)
     robot.set_target.return_value = None
     robot.enable_motors.return_value = None
-    return MovementManager(current_robot=robot), robot
+    # startup_hold_s=0 so tests don't wait 5s for the daemon animation hold
+    return MovementManager(current_robot=robot, startup_hold_s=0.0), robot
 
 
 def test_enable_motors_called_before_first_set_target() -> None:
