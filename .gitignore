@@ -70,3 +70,10 @@ src/reachy_mini_conversation_app/profiles/user_personalities/
 # Comedy session state (runtime artifacts; legacy name kept for back-compat)
 .comedy_sessions/
 .rickles_sessions/
+
+# Voice prep — large source audio files (source recordings, multi-hundred MB)
+profiles/don_rickles/voice_prep/*.wav
+
+# Ephemeral benchmark / test output
+test_output.txt
+.claude/scheduled_tasks.lock

@@ -7,6 +7,34 @@
 
 ## Session Notes
 
+### Session 2 — 2026-05-12
+
+**Completed:**
+- Chatterbox pipeline is fully wired in code: Moonshine STT → Ollama `/api/generate` (with context token conversation history) → Chatterbox TTS
+- `chatterbox_tag_translator.translate()` is called in `chatterbox_tts.py` — LLM delivery tags ([fast], [annoyance], etc.) are converted to per-segment `exaggeration`/`cfg_weight` params and never spoken aloud
+- Chatterbox is now selectable in the admin settings UI (was env-var only before)
+- Test suite fixed after merged persona commit moved shared tools from `profiles/don_rickles/` to `src/robot_comic/tools/`
+- All changes committed and pushed to main
+
+**Critical lesson — Ollama GUI vs. direct serve:**
+The Ollama tray/GUI app (`ollama app.exe`) is a wrapper that partially exposes the Ollama API over LAN. It works for simple GET requests (`/api/tags`) but blocks `/api/chat`, `/v1/chat/completions`, and appears to silently drop or mishandle POST requests with large bodies (e.g. our full Rickles system prompt in the `system` field of `/api/generate`). **Never start Ollama by clicking the tray icon.** Always use the desktop shortcut → `Start-RobotServices.ps1`, which runs `ollama.exe serve` directly with `OLLAMA_HOST=0.0.0.0`.
+
+**Current state at end of Session 2:**
+- Code is on main and correct
+- Pi has the code but end-to-end audio test was NOT confirmed — blocked by the Ollama GUI issue above
+- To resume: use desktop shortcut to start services, then test from Pi
+
+**Pi cleanup needed before testing:**
+- `startup_settings.json` on Pi may have `"voice": "Kore"` — apply personality from admin UI or clear the file so `chatterbox.txt` takes effect
+- `src/robot_comic/.env` on Pi: remove `MODEL_NAME=gemini-3.1-flash-live-preview` if still present
+
+**Deferred to next session:**
+- Issue #39: Tool call support for Chatterbox/Ollama pipeline (dance, camera, emotions) — explicitly next after pipeline confirmed working
+- Task 9: Thermal baseline — still deferred
+- Phase 2: Don Rickles voice clone — not started
+
+---
+
 ### Session 1 — 2026-05-09/10
 
 **Completed:** Tasks 1–6 fully done. Infrastructure is installed and working.
