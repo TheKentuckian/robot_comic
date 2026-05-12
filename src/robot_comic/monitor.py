@@ -95,6 +95,16 @@ class TurnRecord:
         return self.root["attrs"].get("robot.mode", "?")
 
     @property
+    def excerpt(self) -> str:
+        """Short label: first few words of transcript, or 'greeting' for startup."""
+        # Check root span first (startup trigger sets it there directly).
+        val = self.root["attrs"].get("turn.excerpt", "")
+        if val:
+            return val
+        # For mixin-driven turns the excerpt is on the root span set by local_stt_realtime.
+        return ""
+
+    @property
     def tool_count(self) -> int:
         """Number of tool calls made during this turn."""
         return len(self._kids("tool.execute"))
@@ -149,21 +159,22 @@ def _build_table(turns: list[TurnRecord]) -> Table:
         header_style="bold dim",
         row_styles=["", "dim"],
     )
-    t.add_column("Time",  width=8,  no_wrap=True)
-    t.add_column("Mode",  width=11, no_wrap=True)
-    t.add_column("STT",   width=8,  justify="right")
-    t.add_column("LLM",   width=8,  justify="right")
-    t.add_column("TTS",   width=8,  justify="right")
-    t.add_column("Total", width=8,  justify="right")
-    t.add_column("Tools", width=5,  justify="right")
-    t.add_column("",      width=1,  justify="center")
+    t.add_column("Time",    width=8,  no_wrap=True)
+    t.add_column("What",    width=20, no_wrap=True)
+    t.add_column("STT",     width=8,  justify="right")
+    t.add_column("LLM",     width=8,  justify="right")
+    t.add_column("TTS",     width=8,  justify="right")
+    t.add_column("Total",   width=8,  justify="right")
+    t.add_column("Tools",   width=5,  justify="right")
+    t.add_column("",        width=1,  justify="center")
 
     for turn in reversed(turns[-_MAX_TURNS:]):
         ok_icon = Text("✓", style="green") if turn.outcome == "success" else Text("✗", style="red")
         tools_cell = Text(str(turn.tool_count), style="cyan") if turn.tool_count else Text("")
+        excerpt = turn.excerpt or turn.mode
         t.add_row(
             turn.ts.strftime("%H:%M:%S"),
-            turn.mode,
+            Text(excerpt, style="italic dim" if excerpt == "greeting" else ""),
             _fmt(turn.stt_ms,   "stt"),
             _fmt(turn.llm_ms,   "llm"),
             _fmt(turn.tts_ms,   "tts"),

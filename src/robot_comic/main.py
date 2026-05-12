@@ -49,7 +49,7 @@ def run(
     args: argparse.Namespace,
     robot: ReachyMini = None,
     app_stop_event: Optional[threading.Event] = None,
-    settings_app: Optional[FastAPI] = None,
+    settings_app: Optional[Any] = None,
     instance_path: Optional[str] = None,
 ) -> None:
     """Run Robot Comic."""
@@ -75,9 +75,6 @@ def run(
     )
 
     logger = setup_logger(args.debug)
-
-    from robot_comic import telemetry as _telemetry
-    _telemetry.init()
 
     try:
         import subprocess
@@ -112,6 +109,9 @@ def run(
             startup_settings = load_startup_settings_into_runtime(instance_path)
         except Exception as e:
             logger.warning("Failed to load startup settings: %s", e)
+
+    from robot_comic import telemetry as _telemetry
+    _telemetry.init()
 
     if config.BACKEND_PROVIDER == HF_BACKEND:
         logger.info(
@@ -219,6 +219,7 @@ def run(
     pause_controller = PauseController(
         clear_move_queue=movement_manager.clear_move_queue,
         on_shutdown=_request_shutdown_from_pause,
+        on_pause_state_changed=movement_manager.set_paused,
         stop_phrases=pause_settings.resolved_stop(),
         resume_phrases=pause_settings.resolved_resume(),
         shutdown_phrases=pause_settings.resolved_shutdown(),

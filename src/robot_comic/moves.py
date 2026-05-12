@@ -278,6 +278,15 @@ class MovementManager:
         self._antenna_blend_duration = 0.4  # seconds to blend back after listening
         self._last_listening_blend_time = self._now()
         self._breathing_active = False  # true when breathing move is running or queued
+        self._is_paused = False  # suppresses idle animation and head tracking when True
+
+        # Read idle animation flag once at startup (restart required to change)
+        try:
+            from robot_comic.config import config as _cfg
+            self.idle_animation_enabled: bool = getattr(_cfg, "IDLE_ANIMATION_ENABLED", False)
+        except Exception:
+            self.idle_animation_enabled = False
+
         self._listening_debounce_s = 0.15
         self._last_listening_toggle_time = self._now()
         self._last_set_target_err = 0.0
@@ -372,6 +381,18 @@ class MovementManager:
 
         return self._now() - last_activity >= self.idle_inactivity_delay
 
+    def set_paused(self, paused: bool) -> None:
+        """Freeze or unfreeze idle animation and head tracking.
+
+        While paused:
+        - BreathingMove is suppressed and any active move is cancelled.
+        - Face-tracking offsets are zeroed so the head returns to neutral.
+        - Head tracking from the camera is ignored.
+
+        Thread-safe: the change is posted to the worker command queue.
+        """
+        self._command_queue.put(("set_paused", paused))
+
     def set_listening(self, listening: bool) -> None:
         """Enable or disable listening mode without touching shared state directly.
 
@@ -416,7 +437,7 @@ class MovementManager:
                 face_offsets = self._pending_face_offsets
                 self._face_offsets_dirty = False
 
-        if face_offsets is not None:
+        if face_offsets is not None and not self._is_paused:
             self.state.face_tracking_offsets = face_offsets
             self.state.update_activity()
 
@@ -456,6 +477,18 @@ class MovementManager:
             self.state.update_activity()
         elif command == "mark_activity":
             self.state.update_activity()
+        elif command == "set_paused":
+            self._is_paused = bool(payload)
+            if self._is_paused:
+                self.move_queue.clear()
+                self.state.current_move = None
+                self.state.move_start_time = None
+                self._breathing_active = False
+                self.state.face_tracking_offsets = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+                logger.info("Movement paused (idle animation + head tracking suppressed)")
+            else:
+                self.state.update_activity()
+                logger.info("Movement resumed")
         elif command == "set_listening":
             desired_state = bool(payload)
             now = self._now()
@@ -506,6 +539,8 @@ class MovementManager:
 
     def _manage_breathing(self, current_time: float) -> None:
         """Manage automatic breathing when idle."""
+        if self._is_paused or not self.idle_animation_enabled:
+            return
         if (
             self.state.current_move is None
             and not self.move_queue

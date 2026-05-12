@@ -270,6 +270,12 @@ class LocalSTTInputMixin:
             stt_span.end()
             self._stt_infer_span = None
             telemetry.record_stt(stt_s, {"gen_ai.system": "local_stt", "stt.type": "moonshine"})
+        # Tag the outer turn span with a short excerpt so the monitor can label it.
+        _outer_span = getattr(self, "_turn_span", None)
+        if _outer_span is not None:
+            words = transcript.split()
+            excerpt = " ".join(words[:5]) + ("…" if len(words) > 5 else "")
+            _outer_span.set_attribute("turn.excerpt", excerpt)
         self._turn_user_done_at = now
         self._turn_response_created_at = None
         self._turn_first_audio_at = None

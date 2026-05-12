@@ -509,6 +509,7 @@ class Config:
 
     GEMINI_LIVE_VIDEO_STREAMING = _env_flag("GEMINI_LIVE_VIDEO_STREAMING", default=False)
     MOVEMENT_SPEED_FACTOR = _env_float_clamped("MOVEMENT_SPEED_FACTOR", default=0.3, lo=0.1, hi=2.0)
+    IDLE_ANIMATION_ENABLED = _env_flag("IDLE_ANIMATION_ENABLED", default=False)
     MOONSHINE_HEARTBEAT = _env_flag("MOONSHINE_HEARTBEAT", default=False)
     # OTel instrumentation mode: unset=disabled, "trace"=console only, "remote"=console+OTLP
     ROBOT_INSTRUMENTATION = os.getenv("ROBOT_INSTRUMENTATION", "")
@@ -637,6 +638,7 @@ def refresh_runtime_config_from_env() -> None:
     config.REACHY_MINI_CUSTOM_PROFILE = LOCKED_PROFILE or os.getenv("REACHY_MINI_CUSTOM_PROFILE")
     config.GEMINI_LIVE_VIDEO_STREAMING = _env_flag("GEMINI_LIVE_VIDEO_STREAMING", default=False)
     config.MOVEMENT_SPEED_FACTOR = _env_float_clamped("MOVEMENT_SPEED_FACTOR", default=0.3, lo=0.1, hi=2.0)
+    config.IDLE_ANIMATION_ENABLED = _env_flag("IDLE_ANIMATION_ENABLED", default=False)
     config.MOONSHINE_HEARTBEAT = _env_flag("MOONSHINE_HEARTBEAT", default=False)
     config.CHATTERBOX_URL = os.getenv(CHATTERBOX_URL_ENV, CHATTERBOX_DEFAULT_URL)
     config.CHATTERBOX_VOICE = os.getenv(CHATTERBOX_VOICE_ENV, CHATTERBOX_DEFAULT_VOICE)

@@ -40,7 +40,7 @@ _DEFAULT_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
 
 
 _SPAN_ATTRS_TO_KEEP = frozenset({
-    "turn.id", "session.id", "turn.outcome", "robot.mode",
+    "turn.id", "session.id", "turn.outcome", "turn.excerpt", "robot.mode",
     "gen_ai.system", "gen_ai.operation.name", "gen_ai.request.model",
     "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens",
     "tool.name", "tool.id", "vad.duration_ms", "stt.type",
@@ -117,6 +117,11 @@ def _init_otel() -> None:
 
 def init() -> None:
     """Initialise OTel if ROBOT_INSTRUMENTATION is set.  Safe to call multiple times."""
+    # Re-read at call time so .env loaded after module import takes effect.
+    global _RAW, ENABLED, _REMOTE
+    _RAW = os.getenv("ROBOT_INSTRUMENTATION", "").strip().lower()
+    ENABLED = _RAW in {"trace", "remote"}
+    _REMOTE = _RAW == "remote"
     if ENABLED:
         _init_otel()
         _init_instruments()

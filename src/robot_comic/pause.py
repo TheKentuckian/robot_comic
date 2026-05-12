@@ -100,6 +100,7 @@ class PauseController:
         clear_move_queue: Callable[[], None],
         on_shutdown: Callable[[], None],
         on_switch_requested: Optional[Callable[[], None]] = None,
+        on_pause_state_changed: Optional[Callable[[bool], None]] = None,
         stop_phrases: Sequence[str] = DEFAULT_STOP_PHRASES,
         resume_phrases: Sequence[str] = DEFAULT_RESUME_PHRASES,
         shutdown_phrases: Sequence[str] = DEFAULT_SHUTDOWN_PHRASES,
@@ -109,6 +110,7 @@ class PauseController:
         self._clear_move_queue = clear_move_queue
         self._on_shutdown = on_shutdown
         self._on_switch_requested = on_switch_requested
+        self._on_pause_state_changed = on_pause_state_changed
         self._stop_phrases = tuple(stop_phrases)
         self._resume_phrases = tuple(resume_phrases)
         self._shutdown_phrases = tuple(shutdown_phrases)
@@ -232,12 +234,22 @@ class PauseController:
             self._clear_move_queue()
         except Exception as e:
             logger.error("clear_move_queue raised during pause: %s", e)
+        if self._on_pause_state_changed is not None:
+            try:
+                self._on_pause_state_changed(True)
+            except Exception as e:
+                logger.error("on_pause_state_changed(True) raised: %s", e)
         logger.info("Paused. Say 'continue', 'shutdown', or 'switch comic'.")
 
     def _enter_active(self, matched_phrase: str) -> None:
         with self._lock:
             self._state = PauseState.ACTIVE
         logger.info("Resume phrase %r matched — leaving paused state", matched_phrase)
+        if self._on_pause_state_changed is not None:
+            try:
+                self._on_pause_state_changed(False)
+            except Exception as e:
+                logger.error("on_pause_state_changed(False) raised: %s", e)
 
     def _enter_shutdown(self, matched_phrase: str) -> None:
         with self._lock:
