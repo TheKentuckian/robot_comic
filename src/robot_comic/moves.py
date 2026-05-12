@@ -769,12 +769,12 @@ class MovementManager:
 
     def _update_face_tracking(self, current_time: float) -> None:
         """Get face tracking offsets from camera worker thread."""
+        if self._is_paused:
+            return
         if self.camera_worker is not None:
-            # Get face tracking offsets from camera worker thread
             offsets = self.camera_worker.get_face_tracking_offsets()
             self.state.face_tracking_offsets = offsets
         else:
-            # No camera worker, use neutral offsets
             self.state.face_tracking_offsets = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
     def start(self) -> None:
