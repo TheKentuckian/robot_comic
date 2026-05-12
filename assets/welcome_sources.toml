@@ -13,6 +13,12 @@
 # Narrowing the [start, end] window dramatically speeds up transcription.
 # Default windows below cover the intro of each show (where names are spoken).
 
+# First-pass status (2026-05-12):
+#   STATUS=OK  → extract produced a usable welcome_name.wav
+#   STATUS=TODO → phrase didn't match in window; needs a different clip
+#               (typically a host intro, doc narrator, or roast announcer)
+
+# STATUS=OK — matched "don rickles" @ 01:35
 [don_rickles]
 # Mr. Warmth: The Don Rickles Project (2007 documentary). John Landis narrates
 # and says Rickles's name in the opener; Rickles intros himself too.
@@ -21,6 +27,7 @@ phrases = ["i'm don rickles", "don rickles", "rickles"]
 start = "00:00:00"
 end = "00:05:00"
 
+# STATUS=OK — matched "hicks" @ 01:07
 [bill_hicks]
 # Bill Hicks — Relentless (1992). Opens with "Good evening, my name is Bill Hicks."
 url = "https://www.youtube.com/watch?v=PQVFRK0agAY"
@@ -28,13 +35,16 @@ phrases = ["my name is bill hicks", "i'm bill hicks", "bill hicks", "hicks"]
 start = "00:00:00"
 end = "00:03:00"
 
+# STATUS=TODO — Class Clown opens with title-track audio, no name spoken in window.
+#               Replace with a clip where his name is said (eg. Carson intro,
+#               It's Bad For Ya HBO chyron, or AMA doc opener).
 [george_carlin]
-# George Carlin — Class Clown (1972) full album. Title-track intro mentions his name.
 url = "https://www.youtube.com/watch?v=o77zMb70V6A"
 phrases = ["i'm george carlin", "george carlin", "carlin"]
 start = "00:00:00"
 end = "00:05:00"
 
+# STATUS=OK — matched "dave chappelle" @ 00:33
 [dave_chappelle]
 # Killin' Them Softly (2000) full special.
 url = "https://www.youtube.com/watch?v=iMd3YVOjM-Q"
@@ -42,29 +52,37 @@ phrases = ["i'm dave chappelle", "dave chappelle", "chappelle"]
 start = "00:00:00"
 end = "00:05:00"
 
+# STATUS=TODO — Dice Rules opens with the "Clap your hands" chant; even an 8-min
+#               window didn't reach a name announcement. Try a Madison Square
+#               Garden intro or a Comedy Central Roast announcer clip.
 [andrew_dice_clay]
-# Dice Rules (1991) full concert film. Opens with a chant; host intro follows.
 url = "https://www.youtube.com/watch?v=j9V9UmugmXg"
 phrases = ["andrew dice clay", "i'm andrew dice clay", "the diceman", "dice clay", "diceman"]
 start = "00:00:00"
 end = "00:08:00"
 
+# STATUS=TODO — An Evening at the MET drops straight into the bit; no intro.
+#               Try Inside the Actors Studio (Lipton announces), Carson intro,
+#               or a tribute clip where his name is said.
 [robin_williams]
-# Robin Williams — An Evening at the MET (1986). Crowd chants his name; he intros.
 url = "https://www.youtube.com/watch?v=FtTHfOBbYuk"
 phrases = ["robin williams", "williams"]
 start = "00:00:00"
 end = "00:05:00"
 
+# STATUS=TODO — this clip drops into the standup; Carson intro likely got
+#               trimmed. Try a Tonight Show full upload (with Carson's "ladies
+#               and gentlemen, Rodney Dangerfield!") or a Caddyshack press clip.
 [rodney_dangerfield]
-# Rodney Dangerfield on the Tonight Show (1980). Carson introduces him.
 url = "https://www.youtube.com/watch?v=MecU2keW54I"
 phrases = ["rodney dangerfield", "i'm rodney dangerfield", "dangerfield"]
 start = "00:00:00"
 end = "00:03:00"
 
+# STATUS=TODO — Live in Concert 1979 opens mid-bit; no introduction. Try
+#               Richard Pryor: Live on the Sunset Strip intro, the Mudbone doc,
+#               or any "comedians of the century" clip mentioning his name.
 [richard_pryor]
-# Richard Pryor — Live in Concert (1979) full special, 1080p.
 url = "https://www.youtube.com/watch?v=mrcNZN8MeZE"
 phrases = ["i'm richard pryor", "richard pryor", "pryor"]
 start = "00:00:00"
