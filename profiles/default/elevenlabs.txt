@@ -1,0 +1,11 @@
+# ElevenLabs TTS configuration for the default profile
+# Format: key=value (one per line, comments start with #)
+
+# Voice name (must be in ELEVENLABS_AVAILABLE_VOICES)
+voice=Adam
+
+# Voice stability: 0.0 (more variable) to 1.0 (more consistent)
+stability=0.5
+
+# Similarity boost: 0.0 (more variation) to 1.0 (more similar to training)
+similarity_boost=0.75
