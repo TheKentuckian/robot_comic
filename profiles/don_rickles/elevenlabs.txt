@@ -1,0 +1,11 @@
+# ElevenLabs TTS configuration for the Don Rickles profile
+# Format: key=value (one per line, comments start with #)
+
+# Voice name: Harry for a confident, mature male voice (eventual target: cloned Don Rickles voice)
+voice=Harry
+
+# Voice stability: slightly lower for more personality/variation in comedic delivery
+stability=0.4
+
+# Similarity boost: lower for more variation in tone and emotion
+similarity_boost=0.65

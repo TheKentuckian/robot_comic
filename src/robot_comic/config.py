@@ -95,6 +95,25 @@ GEMINI_TTS_AVAILABLE_VOICES: list[str] = [
 ]
 GEMINI_TTS_DEFAULT_VOICE = "Algenib"
 
+# Voices supported by the ElevenLabs TTS API
+ELEVENLABS_AVAILABLE_VOICES: list[str] = [
+    "Adam",
+    "Bella",
+    "Antoni",
+    "Domi",
+    "Elli",
+    "Gigi",
+    "Freya",
+    "Harry",
+    "Liam",
+    "Rachel",
+    "River",
+    "Sam",
+]
+ELEVENLABS_DEFAULT_VOICE = "Adam"
+ELEVENLABS_API_KEY_ENV = "ELEVENLABS_API_KEY"
+ELEVENLABS_OUTPUT = "elevenlabs"
+
 OPENAI_BACKEND = "openai"
 GEMINI_BACKEND = "gemini"
 HF_BACKEND = "huggingface"
@@ -157,6 +176,7 @@ LOCAL_STT_OUTPUT_LABELS = {
     GEMINI_TTS_OUTPUT: "Local STT + Gemini TTS",
     CHATTERBOX_OUTPUT: "Local STT + Chatterbox TTS",
     LLAMA_GEMINI_TTS_OUTPUT: "Local STT + llama.cpp + Gemini TTS",
+    ELEVENLABS_OUTPUT: "Local STT + ElevenLabs TTS",
 }
 DEFAULT_VOICE_BY_BACKEND = {
     OPENAI_BACKEND: OPENAI_DEFAULT_VOICE,
@@ -175,7 +195,7 @@ LOCAL_STT_DEFAULT_PROVIDER = "moonshine"
 LOCAL_STT_DEFAULT_CACHE_DIR = "./cache/moonshine_voice"
 
 LOCAL_STT_DEFAULT_RESPONSE_BACKEND = OPENAI_BACKEND
-LOCAL_STT_RESPONSE_BACKEND_CHOICES = (OPENAI_BACKEND, HF_BACKEND, GEMINI_TTS_OUTPUT, CHATTERBOX_OUTPUT, LLAMA_GEMINI_TTS_OUTPUT)
+LOCAL_STT_RESPONSE_BACKEND_CHOICES = (OPENAI_BACKEND, HF_BACKEND, GEMINI_TTS_OUTPUT, CHATTERBOX_OUTPUT, LLAMA_GEMINI_TTS_OUTPUT, ELEVENLABS_OUTPUT)
 LOCAL_STT_DEFAULT_LANGUAGE = "en"
 LOCAL_STT_DEFAULT_MODEL = "tiny_streaming"
 LOCAL_STT_MODEL_CHOICES = ("tiny_streaming", "small_streaming")
@@ -490,6 +510,7 @@ class Config:
     # Required (one of these depending on BACKEND_PROVIDER)
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # The key is downloaded in console.py if needed
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    ELEVENLABS_API_KEY = os.getenv(ELEVENLABS_API_KEY_ENV)
 
     # Optional
     BACKEND_PROVIDER = _normalize_backend_provider(
@@ -621,6 +642,7 @@ def refresh_runtime_config_from_env() -> None:
     """Refresh mutable runtime config fields from the current environment."""
     config.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     config.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    config.ELEVENLABS_API_KEY = os.getenv(ELEVENLABS_API_KEY_ENV)
     config.BACKEND_PROVIDER = _normalize_backend_provider(
         os.getenv("BACKEND_PROVIDER"),
         os.getenv("MODEL_NAME"),
