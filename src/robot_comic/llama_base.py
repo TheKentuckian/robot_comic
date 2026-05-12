@@ -270,84 +270,99 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
             if not bg_tools:
                 return
 
-            tool_results = await self._await_tool_results(bg_tools)
-            # Only feed non-empty results back to the LLM; pure action tools
-            # (e.g. dance) return {} and need no follow-up.
-            results_with_data = {cid: res for cid, res in tool_results.items() if res}
-            if not results_with_data:
-                return
+            # Follow-up loop: handles multi-turn tool chains (e.g. greet → play_emotion → speak).
+            # Phase-1 tools may trigger more tool calls; we keep dispatching until the model
+            # produces spoken text or exhausts the depth limit.
+            _MAX_FOLLOW_UP = 4
+            for _phase_n in range(2, 2 + _MAX_FOLLOW_UP):
+                tool_results = await self._await_tool_results(bg_tools)
+                # Pure-action tools (e.g. dance) return {}; no LLM follow-up needed.
+                results_with_data = {cid: res for cid, res in tool_results.items() if res}
+                if not results_with_data:
+                    return
 
-            for call_id, result in results_with_data.items():
-                self._conversation_history.append({
-                    "role": "tool",
-                    "content": json.dumps(result),
-                    "tool_call_id": call_id,
-                })
+                for call_id, result in results_with_data.items():
+                    self._conversation_history.append({
+                        "role": "tool",
+                        "content": json.dumps(result),
+                        "tool_call_id": call_id,
+                    })
 
-            _llm2_span = _tracer.start_span(
-                "llm.request",
-                attributes={
-                    "gen_ai.system": "llama_cpp",
-                    "gen_ai.operation.name": "chat",
-                    "llm.phase": "2",
-                },
-            )
-            # Qwen3 /no_think nudge: after a tool result, the llama.cpp template
-            # may ignore enable_thinking=False and enter think-only mode. Injecting
-            # a user message with /no_think prefix is the Qwen3-native override.
-            _PHASE2_NUDGE = [{"role": "user", "content": "/no_think"}]
-            _llm2_start = time.perf_counter()
-            try:
-                follow_up_text, _, _ = await self._call_llm(extra_messages=_PHASE2_NUDGE)
-            except Exception as exc:
-                logger.warning("Phase-2 LLM call failed: %s", exc)
-                _outcome = "llm_error"
-                return
-            finally:
-                _llm2_span.end()
-                telemetry.record_llm_duration(
-                    time.perf_counter() - _llm2_start,
-                    {"gen_ai.system": "llama_cpp", "gen_ai.operation.name": "chat"},
-                )
-
-            if not follow_up_text:
-                logger.warning("Phase-2 LLM returned empty text despite /no_think nudge; retrying once")
-                _llm2r_span = _tracer.start_span(
+                _llm_fu_span = _tracer.start_span(
                     "llm.request",
                     attributes={
                         "gen_ai.system": "llama_cpp",
                         "gen_ai.operation.name": "chat",
-                        "llm.phase": "2-retry",
+                        "llm.phase": str(_phase_n),
                     },
                 )
-                _llm2r_start = time.perf_counter()
+                _llm_fu_start = time.perf_counter()
                 try:
-                    follow_up_text, _, _ = await self._call_llm(extra_messages=_PHASE2_NUDGE)
+                    fu_text, fu_tool_calls, fu_raw = await self._call_llm()
                 except Exception as exc:
-                    logger.warning("Phase-2 LLM retry failed: %s", exc)
+                    logger.warning("Follow-up LLM phase %d failed: %s", _phase_n, exc)
+                    _outcome = "llm_error"
                     return
                 finally:
-                    _llm2r_span.end()
+                    _llm_fu_span.end()
                     telemetry.record_llm_duration(
-                        time.perf_counter() - _llm2r_start,
+                        time.perf_counter() - _llm_fu_start,
                         {"gen_ai.system": "llama_cpp", "gen_ai.operation.name": "chat"},
                     )
-                if not follow_up_text:
-                    logger.warning("Phase-2 LLM retry also returned empty text; skipping TTS")
+
+                self._conversation_history.append(fu_raw)
+
+                if fu_tool_calls:
+                    logger.info(
+                        "Follow-up phase %d: dispatching %d more tool calls",
+                        _phase_n, len(fu_tool_calls),
+                    )
+                    bg_tools = await self._start_tool_calls(fu_tool_calls)
+                    if fu_text:
+                        await self.output_queue.put(
+                            AdditionalOutputs({"role": "assistant", "content": fu_text})
+                        )
+                        _tts_fu_span = _tracer.start_span(
+                            "tts.synthesize", attributes={"gen_ai.system": self._TTS_SYSTEM}
+                        )
+                        _tts_fu_start = time.perf_counter()
+                        try:
+                            await self._synthesize_and_enqueue(fu_text, tts_start=_tts_fu_start)
+                        finally:
+                            telemetry.record_tts(
+                                time.perf_counter() - _tts_fu_start,
+                                {"gen_ai.system": self._TTS_SYSTEM},
+                            )
+                            _tts_fu_span.end()
+                    if not bg_tools:
+                        return
+                    continue  # await next round of tool results
+
+                # No more tool calls — this is the final spoken response.
+                if not fu_text:
+                    logger.warning(
+                        "Follow-up phase %d: no text and no tool calls; skipping TTS",
+                        _phase_n,
+                    )
                     return
-            self._conversation_history.append({"role": "assistant", "content": follow_up_text})
-            await self.output_queue.put(
-                AdditionalOutputs({"role": "assistant", "content": follow_up_text})
-            )
-            _tts2_span = _tracer.start_span("tts.synthesize", attributes={"gen_ai.system": self._TTS_SYSTEM})
-            _tts2_start = time.perf_counter()
-            try:
-                await self._synthesize_and_enqueue(follow_up_text, tts_start=_tts2_start)
-            finally:
-                telemetry.record_tts(
-                    time.perf_counter() - _tts2_start, {"gen_ai.system": self._TTS_SYSTEM}
+
+                await self.output_queue.put(
+                    AdditionalOutputs({"role": "assistant", "content": fu_text})
                 )
-                _tts2_span.end()
+                _tts_fu_span = _tracer.start_span(
+                    "tts.synthesize", attributes={"gen_ai.system": self._TTS_SYSTEM}
+                )
+                _tts_fu_start = time.perf_counter()
+                try:
+                    await self._synthesize_and_enqueue(fu_text, tts_start=_tts_fu_start)
+                finally:
+                    telemetry.record_tts(
+                        time.perf_counter() - _tts_fu_start, {"gen_ai.system": self._TTS_SYSTEM}
+                    )
+                    _tts_fu_span.end()
+                return
+
+            logger.warning("Follow-up tool chain exceeded max depth (%d); stopping.", _MAX_FOLLOW_UP)
 
         finally:
             _otel_context.detach(_turn_ctx_token)
