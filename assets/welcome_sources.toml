@@ -1,0 +1,45 @@
+# Welcome Gate — per-comedian YouTube source config.
+#
+# For each real-comedian profile we extract a short "this is me saying my name"
+# clip from YouTube. Fill in `url` with a stand-up / interview clip where the
+# comedian clearly says one of the configured phrases (first match wins).
+#
+# Schema:
+#   url      = full YouTube URL
+#   phrases  = list of lowercase phrases to scan for, in priority order
+#   start    = optional "HH:MM:SS" — only transcribe from this point
+#   end      = optional "HH:MM:SS" — only transcribe up to this point
+#
+# Narrowing the [start, end] window dramatically speeds up transcription.
+
+[don_rickles]
+url = ""  # TODO: fill in with a clip where Rickles says his name
+phrases = ["i'm don rickles", "don rickles here", "don rickles", "rickles"]
+
+[bill_hicks]
+url = ""  # TODO
+phrases = ["i'm bill hicks", "bill hicks", "hicks"]
+
+[george_carlin]
+url = ""  # TODO
+phrases = ["i'm george carlin", "george carlin", "carlin"]
+
+[dave_chappelle]
+url = ""  # TODO
+phrases = ["i'm dave chappelle", "dave chappelle", "chappelle"]
+
+[andrew_dice_clay]
+url = ""  # TODO
+phrases = ["i'm andrew dice clay", "andrew dice clay", "the diceman", "dice clay"]
+
+[robin_williams]
+url = ""  # TODO
+phrases = ["i'm robin williams", "robin williams", "williams"]
+
+[rodney_dangerfield]
+url = ""  # TODO
+phrases = ["i'm rodney dangerfield", "rodney dangerfield", "dangerfield"]
+
+[richard_pryor]
+url = ""  # TODO
+phrases = ["i'm richard pryor", "richard pryor", "pryor"]
