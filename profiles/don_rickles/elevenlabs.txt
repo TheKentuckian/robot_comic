@@ -6,10 +6,14 @@
 voice=Harry
 
 # Custom voice ID for a Professional Voice Clone (PVC).
-# To create: cd voice_prep && python pvc_clone.py create "Don Rickles" <wavs...>
-# Then:      python pvc_clone.py train <voice_id>
-#            python pvc_clone.py status <voice_id>   # wait for "completed"
-# Once trained, paste the voice_id below and the handler will use the clone.
+# To create (from repo root):
+#   python scripts/elevenlabs_pvc_clone.py create --profile don_rickles \
+#       "Don Rickles" buythistape1993.wav candidate_standup_0015.wav
+# Then:
+#   python scripts/elevenlabs_pvc_clone.py train <voice_id>
+#   python scripts/elevenlabs_pvc_clone.py status <voice_id> \
+#       --profile don_rickles --write-config   # auto-fills the voice_id below
+# Once trained, voice_id= will be set automatically (or paste it manually).
 # voice_id=
 
 # Voice stability: lower = more variation/personality, higher = more consistent.
