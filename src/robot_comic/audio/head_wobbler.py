@@ -23,9 +23,20 @@ logger = logging.getLogger(__name__)
 class HeadWobbler:
     """Converts audio deltas (base64) into head movement offsets."""
 
-    def __init__(self, set_speech_offsets: Callable[[Tuple[float, float, float, float, float, float]], None]) -> None:
-        """Initialize the head wobbler."""
+    def __init__(
+        self,
+        set_speech_offsets: Callable[[Tuple[float, float, float, float, float, float]], None],
+        speed_factor_getter: Callable[[], float] | None = None,
+    ) -> None:
+        """Initialize the head wobbler.
+
+        speed_factor_getter, if provided, returns the current movement speed
+        multiplier; wobble offset magnitudes are scaled by it so slow speeds
+        produce calmer head motion. The oscillator frequencies are left
+        untouched to preserve sync with speech rhythm.
+        """
         self._apply_offsets = set_speech_offsets
+        self._speed_factor_getter = speed_factor_getter or (lambda: 1.0)
         self._base_ts: float | None = None
         self._hops_done: int = 0
 
@@ -143,13 +154,21 @@ class HeadWobbler:
                                 break
 
                     r = results[i]
+                    try:
+                        speed_scale = float(self._speed_factor_getter())
+                    except Exception:
+                        speed_scale = 1.0
+                    if speed_scale < 0.1:
+                        speed_scale = 0.1
+                    elif speed_scale > 2.0:
+                        speed_scale = 2.0
                     offsets = (
-                        r["x_mm"] / 1000.0,
-                        r["y_mm"] / 1000.0,
-                        r["z_mm"] / 1000.0,
-                        r["roll_rad"],
-                        r["pitch_rad"],
-                        r["yaw_rad"],
+                        r["x_mm"] / 1000.0 * speed_scale,
+                        r["y_mm"] / 1000.0 * speed_scale,
+                        r["z_mm"] / 1000.0 * speed_scale,
+                        r["roll_rad"] * speed_scale,
+                        r["pitch_rad"] * speed_scale,
+                        r["yaw_rad"] * speed_scale,
                     )
 
                     with self._state_lock:

@@ -206,7 +206,10 @@ def run(
     )
     logger.info("Startup: +%.2fs movement manager", time.perf_counter() - _t0)
 
-    head_wobbler = HeadWobbler(set_speech_offsets=movement_manager.set_speech_offsets)
+    head_wobbler = HeadWobbler(
+        set_speech_offsets=movement_manager.set_speech_offsets,
+        speed_factor_getter=lambda: movement_manager.speed_factor,
+    )
 
     def _request_shutdown_from_pause() -> None:
         logger.info("Pause controller requested shutdown")

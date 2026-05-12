@@ -95,9 +95,11 @@ class GotoQueueMove(Move):  # type: ignore
         target_body_yaw: float = 0,
         start_body_yaw: float | None = None,
         duration: float = 1.0,
+        speed_factor: float = 1.0,
     ):
         """Initialize a GotoQueueMove."""
-        self._duration = duration
+        self.speed_factor = max(0.1, min(2.0, speed_factor))
+        self._duration = duration / self.speed_factor
         self.target_head_pose = target_head_pose
         self.start_head_pose = start_head_pose
         self.target_antennas = target_antennas

@@ -100,6 +100,66 @@ def test_request_reset_after_current_audio_handles_16khz_chunks() -> None:
         wobbler.stop()
 
 
+def test_speed_factor_scales_offset_amplitude() -> None:
+    """speed_factor_getter values should scale the magnitude of emitted offsets."""
+
+    def make_wobbler(
+        getter: Callable[[], float] | None,
+    ) -> Tuple[HeadWobbler, List[Tuple[float, float, float, float, float, float]]]:
+        captured: List[Tuple[float, float, float, float, float, float]] = []
+
+        def capture(offsets: Tuple[float, float, float, float, float, float]) -> None:
+            captured.append(offsets)
+
+        wob = HeadWobbler(set_speech_offsets=capture, speed_factor_getter=getter)
+        wob.start()
+        return wob, captured
+
+    full, full_captured = make_wobbler(getter=lambda: 1.0)
+    half, half_captured = make_wobbler(getter=lambda: 0.5)
+    try:
+        # Feed identical audio to both wobblers.
+        chunk = _make_audio_chunk(duration_s=0.5, frequency_hz=220.0)
+        full.feed(chunk)
+        half.feed(chunk)
+        assert _wait_for(lambda: len(full_captured) >= 5 and len(half_captured) >= 5)
+
+        def peak_abs(offsets_list: List[Tuple[float, float, float, float, float, float]]) -> float:
+            return max(max(abs(v) for v in o) for o in offsets_list)
+
+        full_peak = peak_abs(full_captured)
+        half_peak = peak_abs(half_captured)
+        # half should be roughly half the amplitude of full; allow loose tolerance
+        # because the two wobblers may not align perfectly in time.
+        assert full_peak > 0
+        assert half_peak < full_peak * 0.75
+    finally:
+        full.stop()
+        half.stop()
+
+
+def test_speed_factor_clamped() -> None:
+    """Out-of-range speed_factor values should be clamped to [0.1, 2.0]."""
+    captured: List[Tuple[float, float, float, float, float, float]] = []
+
+    def capture(offsets: Tuple[float, float, float, float, float, float]) -> None:
+        captured.append(offsets)
+
+    huge, tiny = 999.0, -1.0
+    factors = iter([huge, tiny])
+
+    wob = HeadWobbler(set_speech_offsets=capture, speed_factor_getter=lambda: next(factors, 1.0))
+    wob.start()
+    try:
+        wob.feed(_make_audio_chunk(duration_s=0.3))
+        assert _wait_for(lambda: len(captured) >= 2)
+        # Should not crash; values stay bounded by 2x the natural amplitude.
+        peak = max(max(abs(v) for v in o) for o in captured)
+        assert peak < 1.0  # natural offsets are tiny; 2x cap keeps them well under 1 unit
+    finally:
+        wob.stop()
+
+
 def test_reset_during_inflight_chunk_keeps_worker(monkeypatch: Any) -> None:
     """Simulate reset during chunk processing to ensure the worker survives."""
     wobbler, captured = _start_wobbler()
