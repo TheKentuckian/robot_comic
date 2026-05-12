@@ -8,35 +8,35 @@ Select via:
     LOCAL_STT_RESPONSE_BACKEND=llama_gemini_tts
 """
 
-import time
-import base64
 import asyncio
+import base64
 import logging
-from typing import Optional
+import time
+from typing import Any, Optional
 
-from google import genai
+import numpy as np
 from fastrtc import AdditionalOutputs
+from google import genai
 from google.genai import types
 
 from robot_comic import telemetry
+from robot_comic.chatterbox_tag_translator import translate
+from robot_comic.llama_base import BaseLlamaResponseHandler, _OUTPUT_SAMPLE_RATE, split_sentences
 from robot_comic.config import (
-    LLAMA_GEMINI_TTS_OUTPUT,
-    GEMINI_TTS_DEFAULT_VOICE,
     GEMINI_TTS_AVAILABLE_VOICES,
+    GEMINI_TTS_DEFAULT_VOICE,
+    LLAMA_GEMINI_TTS_OUTPUT,
     config,
 )
-from robot_comic.gemini_tts import GEMINI_TTS_MODEL, _TTS_EXCLUSIVE_VOICES
-from robot_comic.llama_base import _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
 from robot_comic.gemini_retry import (
     compute_backoff,
     is_rate_limit_error,
     describe_quota_failure,
     extract_retry_after_seconds,
 )
-from robot_comic.tools.core_tools import ToolDependencies
+from robot_comic.gemini_tts import GEMINI_TTS_MODEL, _TTS_EXCLUSIVE_VOICES
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
-from robot_comic.chatterbox_tag_translator import translate
-
+from robot_comic.tools.core_tools import ToolDependencies
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,10 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
         self._client: genai.Client | None = None
         # Only restore voices valid for Gemini TTS (not Gemini Live voices)
         self._voice_override = startup_voice if startup_voice in _TTS_EXCLUSIVE_VOICES else None
+        # Tracks the most recent TTS-call outcome so the synthesizer can
+        # surface a rate-limit-specific message to the chat UI.
+        self._last_tts_rate_limited: bool = False
+        self._last_tts_quota: str | None = None
 
     def copy(self) -> "LlamaGeminiTTSResponseHandler":
         return LlamaGeminiTTSResponseHandler(
@@ -125,7 +129,9 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
         clean_text = " ".join(seg.text for seg in segments if seg.text).strip()
 
         if not clean_text:
-            await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": "[TTS error]"}))
+            await self.output_queue.put(
+                AdditionalOutputs({"role": "assistant", "content": "[TTS error]"})
+            )
             return
 
         sentences = split_sentences(clean_text) or [clean_text]
@@ -137,15 +143,21 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
                 logger.warning("Gemini TTS returned None for sentence: %r", sentence[:60])
                 continue
             if first_chunk and tts_start is not None:
-                telemetry.record_tts_first_audio(time.perf_counter() - tts_start, {"gen_ai.system": "gemini_tts"})
+                telemetry.record_tts_first_audio(
+                    time.perf_counter() - tts_start, {"gen_ai.system": "gemini_tts"}
+                )
                 first_chunk = False
             for frame in self._pcm_to_frames(pcm_bytes):
                 await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
             any_audio = True
 
         if not any_audio:
+            if self._last_tts_rate_limited:
+                msg = f"[Gemini TTS rate-limited (quota={self._last_tts_quota or 'unknown'}); try again later]"
+            else:
+                msg = "[TTS error — Gemini TTS failed]"
             await self.output_queue.put(
-                AdditionalOutputs({"role": "assistant", "content": "[TTS error — Gemini TTS failed]"})
+                AdditionalOutputs({"role": "assistant", "content": msg})
             )
 
     async def _call_gemini_tts(self, text: str) -> bytes | None:
@@ -154,10 +166,14 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.get_current_voice())
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name=self.get_current_voice()
+                    )
                 )
             ),
         )
+        self._last_tts_rate_limited = False
+        self._last_tts_quota = None
         for attempt in range(_TTS_MAX_RETRIES):
             try:
                 response = await self._client.aio.models.generate_content(
@@ -172,6 +188,8 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
                 if rate_limited:
                     quota = describe_quota_failure(exc)
                     retry_after = extract_retry_after_seconds(exc)
+                    self._last_tts_rate_limited = True
+                    self._last_tts_quota = quota
                     logger.warning(
                         "Gemini TTS 429 (quota=%s, attempt %d/%d); retry-after=%s",
                         quota,
@@ -187,13 +205,15 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
                     await asyncio.sleep(delay)
                 elif rate_limited:
                     logger.error(
-                        "Gemini TTS exhausted %d retries on 429 (quota=%s); skipping audio for this turn",
+                        "Gemini TTS exhausted %d retries on 429 (quota=%s); "
+                        "skipping audio for this turn",
                         _TTS_MAX_RETRIES,
                         describe_quota_failure(exc),
                     )
                 else:
                     logger.error(
-                        "Gemini TTS exhausted %d retries (last error: %s); skipping audio for this turn",
+                        "Gemini TTS exhausted %d retries (last error: %s); "
+                        "skipping audio for this turn",
                         _TTS_MAX_RETRIES,
                         exc,
                     )

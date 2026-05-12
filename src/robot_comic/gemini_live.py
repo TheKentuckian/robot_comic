@@ -13,7 +13,6 @@ import json
 import time
 import uuid
 import base64
-import random
 import asyncio
 import logging
 from typing import Any, Dict, List, Final, Tuple, Optional
@@ -37,6 +36,12 @@ from robot_comic.config import (
     config,
 )
 from robot_comic.prompts import get_session_voice, get_session_instructions
+from robot_comic.gemini_retry import (
+    compute_backoff,
+    is_rate_limit_error,
+    describe_quota_failure,
+    extract_retry_after_seconds,
+)
 from robot_comic.tools.core_tools import (
     ToolDependencies,
     get_active_tool_specs,
@@ -416,19 +421,34 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
                 await self._run_live_session()
                 return
             except Exception as e:
-                logger.warning(
-                    "Gemini Live session closed unexpectedly (attempt %d/%d): %s",
-                    attempt,
-                    max_attempts,
-                    e,
-                )
+                rate_limited = is_rate_limit_error(e)
+                if rate_limited:
+                    logger.warning(
+                        "Gemini Live rate-limited (quota=%s, attempt %d/%d): %s",
+                        describe_quota_failure(e),
+                        attempt,
+                        max_attempts,
+                        e,
+                    )
+                else:
+                    logger.warning(
+                        "Gemini Live session closed unexpectedly (attempt %d/%d): %s",
+                        attempt,
+                        max_attempts,
+                        e,
+                    )
                 if attempt < max_attempts:
-                    base_delay = 2 ** (attempt - 1)
-                    jitter = random.uniform(0, 0.5)
-                    delay = base_delay + jitter
+                    retry_after = extract_retry_after_seconds(e) if rate_limited else None
+                    delay = compute_backoff(attempt - 1, base_delay=1.0, retry_after_s=retry_after)
                     logger.info("Retrying in %.1f seconds...", delay)
                     await asyncio.sleep(delay)
                     continue
+                if rate_limited:
+                    logger.error(
+                        "Gemini Live exhausted %d retries on rate-limit (quota=%s); giving up",
+                        max_attempts,
+                        describe_quota_failure(e),
+                    )
                 raise
             finally:
                 self.session = None

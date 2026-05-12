@@ -221,3 +221,123 @@ async def test_llama_gemini_tts_429_backs_off() -> None:
 
     assert result is not None
     assert sleep_calls and sleep_calls[0] >= 3.0
+
+
+@pytest.mark.asyncio
+async def test_dispatch_surfaces_rate_limit_specific_message_to_ui() -> None:
+    """On TTS exhaustion via 429, the chat-UI message names the quota, not generic."""
+    from fastrtc import AdditionalOutputs
+
+    handler = _make_handler()
+
+    async def fake_llm() -> str:
+        return "hello world"
+
+    async def failing_tts(text: str) -> bytes | None:
+        # Simulate _call_tts_with_retry having exhausted retries on 429.
+        handler._last_tts_rate_limited = True
+        handler._last_tts_quota = "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+        return None
+
+    handler._run_llm_with_tools = fake_llm  # type: ignore[method-assign]
+    handler._call_tts_with_retry = failing_tts  # type: ignore[method-assign]
+
+    await handler._dispatch_completed_transcript("hi")
+
+    items: list = []
+    while not handler.output_queue.empty():
+        items.append(handler.output_queue.get_nowait())
+
+    rate_limit_msgs = [
+        i
+        for i in items
+        if isinstance(i, AdditionalOutputs) and "rate-limited" in str(i.args).lower() and "free_tier" in str(i.args)
+    ]
+    assert rate_limit_msgs, f"expected a rate-limit-specific message; got {items!r}"
+
+
+@pytest.mark.asyncio
+async def test_gemini_live_reconnect_loop_uses_retry_after_on_429() -> None:
+    """When the Live session raises a 429, the reconnect loop honours Retry-After."""
+    import logging
+    from robot_comic.gemini_live import GeminiLiveHandler
+
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = GeminiLiveHandler(deps)
+
+    err = _make_429(retry_delay="4s")
+    call_count = 0
+
+    async def flaky_session() -> None:
+        nonlocal call_count
+        call_count += 1
+        # Raise three times to force exhaustion and exercise the final ERROR log.
+        raise err
+
+    handler._run_live_session = flaky_session  # type: ignore[method-assign]
+
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    caplog_logger = logging.getLogger("robot_comic.gemini_live")
+    records: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    cap = _Capture()
+    caplog_logger.addHandler(cap)
+    caplog_logger.setLevel(logging.WARNING)
+    try:
+        with patch("robot_comic.gemini_live.asyncio.sleep", new=fake_sleep):
+            try:
+                await handler.start_up()
+            except type(err):
+                pass  # exhaustion re-raises
+    finally:
+        caplog_logger.removeHandler(cap)
+
+    assert call_count == 3
+    # The first inter-attempt sleep should be at least the suggested 4s.
+    assert sleep_calls and sleep_calls[0] >= 4.0
+    # WARN lines include the quota descriptor.
+    warn_msgs = [r.getMessage() for r in records if r.levelno == logging.WARNING]
+    assert any("rate-limited" in m and "free_tier" in m for m in warn_msgs)
+    # And on exhaustion an ERROR line surfaces.
+    error_msgs = [r.getMessage() for r in records if r.levelno >= logging.ERROR]
+    assert any("exhausted" in m and "rate-limit" in m for m in error_msgs)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_uses_generic_message_for_non_rate_limit_failure() -> None:
+    """Non-429 TTS failures keep the original generic error message."""
+    from fastrtc import AdditionalOutputs
+
+    handler = _make_handler()
+
+    async def fake_llm() -> str:
+        return "hello world"
+
+    async def failing_tts(text: str) -> bytes | None:
+        # _call_tts_with_retry resets these at the start of every call;
+        # leaving them False simulates a non-rate-limit failure.
+        handler._last_tts_rate_limited = False
+        handler._last_tts_quota = None
+        return None
+
+    handler._run_llm_with_tools = fake_llm  # type: ignore[method-assign]
+    handler._call_tts_with_retry = failing_tts  # type: ignore[method-assign]
+
+    await handler._dispatch_completed_transcript("hi")
+
+    items: list = []
+    while not handler.output_queue.empty():
+        items.append(handler.output_queue.get_nowait())
+
+    error_msgs = [
+        i for i in items if isinstance(i, AdditionalOutputs) and "could not generate audio" in str(i.args).lower()
+    ]
+    assert error_msgs, f"expected the generic message; got {items!r}"

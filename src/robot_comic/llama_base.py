@@ -5,8 +5,8 @@ telemetry) without coupling to any specific TTS implementation.
 Concrete subclasses supply _synthesize_and_enqueue() and voice management.
 """
 
-import re
 import json
+import re
 import time
 import uuid
 import asyncio
@@ -21,10 +21,10 @@ from opentelemetry import context as _otel_context
 
 from robot_comic import telemetry
 from robot_comic.config import config
-from robot_comic.prompts import get_session_instructions
-from robot_comic.history_trim import trim_history_in_place
-from robot_comic.tools.core_tools import ToolDependencies, get_active_tool_specs
 from robot_comic.conversation_handler import ConversationHandler
+from robot_comic.history_trim import trim_history_in_place
+from robot_comic.prompts import get_session_instructions
+from robot_comic.tools.core_tools import ToolDependencies, get_active_tool_specs
 from robot_comic.tools.background_tool_manager import (
     BackgroundTool,
     ToolCallRoutine,
@@ -32,11 +32,10 @@ from robot_comic.tools.background_tool_manager import (
     BackgroundToolManager,
 )
 
-
 logger = logging.getLogger(__name__)
 
 _OUTPUT_SAMPLE_RATE = 24000
-_CHUNK_SAMPLES = 2400  # 100 ms at 24 kHz
+_CHUNK_SAMPLES = 2400           # 100 ms at 24 kHz
 _LLM_MAX_RETRIES = 3
 _LLM_RETRY_BASE_DELAY = 1.0
 _TOOL_RESULT_TIMEOUT: float = 5.0
@@ -107,7 +106,6 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
     @property
     def _llama_cpp_url(self) -> str:
         from robot_comic.config import LLAMA_CPP_DEFAULT_URL
-
         return getattr(config, "LLAMA_CPP_URL", LLAMA_CPP_DEFAULT_URL)
 
     # ------------------------------------------------------------------ #
@@ -116,9 +114,10 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _prepare_startup_credentials(self) -> None:
         """Set up the shared HTTP client and tool manager. Subclasses should
-        call super() then add their own credential / client setup.
-        """
-        self._http = httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0))
+        call super() then add their own credential / client setup."""
+        self._http = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0)
+        )
         self.tool_manager.start_up(tool_callbacks=[self._handle_tool_notification])
 
     async def start_up(self) -> None:
@@ -160,7 +159,6 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def apply_personality(self, profile: str | None) -> str:
         from robot_comic.config import set_custom_profile
-
         try:
             set_custom_profile(profile)
             self._conversation_history.clear()
@@ -251,7 +249,9 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
             finally:
                 _llm_s = time.perf_counter() - _llm_start
                 _llm_span.end()
-                telemetry.record_llm_duration(_llm_s, {"gen_ai.system": "llama_cpp", "gen_ai.operation.name": "chat"})
+                telemetry.record_llm_duration(
+                    _llm_s, {"gen_ai.system": "llama_cpp", "gen_ai.operation.name": "chat"}
+                )
 
             self._conversation_history.append(raw_message)
 
@@ -259,7 +259,9 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
             if tool_calls:
                 bg_tools = await self._start_tool_calls(tool_calls)
 
-            await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": response_text}))
+            await self.output_queue.put(
+                AdditionalOutputs({"role": "assistant", "content": response_text})
+            )
             _tts_span = _tracer.start_span("tts.synthesize", attributes={"gen_ai.system": self._TTS_SYSTEM})
             _tts_start = time.perf_counter()
             try:
@@ -284,13 +286,11 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                     return
 
                 for call_id, result in results_with_data.items():
-                    self._conversation_history.append(
-                        {
-                            "role": "tool",
-                            "content": json.dumps(result),
-                            "tool_call_id": call_id,
-                        }
-                    )
+                    self._conversation_history.append({
+                        "role": "tool",
+                        "content": json.dumps(result),
+                        "tool_call_id": call_id,
+                    })
 
                 _llm_fu_span = _tracer.start_span(
                     "llm.request",
@@ -319,12 +319,13 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                 if fu_tool_calls:
                     logger.info(
                         "Follow-up phase %d: dispatching %d more tool calls",
-                        _phase_n,
-                        len(fu_tool_calls),
+                        _phase_n, len(fu_tool_calls),
                     )
                     bg_tools = await self._start_tool_calls(fu_tool_calls)
                     if fu_text:
-                        await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": fu_text}))
+                        await self.output_queue.put(
+                            AdditionalOutputs({"role": "assistant", "content": fu_text})
+                        )
                         _tts_fu_span = _tracer.start_span(
                             "tts.synthesize", attributes={"gen_ai.system": self._TTS_SYSTEM}
                         )
@@ -349,13 +350,19 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                     )
                     return
 
-                await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": fu_text}))
-                _tts_fu_span = _tracer.start_span("tts.synthesize", attributes={"gen_ai.system": self._TTS_SYSTEM})
+                await self.output_queue.put(
+                    AdditionalOutputs({"role": "assistant", "content": fu_text})
+                )
+                _tts_fu_span = _tracer.start_span(
+                    "tts.synthesize", attributes={"gen_ai.system": self._TTS_SYSTEM}
+                )
                 _tts_fu_start = time.perf_counter()
                 try:
                     await self._synthesize_and_enqueue(fu_text, tts_start=_tts_fu_start)
                 finally:
-                    telemetry.record_tts(time.perf_counter() - _tts_fu_start, {"gen_ai.system": self._TTS_SYSTEM})
+                    telemetry.record_tts(
+                        time.perf_counter() - _tts_fu_start, {"gen_ai.system": self._TTS_SYSTEM}
+                    )
                     _tts_fu_span.end()
                 return
 
@@ -370,7 +377,9 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                 {"robot.mode": self._BACKEND_LABEL, "turn.outcome": _outcome},
             )
 
-    async def _start_tool_calls(self, tool_calls: list[dict[str, Any]]) -> list[tuple[str, BackgroundTool]]:
+    async def _start_tool_calls(
+        self, tool_calls: list[dict[str, Any]]
+    ) -> list[tuple[str, BackgroundTool]]:
         """Dispatch tool calls; return (call_id, BackgroundTool) pairs."""
         results: list[tuple[str, BackgroundTool]] = []
         for tc in tool_calls:
@@ -401,8 +410,9 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         timeout: float = _TOOL_RESULT_TIMEOUT,
     ) -> dict[str, dict[str, Any]]:
         """Await all tool tasks concurrently; return results that arrived within timeout."""
-
-        async def _wait_one(call_id: str, bg_tool: BackgroundTool) -> tuple[str, dict[str, Any] | None]:
+        async def _wait_one(
+            call_id: str, bg_tool: BackgroundTool
+        ) -> tuple[str, dict[str, Any] | None]:
             if bg_tool._task is None:
                 return call_id, None
             try:
@@ -440,7 +450,8 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         # Convert flat spec format → Chat Completions nested format:
         # {"type":"function","name":..} → {"type":"function","function":{...}}
         chat_tools = [
-            {"type": "function", "function": {k: v for k, v in t.items() if k != "type"}} for t in tool_specs
+            {"type": "function", "function": {k: v for k, v in t.items() if k != "type"}}
+            for t in tool_specs
         ]
 
         payload: dict[str, Any] = {
@@ -484,11 +495,7 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                     raise
                 logger.warning(
                     "LLM attempt %d/%d failed: %s: %s; retrying in %.1fs",
-                    attempt + 1,
-                    _LLM_MAX_RETRIES,
-                    type(exc).__name__,
-                    exc,
-                    delay,
+                    attempt + 1, _LLM_MAX_RETRIES, type(exc).__name__, exc, delay,
                 )
                 await asyncio.sleep(delay)
                 delay *= 2
@@ -507,7 +514,7 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
     def _pcm_to_frames(pcm_bytes: bytes) -> list[np.ndarray]:
         audio = np.frombuffer(pcm_bytes, dtype=np.int16)
         return [
-            audio[i : i + _CHUNK_SAMPLES]
+            audio[i: i + _CHUNK_SAMPLES]
             for i in range(0, len(audio), _CHUNK_SAMPLES)
-            if len(audio[i : i + _CHUNK_SAMPLES]) > 0
+            if len(audio[i: i + _CHUNK_SAMPLES]) > 0
         ]
