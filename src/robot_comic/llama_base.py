@@ -39,7 +39,7 @@ _OUTPUT_SAMPLE_RATE = 24000
 _CHUNK_SAMPLES = 2400  # 100 ms at 24 kHz
 _LLM_MAX_RETRIES = 3
 _LLM_RETRY_BASE_DELAY = 1.0
-_TOOL_RESULT_TIMEOUT: float = 5.0
+_TOOL_RESULT_TIMEOUT: float = 30.0
 # Extra seconds added after the last audio frame to cover device-buffer latency.
 _ECHO_COOLDOWN_S: float = 0.5
 
