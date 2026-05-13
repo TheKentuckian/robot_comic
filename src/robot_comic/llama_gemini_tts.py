@@ -16,7 +16,6 @@ from typing import Optional
 
 from google import genai
 from fastrtc import AdditionalOutputs
-from google.genai import types
 
 from robot_comic import telemetry
 from robot_comic.config import (
@@ -25,25 +24,27 @@ from robot_comic.config import (
     GEMINI_TTS_AVAILABLE_VOICES,
     config,
 )
-from robot_comic.gemini_retry import (
-    compute_backoff,
-    is_rate_limit_error,
-    describe_quota_failure,
-    extract_retry_after_seconds,
-)
 from robot_comic.gemini_tts import (
     SHORT_PAUSE_MS,
     SHORT_PAUSE_TAG,
     GEMINI_TTS_MODEL,
     _TTS_EXCLUSIVE_VOICES,
     _silence_pcm,
+    _build_tts_config,
+    _build_tts_contents,
     extract_delivery_tags,
     build_tts_system_instruction,
     load_profile_tts_instruction,
 )
 from robot_comic.llama_base import _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
-from robot_comic.local_stt_realtime import LocalSTTInputMixin
+from robot_comic.gemini_retry import (
+    compute_backoff,
+    is_rate_limit_error,
+    describe_quota_failure,
+    extract_retry_after_seconds,
+)
 from robot_comic.tools.core_tools import ToolDependencies
+from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.chatterbox_tag_translator import strip_gemini_tags
 
 
@@ -170,22 +171,15 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
     async def _call_gemini_tts(self, text: str, system_instruction: str | None = None) -> bytes | None:
         assert self._client is not None, "Gemini client not initialised"
         instruction = system_instruction if system_instruction is not None else load_profile_tts_instruction()
-        tts_config = types.GenerateContentConfig(
-            system_instruction=instruction,
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.get_current_voice())
-                )
-            ),
-        )
+        tts_config = _build_tts_config(instruction, self.get_current_voice(), GEMINI_TTS_MODEL)
+        contents = _build_tts_contents(text, instruction, GEMINI_TTS_MODEL)
         self._last_tts_rate_limited = False
         self._last_tts_quota = None
         for attempt in range(_TTS_MAX_RETRIES):
             try:
                 response = await self._client.aio.models.generate_content(
                     model=GEMINI_TTS_MODEL,
-                    contents=text,
+                    contents=contents,
                     config=tts_config,
                 )
                 data = response.candidates[0].content.parts[0].inline_data.data  # type: ignore[index,union-attr]
