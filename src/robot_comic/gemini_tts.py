@@ -114,6 +114,54 @@ def build_tts_system_instruction(base: str, tags: list[str]) -> str:
     return f"{base}\n\nDelivery cues for this line: {cues}."
 
 
+# Models that do NOT support system_instruction (400 INVALID_ARGUMENT).
+# For these models, delivery cues are prepended to the user text instead.
+_TTS_NO_SYSTEM_INSTRUCTION_MODELS: frozenset[str] = frozenset(
+    {
+        "gemini-3.1-flash-tts-preview",
+    }
+)
+
+
+def _build_tts_contents(text: str, instruction: str, model: str) -> str:
+    """Return the TTS request content string.
+
+    For models that reject ``system_instruction``, the instruction is prepended
+    to the spoken text as a parenthetical cue so the model still gets the styling
+    hint without using the unsupported field.
+    """
+    if model in _TTS_NO_SYSTEM_INSTRUCTION_MODELS:
+        return f"({instruction}) {text}"
+    return text
+
+
+def _build_tts_config(
+    instruction: str,
+    voice_name: str,
+    model: str,
+) -> "types.GenerateContentConfig":
+    """Return a ``GenerateContentConfig`` appropriate for *model*.
+
+    ``system_instruction`` is omitted for models in
+    ``_TTS_NO_SYSTEM_INSTRUCTION_MODELS`` to avoid 400 INVALID_ARGUMENT errors.
+    """
+    speech_config = types.SpeechConfig(
+        voice_config=types.VoiceConfig(
+            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
+        )
+    )
+    if model in _TTS_NO_SYSTEM_INSTRUCTION_MODELS:
+        return types.GenerateContentConfig(
+            response_modalities=["AUDIO"],
+            speech_config=speech_config,
+        )
+    return types.GenerateContentConfig(
+        system_instruction=instruction,
+        response_modalities=["AUDIO"],
+        speech_config=speech_config,
+    )
+
+
 def _silence_pcm(duration_ms: int, sample_rate: int = GEMINI_TTS_OUTPUT_SAMPLE_RATE) -> bytes:
     """Return raw int16 PCM bytes of silence at *sample_rate* for *duration_ms*."""
     n_samples = int(sample_rate * duration_ms / 1000)
@@ -390,15 +438,8 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         assert self._client is not None, "Client not initialised"
 
         instruction = system_instruction if system_instruction is not None else load_profile_tts_instruction()
-        tts_config = types.GenerateContentConfig(
-            system_instruction=instruction,
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.get_current_voice())
-                )
-            ),
-        )
+        tts_config = _build_tts_config(instruction, self.get_current_voice(), GEMINI_TTS_MODEL)
+        contents = _build_tts_contents(text, instruction, GEMINI_TTS_MODEL)
 
         self._last_tts_rate_limited = False
         self._last_tts_quota = None
@@ -406,7 +447,7 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             try:
                 response = await self._client.aio.models.generate_content(
                     model=GEMINI_TTS_MODEL,
-                    contents=text,
+                    contents=contents,
                     config=tts_config,
                 )
                 data = response.candidates[0].content.parts[0].inline_data.data
