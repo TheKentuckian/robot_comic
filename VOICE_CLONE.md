@@ -1,7 +1,52 @@
 # Voice Clone — Local Infrastructure & Don Rickles Clone
 
 > **Living planning document.** Update decisions and check off tasks as they complete.
-> Last updated: 2026-05-10
+> Last updated: 2026-05-13
+
+---
+
+## Per-Persona Voice-Clone Reference Audio (Issue #44)
+
+### Storage Convention
+
+Place the reference clip for each persona at:
+
+```
+profiles/<persona>/voice_clone_ref.wav    ← preferred
+profiles/<persona>/voice_clone_ref.mp3    ← fallback
+profiles/<persona>/voice_clone_ref.flac   ← fallback
+profiles/<persona>/voice_clone_ref.ogg    ← fallback
+```
+
+The loader (`src/robot_comic/chatterbox_voice_clone.py`) tries each extension in
+that order and returns the first match.  Clips are **gitignored** — they are
+copyrighted archival audio that must be provided locally on each machine.
+
+### Clip Guidelines
+
+- Duration: 5–10 seconds of clean speech (no audience, no music bed, no reverb).
+- Sample rate: 22 050 Hz preferred; the Chatterbox server resamples automatically.
+- Format: WAV (mono, 16-bit) gives the most predictable results; MP3/FLAC/OGG
+  also work if that is what you have.
+- Chatterbox zero-shot uses approximately the first 10 s of the reference clip —
+  longer clips are silently truncated.
+
+### How the Loader Wires Into the Pipeline
+
+At handler startup (`_prepare_startup_credentials`), `ChatterboxTTSResponseHandler`
+calls `load_voice_clone_ref(config.PROFILES_DIRECTORY / profile)` and caches the
+result as `self._voice_clone_ref_path`.  On every `/tts` request:
+
+- **Ref found** → payload uses `"audio_prompt_path": "<absolute path>"` so the
+  Chatterbox server reads the local file directly.
+- **Ref absent** → falls back to `"reference_audio_filename": "<voice>.wav"` (the
+  existing server-side predefined-voice behaviour).
+
+### Items 3 & 4 — Intentionally Deferred
+
+- **Item 3 (per-persona baseline calibration)** — requires listening to Chatterbox
+  output with each cloned voice; cannot be done without hardware + ears.
+- **Item 4 (Turbo vs. standard decision)** — also requires on-robot A/B comparison.
 
 ---
 

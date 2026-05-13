@@ -78,6 +78,12 @@ profiles/don_rickles/voice_prep/*.wav
 # Archival/copyrighted source — keep local, never commit.
 profiles/*/voice_ref.wav
 
+# Per-persona Chatterbox voice-clone reference audio (copyrighted archival clips).
+profiles/*/voice_clone_ref.wav
+profiles/*/voice_clone_ref.mp3
+profiles/*/voice_clone_ref.flac
+profiles/*/voice_clone_ref.ogg
+
 # Per-profile ElevenLabs overrides — keep cloned voice_ids out of public commits.
 # The non-local elevenlabs.txt is committed; .local.txt overlays it at runtime.
 profiles/*/elevenlabs.local.txt
