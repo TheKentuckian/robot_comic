@@ -32,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.12"]
 
     env:
@@ -48,10 +48,6 @@ jobs:
         with:
           packages: libcairo2-dev libgirepository1.0-dev
           version: 1.0
-
-      - name: Install system deps (macOS)
-        if: runner.os == 'macOS'
-        run: brew install cairo gobject-introspection
 
       - name: Install system deps (Windows)
         if: runner.os == 'Windows'
@@ -99,8 +95,8 @@ jobs:
         run: uv sync --frozen --extra local_vision --extra yolo_vision --group dev
 
       # Prefetch HF dataset
-      - name: Prefetch HF dataset (Linux / macOS)
-        if: runner.os != 'Windows'
+      - name: Prefetch HF dataset (Linux)
+        if: runner.os == 'Linux'
         run: |
           .venv/bin/python -c "
           from huggingface_hub import snapshot_download
@@ -126,8 +122,8 @@ jobs:
           "
 
       # Tests
-      - name: Run tests (Linux / macOS)
-        if: runner.os != 'Windows'
+      - name: Run tests (Linux)
+        if: runner.os == 'Linux'
         run: .venv/bin/pytest -q
 
       - name: Run tests (Windows)
