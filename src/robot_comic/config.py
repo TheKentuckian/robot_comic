@@ -601,11 +601,10 @@ class Config:
     WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
     WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None
 
-    # Head-motion safety — per-axis angular velocity cap (rad/s).
-    # Passed to motion_safety.cap_head_velocity() on every control-loop tick.
-    # Default 1.5 rad/s ≈ 86 deg/s; tighten to prevent cowling impact.
-    # See also REACHY_MINI_HEAD_{PITCH,YAW,ROLL}_{MIN,MAX}_DEG in motion_safety.py.
-    HEAD_MAX_VEL_RAD_S = _env_float_clamped("REACHY_MINI_HEAD_MAX_VEL_RAD_S", default=1.5, lo=0.1, hi=10.0)
+    # When set to 1/true, forces the GEMINI TTS DELIVERY TAGS section to be
+    # included in the assembled system prompt regardless of the active backend.
+    # Useful for debugging or testing delivery-tag behaviour on any backend.
+    FORCE_DELIVERY_TAGS = _env_flag("REACHY_MINI_FORCE_DELIVERY_TAGS", default=False)
 
     logger.debug(
         "Backend provider: %s, Model: %s, HF mode: %s, HF session URL set: %s, HF direct URL set: %s, HF_HOME: %s, Vision Model: %s, Local STT: %s/%s/%s response=%s cache=%s",
@@ -745,7 +744,7 @@ def refresh_runtime_config_from_env() -> None:
     config.ROBOT_INSTRUMENTATION = os.getenv("ROBOT_INSTRUMENTATION", "")
     config.WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
     config.WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None
-    config.HEAD_MAX_VEL_RAD_S = _env_float_clamped("REACHY_MINI_HEAD_MAX_VEL_RAD_S", default=1.5, lo=0.1, hi=10.0)
+    config.FORCE_DELIVERY_TAGS = _env_flag("REACHY_MINI_FORCE_DELIVERY_TAGS", default=False)
 
 
 def get_backend_choice(model_name: str | None = None) -> str:
