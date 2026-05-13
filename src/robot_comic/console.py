@@ -659,9 +659,13 @@ class LocalStream:
             if backend == GEMINI_BACKEND and not api_key and not self._has_required_key(GEMINI_BACKEND):
                 return JSONResponse({"ok": False, "error": "empty_key"}, status_code=400)
 
-            local_stt_response_backend = str(
-                payload.local_stt_response_backend or getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
-            ).strip().lower()
+            local_stt_response_backend = (
+                str(
+                    payload.local_stt_response_backend or getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
+                )
+                .strip()
+                .lower()
+            )
             if backend == LOCAL_STT_BACKEND and local_stt_response_backend not in LOCAL_STT_RESPONSE_BACKEND_CHOICES:
                 return JSONResponse({"ok": False, "error": "invalid_local_stt_response_backend"}, status_code=400)
             if (
