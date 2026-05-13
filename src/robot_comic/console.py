@@ -659,11 +659,9 @@ class LocalStream:
             if backend == GEMINI_BACKEND and not api_key and not self._has_required_key(GEMINI_BACKEND):
                 return JSONResponse({"ok": False, "error": "empty_key"}, status_code=400)
 
-            local_stt_response_backend = (
-                (payload.local_stt_response_backend or getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND))
-                .strip()
-                .lower()
-            )
+            local_stt_response_backend = str(
+                payload.local_stt_response_backend or getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
+            ).strip().lower()
             if backend == LOCAL_STT_BACKEND and local_stt_response_backend not in LOCAL_STT_RESPONSE_BACKEND_CHOICES:
                 return JSONResponse({"ok": False, "error": "invalid_local_stt_response_backend"}, status_code=400)
             if (
@@ -961,11 +959,17 @@ class LocalStream:
                 logger.info("Interrupted while waiting for API key.")
                 return
 
+        # launch() requires both handler and robot to be non-None
+        assert self._robot is not None, "launch() requires a robot instance"
+        assert self.handler is not None, "launch() requires a handler instance"
+        _robot = self._robot
+        _handler = self.handler
+
         # Start media after key is set/available
-        self._robot.media.start_recording()
-        self._robot.media.start_playing()
+        _robot.media.start_recording()
+        _robot.media.start_playing()
         time.sleep(1)  # give some time to the pipelines to start
-        apply_audio_startup_config(self._robot, logger=logger)
+        apply_audio_startup_config(_robot, logger=logger)
 
         async def runner() -> None:
             # Capture loop for cross-thread personality actions
@@ -985,7 +989,7 @@ class LocalStream:
                 if self._settings_app is not None:
                     mount_personality_routes(
                         self._settings_app,
-                        self.handler,
+                        _handler,
                         lambda: self._asyncio_loop,
                         persist_personality=self._persist_personality,
                         get_persisted_personality=self._read_persisted_personality,
@@ -997,7 +1001,7 @@ class LocalStream:
             async def _start_up_with_checkpoints() -> None:
                 log_checkpoint("handler.start_up begin", logger)
                 try:
-                    await self.handler.start_up()
+                    await _handler.start_up()
                 except Exception:
                     log_checkpoint("handler.start_up complete", logger)
                     raise
@@ -1021,7 +1025,7 @@ class LocalStream:
                 logger.info("Tasks cancelled during shutdown")
             finally:
                 # Ensure handler connection is closed
-                await self.handler.shutdown()
+                await _handler.shutdown()
 
         asyncio.run(runner())
 
@@ -1038,12 +1042,14 @@ class LocalStream:
         # Stop media pipelines FIRST before cancelling async tasks
         # This ensures clean shutdown before PortAudio cleanup
         try:
-            self._robot.media.stop_recording()
+            if self._robot is not None:
+                self._robot.media.stop_recording()
         except Exception as e:
             logger.debug(f"Error stopping recording (may already be stopped): {e}")
 
         try:
-            self._robot.media.stop_playing()
+            if self._robot is not None:
+                self._robot.media.stop_playing()
         except Exception as e:
             logger.debug(f"Error stopping playback (may already be stopped): {e}")
 
@@ -1058,6 +1064,8 @@ class LocalStream:
     def clear_audio_queue(self) -> None:
         """Flush the player's appsrc to drop any queued audio immediately."""
         logger.info("User intervention: flushing player queue")
+        if self._robot is None or self.handler is None:
+            return
         backend = getattr(self._robot.media, "backend", None)
         audio = getattr(self._robot.media, "audio", None)
         if audio is not None:
@@ -1082,6 +1090,7 @@ class LocalStream:
 
     async def record_loop(self) -> None:
         """Read mic frames from the recorder and forward them to the handler."""
+        assert self._robot is not None and self.handler is not None
         input_sample_rate = self._robot.media.get_input_audio_samplerate()
         logger.debug(f"Audio recording started at {input_sample_rate} Hz")
 
@@ -1095,6 +1104,7 @@ class LocalStream:
         """Fetch outputs from the handler: log text and play audio frames."""
         from scipy.signal import resample
 
+        assert self._robot is not None and self.handler is not None
         while not self._stop_event.is_set():
             handler_output = await self.handler.emit()
 
