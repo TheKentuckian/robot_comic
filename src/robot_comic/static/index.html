@@ -284,12 +284,28 @@
                 <small>On-device Moonshine STT → Ollama LLM → Chatterbox voice-clone TTS. No API key needed.</small>
               </span>
             </label>
+            <label class="output-choice" data-output-card="elevenlabs">
+              <input type="radio" name="local-stt-output" value="elevenlabs" />
+              <span>
+                <strong>ElevenLabs TTS</strong>
+                <small>On-device Moonshine STT → Gemini Flash response → ElevenLabs voice. Requires <code>ELEVENLABS_API_KEY</code>.</small>
+              </span>
+            </label>
+            <label class="output-choice" data-output-card="llama_elevenlabs_tts">
+              <input type="radio" name="local-stt-output" value="llama_elevenlabs_tts" />
+              <span>
+                <strong>llama.cpp + ElevenLabs TTS</strong>
+                <small>On-device Moonshine STT → local llama.cpp LLM → ElevenLabs voice. Requires <code>ELEVENLABS_API_KEY</code> + <code>LLAMA_CPP_URL</code>.</small>
+              </span>
+            </label>
           </div>
           <select id="local-stt-response" class="sr-only" aria-hidden="true" tabindex="-1">
             <option value="openai">OpenAI Realtime</option>
             <option value="huggingface">Hugging Face</option>
             <option value="gemini_tts">Gemini Flash 3.1 TTS</option>
             <option value="chatterbox">Chatterbox TTS</option>
+            <option value="elevenlabs">ElevenLabs TTS</option>
+            <option value="llama_elevenlabs_tts">llama.cpp + ElevenLabs TTS</option>
           </select>
 
           <div id="chatterbox-fields" style="display:none">
@@ -297,6 +313,13 @@
             <input id="chatterbox-url" type="text" placeholder="http://astralplane.lan:8004" autocomplete="off" />
             <label for="chatterbox-voice">Voice name</label>
             <input id="chatterbox-voice" type="text" placeholder="don_rickles" autocomplete="off" />
+          </div>
+
+          <div id="elevenlabs-fields" style="display:none">
+            <label for="elevenlabs-key">ELEVENLABS_API_KEY</label>
+            <input id="elevenlabs-key" type="password" placeholder="sk_..." autocomplete="off" />
+            <label for="elevenlabs-voice">Voice</label>
+            <select id="elevenlabs-voice"></select>
           </div>
 
           <label for="local-stt-model">Local STT model</label>

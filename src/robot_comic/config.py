@@ -113,6 +113,7 @@ ELEVENLABS_AVAILABLE_VOICES: list[str] = [
 ]
 ELEVENLABS_DEFAULT_VOICE = "Adam"
 ELEVENLABS_API_KEY_ENV = "ELEVENLABS_API_KEY"
+ELEVENLABS_VOICE_ENV = "ELEVENLABS_VOICE"
 ELEVENLABS_OUTPUT = "elevenlabs"
 
 OPENAI_BACKEND = "openai"
@@ -514,6 +515,7 @@ class Config:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # The key is downloaded in console.py if needed
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     ELEVENLABS_API_KEY = os.getenv(ELEVENLABS_API_KEY_ENV)
+    ELEVENLABS_VOICE = os.getenv(ELEVENLABS_VOICE_ENV) or ""
 
     # Optional
     BACKEND_PROVIDER = _normalize_backend_provider(
@@ -657,6 +659,7 @@ def refresh_runtime_config_from_env() -> None:
     config.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     config.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     config.ELEVENLABS_API_KEY = os.getenv(ELEVENLABS_API_KEY_ENV)
+    config.ELEVENLABS_VOICE = os.getenv(ELEVENLABS_VOICE_ENV) or ""
     config.BACKEND_PROVIDER = _normalize_backend_provider(
         os.getenv("BACKEND_PROVIDER"),
         os.getenv("MODEL_NAME"),
