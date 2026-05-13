@@ -16,7 +16,7 @@ import time
 import argparse
 import threading
 import subprocess
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 from datetime import datetime
 from collections import defaultdict
 
@@ -71,14 +71,14 @@ def _service_active(unit: str) -> bool:
 class TurnRecord:
     """Aggregates all spans for one conversational turn."""
 
-    def __init__(self, trace_id: str, root: dict, children: list[dict]) -> None:
+    def __init__(self, trace_id: str, root: dict[str, Any], children: list[dict[str, Any]]) -> None:
         """Build a TurnRecord from the root turn span and its buffered children."""
         self.trace_id = trace_id
         self.root = root
         self.children = children
         self.ts = datetime.fromtimestamp(root["ts"] / 1000)
 
-    def _kids(self, name: str) -> list[dict]:
+    def _kids(self, name: str) -> list[dict[str, Any]]:
         return [s for s in self.children if s["name"] == name]
 
     def _sum_ms(self, name: str) -> Optional[float]:
@@ -103,24 +103,24 @@ class TurnRecord:
     @property
     def total_ms(self) -> float:
         """End-to-end turn duration."""
-        return self.root["dur_ms"]
+        return float(self.root["dur_ms"])
 
     @property
     def outcome(self) -> str:
         """Turn outcome attribute."""
-        return self.root["attrs"].get("turn.outcome", "?")
+        return str(self.root["attrs"].get("turn.outcome", "?"))
 
     @property
     def mode(self) -> str:
         """Backend mode (openai, chatterbox, gemini, etc.)."""
-        return self.root["attrs"].get("robot.mode", "?")
+        return str(self.root["attrs"].get("robot.mode", "?"))
 
     @property
     def excerpt(self) -> str:
         """Short label: first few words of transcript, or 'greeting' for startup."""
         val = self.root["attrs"].get("turn.excerpt", "")
         if val:
-            return val
+            return str(val)
         return ""
 
     @property
@@ -158,10 +158,10 @@ class SpanBuffer:
 
     def __init__(self) -> None:
         """Initialise the pending-span store."""
-        self._pending: dict[str, list[dict]] = defaultdict(list)
+        self._pending: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._inflight: dict[str, PendingTurn] = {}
 
-    def ingest(self, span: dict) -> Optional[TurnRecord]:
+    def ingest(self, span: dict[str, Any]) -> Optional[TurnRecord]:
         """Return a completed TurnRecord when the root turn span arrives, else None."""
         trace_id = span["trace"]
         name = span["name"]
@@ -328,13 +328,14 @@ def _iter_file(path: str) -> Iterator[str]:
                 time.sleep(0.05)
 
 
-def _parse_span(line: str) -> Optional[dict]:
+def _parse_span(line: str) -> Optional[dict[str, Any]]:
     """Extract a span dict from a line containing an RCSPAN JSON payload."""
     idx = line.find("RCSPAN ")
     if idx == -1:
         return None
     try:
-        return json.loads(line[idx + 7 :])
+        result: dict[str, Any] = json.loads(line[idx + 7:])
+        return result
     except json.JSONDecodeError:
         return None
 
@@ -391,6 +392,7 @@ def main() -> None:
             svc_text = None
             title_suffix = f"  [dim]{source_label}[/dim]"
 
+        body: Text | Table
         if not turns and pending is None:
             if watch_unit is not None and not _svc_active[0]:
                 body = Text("Service is stopped — start it to see turns.", style="dim italic")
