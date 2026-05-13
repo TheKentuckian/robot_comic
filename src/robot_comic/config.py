@@ -574,6 +574,18 @@ class Config:
     LOCAL_STT_UPDATE_INTERVAL = _normalize_local_stt_update_interval(os.getenv(LOCAL_STT_UPDATE_INTERVAL_ENV))
 
     GEMINI_LIVE_VIDEO_STREAMING = _env_flag("GEMINI_LIVE_VIDEO_STREAMING", default=False)
+
+    # Gemini Live presence-backoff: re-prompt the user on exponential backoff
+    # when they go silent after the robot asks a question.
+    # GEMINI_LIVE_PRESENCE_ENABLED: 0/false disables the feature entirely.
+    # GEMINI_LIVE_PRESENCE_FIRST_S: seconds before the first re-prompt (default 10).
+    # GEMINI_LIVE_PRESENCE_MAX_ATTEMPTS: max re-prompts before entering silent-wait (default 3).
+    # GEMINI_LIVE_PRESENCE_BACKOFF_FACTOR: multiplier per successive re-prompt (default 2.0).
+    GEMINI_LIVE_PRESENCE_ENABLED = _env_flag("GEMINI_LIVE_PRESENCE_ENABLED", default=False)
+    GEMINI_LIVE_PRESENCE_FIRST_S = float(os.getenv("GEMINI_LIVE_PRESENCE_FIRST_S", "10"))
+    GEMINI_LIVE_PRESENCE_MAX_ATTEMPTS = int(os.getenv("GEMINI_LIVE_PRESENCE_MAX_ATTEMPTS", "3"))
+    GEMINI_LIVE_PRESENCE_BACKOFF_FACTOR = float(os.getenv("GEMINI_LIVE_PRESENCE_BACKOFF_FACTOR", "2.0"))
+
     # Gemini Live server-side VAD tuning. Defaults raise the end-of-speech bar
     # well above the SDK's eager defaults so brief pauses / breaths during the
     # user's reply don't fire a fresh turn while the model is still responding.
@@ -725,6 +737,10 @@ def refresh_runtime_config_from_env() -> None:
     config.LOCAL_STT_UPDATE_INTERVAL = _normalize_local_stt_update_interval(os.getenv(LOCAL_STT_UPDATE_INTERVAL_ENV))
     config.REACHY_MINI_CUSTOM_PROFILE = LOCKED_PROFILE or os.getenv("REACHY_MINI_CUSTOM_PROFILE")
     config.GEMINI_LIVE_VIDEO_STREAMING = _env_flag("GEMINI_LIVE_VIDEO_STREAMING", default=False)
+    config.GEMINI_LIVE_PRESENCE_ENABLED = _env_flag("GEMINI_LIVE_PRESENCE_ENABLED", default=False)
+    config.GEMINI_LIVE_PRESENCE_FIRST_S = float(os.getenv("GEMINI_LIVE_PRESENCE_FIRST_S", "10"))
+    config.GEMINI_LIVE_PRESENCE_MAX_ATTEMPTS = int(os.getenv("GEMINI_LIVE_PRESENCE_MAX_ATTEMPTS", "3"))
+    config.GEMINI_LIVE_PRESENCE_BACKOFF_FACTOR = float(os.getenv("GEMINI_LIVE_PRESENCE_BACKOFF_FACTOR", "2.0"))
     config.GEMINI_LIVE_VAD_SILENCE_MS = int(os.getenv("GEMINI_LIVE_VAD_SILENCE_MS", "800"))
     config.GEMINI_LIVE_VAD_PREFIX_MS = int(os.getenv("GEMINI_LIVE_VAD_PREFIX_MS", "200"))
     config.GEMINI_LIVE_VAD_START_SENSITIVITY = os.getenv("GEMINI_LIVE_VAD_START_SENSITIVITY", "LOW").upper()
