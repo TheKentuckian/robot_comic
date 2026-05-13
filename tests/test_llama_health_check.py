@@ -60,6 +60,7 @@ async def test_health_probe_non_200_logs_warning(caplog: pytest.LogCaptureFixtur
     with patch("robot_comic.chatterbox_tts.config") as mock_config:
         mock_config.LLAMA_CPP_URL = "http://localhost:8080"
         mock_config.LLAMA_HEALTH_CHECK_ENABLED = True
+        mock_config.WOL_MAC = None  # Disable WoL so only one warning fires.
 
         with caplog.at_level(logging.WARNING, logger="robot_comic.chatterbox_tts"):
             await handler._probe_llama_health()
@@ -84,6 +85,7 @@ async def test_health_probe_timeout_logs_warning(caplog: pytest.LogCaptureFixtur
     with patch("robot_comic.chatterbox_tts.config") as mock_config:
         mock_config.LLAMA_CPP_URL = "http://localhost:8080"
         mock_config.LLAMA_HEALTH_CHECK_ENABLED = True
+        mock_config.WOL_MAC = None  # Disable WoL so only one warning fires.
 
         with caplog.at_level(logging.WARNING, logger="robot_comic.chatterbox_tts"):
             await handler._probe_llama_health()

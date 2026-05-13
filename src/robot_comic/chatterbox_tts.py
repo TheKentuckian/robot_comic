@@ -29,7 +29,7 @@ from robot_comic.config import (
 )
 from robot_comic.prompts import get_session_instructions
 from robot_comic.llama_base import _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
-from robot_comic.tools.core_tools import get_active_tool_specs
+from robot_comic.wake_on_lan import send_magic_packet
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.chatterbox_voice_clone import load_voice_clone_ref
 from robot_comic.chatterbox_tag_translator import translate
@@ -151,6 +151,10 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
         On non-200, timeout, or connection refused: logs WARNING so operators
         see it in journalctl before the first LLM call fails.
 
+        If ``REACHY_MINI_WOL_MAC`` is set and the initial probe fails, a
+        Wake-on-LAN magic packet is sent to wake the host, then the probe is
+        retried once after ``REACHY_MINI_WOL_RETRY_AFTER_S`` seconds (default 3).
+
         Controlled by ``REACHY_MINI_LLAMA_HEALTH_CHECK`` env var (default enabled).
         Set to ``0`` to skip the probe in environments where llama-server starts later.
         """
@@ -161,22 +165,71 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
         url = getattr(config, "LLAMA_CPP_URL", LLAMA_CPP_DEFAULT_URL)
         health_url = f"{url}/health"
         assert self._http is not None
+
+        probe_ok = await self._single_health_probe(url, health_url)
+        if probe_ok:
+            return
+
+        # Primary probe failed — attempt WoL fallback if configured.
+        wol_mac: str | None = getattr(config, "WOL_MAC", None)
+        if not wol_mac:
+            return
+
+        wol_broadcast: str = getattr(config, "WOL_BROADCAST", "255.255.255.255")
+        wol_delay: float = float(getattr(config, "WOL_RETRY_AFTER_S", 3.0))
+        logger.info(
+            "llama-server unreachable — sending Wake-on-LAN packet to %s (broadcast %s), "
+            "retrying health probe in %.0f s",
+            wol_mac,
+            wol_broadcast,
+            wol_delay,
+        )
+        try:
+            send_magic_packet(wol_mac, broadcast=wol_broadcast)
+        except Exception as wol_exc:
+            logger.warning("Wake-on-LAN packet could not be sent: %s", wol_exc)
+
+        await asyncio.sleep(wol_delay)
+
+        retry_ok = await self._single_health_probe(url, health_url, log_success_as_wakeup=True)
+        if not retry_ok:
+            logger.warning(
+                "llama-server still unreachable after Wake-on-LAN — first LLM call may fail",
+            )
+
+    async def _single_health_probe(
+        self,
+        url: str,
+        health_url: str,
+        *,
+        log_success_as_wakeup: bool = False,
+    ) -> bool:
+        """Issue one GET to *health_url* and return ``True`` on HTTP 200.
+
+        Logs INFO on success and WARNING on failure; never raises.
+        """
+        assert self._http is not None
         try:
             resp = await self._http.get(health_url, timeout=3.0)
             if resp.status_code == 200:
-                logger.info("llama-server health OK at %s", url)
-            else:
-                logger.warning(
-                    "llama-server health probe failed at %s: HTTP %s — first LLM call may fail",
-                    url,
-                    resp.status_code,
-                )
+                if log_success_as_wakeup:
+                    logger.info("llama-server woke up after WoL — health OK at %s", url)
+                else:
+                    logger.info("llama-server health OK at %s", url)
+                return True
+            logger.warning(
+                "llama-server health probe failed at %s: HTTP %s — first LLM call may fail",
+                url,
+                resp.status_code,
+            )
+            return False
         except Exception as exc:
             logger.warning(
                 "llama-server health probe failed at %s: %s — first LLM call may fail",
                 url,
                 exc,
             )
+            return False
 
     async def _warmup_llm_kv_cache(self) -> None:
         """Pre-warm llama-server's KV cache with the active system prompt.

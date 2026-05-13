@@ -199,6 +199,13 @@ LLAMA_CPP_URL_ENV = "LLAMA_CPP_URL"
 LLAMA_CPP_DEFAULT_URL = "http://astralplane.lan:11434"
 LLAMA_HEALTH_CHECK_ENV = "REACHY_MINI_LLAMA_HEALTH_CHECK"
 
+# Wake-on-LAN config env-var names and defaults.
+WOL_MAC_ENV = "REACHY_MINI_WOL_MAC"
+WOL_BROADCAST_ENV = "REACHY_MINI_WOL_BROADCAST"
+WOL_RETRY_AFTER_ENV = "REACHY_MINI_WOL_RETRY_AFTER_S"
+WOL_DEFAULT_BROADCAST = "255.255.255.255"
+WOL_DEFAULT_RETRY_AFTER_S = 3.0
+
 LLAMA_GEMINI_TTS_OUTPUT = "llama_gemini_tts"
 LLAMA_ELEVENLABS_TTS_OUTPUT = "llama_elevenlabs_tts"
 
@@ -622,6 +629,12 @@ class Config:
     LLAMA_HEALTH_CHECK_ENABLED = _env_flag(LLAMA_HEALTH_CHECK_ENV, default=True)
     LLM_WARMUP_ENABLED = _env_flag("REACHY_MINI_LLM_WARMUP_ENABLED", default=True)
 
+    # Wake-on-LAN: send a magic packet when llama-server is unreachable.
+    # WOL_MAC is unset by default; set it to enable the fallback.
+    WOL_MAC = os.getenv(WOL_MAC_ENV) or None
+    WOL_BROADCAST = os.getenv(WOL_BROADCAST_ENV, WOL_DEFAULT_BROADCAST)
+    WOL_RETRY_AFTER_S = float(os.getenv(WOL_RETRY_AFTER_ENV, str(WOL_DEFAULT_RETRY_AFTER_S)))
+
     WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
     WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None
     # When True, a tiny synthesised tone is played immediately at startup (before
@@ -789,7 +802,9 @@ def refresh_runtime_config_from_env() -> None:
     config.REACHY_MINI_TTS_SLOW_WARN_S = float(os.getenv("REACHY_MINI_TTS_SLOW_WARN_S", "10.0"))
     config.LLAMA_CPP_URL = os.getenv(LLAMA_CPP_URL_ENV, LLAMA_CPP_DEFAULT_URL)
     config.LLAMA_HEALTH_CHECK_ENABLED = _env_flag(LLAMA_HEALTH_CHECK_ENV, default=True)
-    config.LLM_WARMUP_ENABLED = _env_flag("REACHY_MINI_LLM_WARMUP_ENABLED", default=True)
+    config.WOL_MAC = os.getenv(WOL_MAC_ENV) or None
+    config.WOL_BROADCAST = os.getenv(WOL_BROADCAST_ENV, WOL_DEFAULT_BROADCAST)
+    config.WOL_RETRY_AFTER_S = float(os.getenv(WOL_RETRY_AFTER_ENV, str(WOL_DEFAULT_RETRY_AFTER_S)))
     config.ROBOT_INSTRUMENTATION = os.getenv("ROBOT_INSTRUMENTATION", "")
     config.WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
     config.WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None
