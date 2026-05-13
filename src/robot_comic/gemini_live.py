@@ -170,16 +170,20 @@ def _convert_schema_types(schema: Any) -> Any:
 
 
 _TTS_DELIVERY_TAG_NAMES = (
-    "fast", "slow", "short pause", "long pause",
-    "amusement", "annoyance", "aggression", "enthusiasm",
+    "fast",
+    "slow",
+    "short pause",
+    "long pause",
+    "amusement",
+    "annoyance",
+    "aggression",
+    "enthusiasm",
 )
 _TTS_SECTION_RE = re.compile(
     r"## GEMINI TTS DELIVERY TAGS\b.*?(?=\r?\n##|\Z)",
     re.DOTALL,
 )
-_TTS_TAG_RE = re.compile(
-    r"\[(?:" + "|".join(re.escape(t) for t in _TTS_DELIVERY_TAG_NAMES) + r")\]"
-)
+_TTS_TAG_RE = re.compile(r"\[(?:" + "|".join(re.escape(t) for t in _TTS_DELIVERY_TAG_NAMES) + r")\]")
 
 
 def _strip_tts_delivery_tags(instructions: str) -> str:
@@ -234,11 +238,7 @@ async def _send_b64_tool_image_to_gemini(
     """Send base64 JPEG tool payloads as video input and return compact JSON."""
     compact_result = dict(tool_result)
     image_key = next(
-        (
-            key
-            for key in _B64_IMAGE_RESULT_KEYS
-            if isinstance(compact_result.get(key), str | bytes | bytearray)
-        ),
+        (key for key in _B64_IMAGE_RESULT_KEYS if isinstance(compact_result.get(key), str | bytes | bytearray)),
         None,
     )
     if image_key is None:
@@ -688,8 +688,7 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
         )
 
         logger.info(
-            "Gemini Live config: model=%r voice=%r tools=%d vad_silence=%dms vad_prefix=%dms "
-            "vad_start=%s vad_end=%s",
+            "Gemini Live config: model=%r voice=%r tools=%d vad_silence=%dms vad_prefix=%dms vad_start=%s vad_end=%s",
             config.MODEL_NAME,
             voice,
             len(function_declarations),
@@ -765,7 +764,11 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
                 tool_result = await _send_b64_tool_image_to_gemini(self.session, tool_result)
                 if original_keys != set(tool_result):
                     if "image_error" in tool_result:
-                        logger.warning("Failed to push tool image from %s to Gemini: %s", bg_tool.tool_name, tool_result["image_error"])
+                        logger.warning(
+                            "Failed to push tool image from %s to Gemini: %s",
+                            bg_tool.tool_name,
+                            tool_result["image_error"],
+                        )
                     else:
                         logger.info("Pushed tool image from %s to Gemini via realtime video input", bg_tool.tool_name)
 
@@ -911,11 +914,24 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
                                                     )
                                                 telemetry.record_ttft(
                                                     ttft_s,
-                                                    {"gen_ai.system": "gemini", "gen_ai.request.model": config.MODEL_NAME},
+                                                    {
+                                                        "gen_ai.system": "gemini",
+                                                        "gen_ai.request.model": config.MODEL_NAME,
+                                                    },
                                                 )
                                                 if self._tts_span is None:
                                                     self._tts_start_at = self._first_audio_at
-                                                    self._tts_span = telemetry.get_tracer().start_span("tts.synthesize")
+                                                    # Explicitly parent the TTS span under the active turn span
+                                                    # so it shares the same trace even when _turn_ctx_token
+                                                    # has not yet been attached (fast/interrupted turns).
+                                                    _tts_ctx = (
+                                                        trace.set_span_in_context(self._turn_span)
+                                                        if self._turn_span is not None
+                                                        else None
+                                                    )
+                                                    self._tts_span = telemetry.get_tracer().start_span(
+                                                        "tts.synthesize", context=_tts_ctx
+                                                    )
 
                                             from robot_comic.startup_timer import log_once
 
