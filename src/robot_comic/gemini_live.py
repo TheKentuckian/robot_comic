@@ -61,6 +61,15 @@ GEMINI_INPUT_SAMPLE_RATE: Final[int] = 16000
 GEMINI_OUTPUT_SAMPLE_RATE: Final[int] = 24000
 _B64_IMAGE_RESULT_KEYS: Final[tuple[str, ...]] = ("b64_im", "b64_scene")
 
+# Per-million-token prices for `gemini-3.1-flash-live-preview` in USD.
+# Source: Google's published Gemini 3 Flash Live pricing; update here if pricing
+# changes. Used only for the locally-aggregated cost counter — Google bills off
+# their own metering, not ours.
+GEMINI_LIVE_AUDIO_INPUT_COST_PER_1M: Final[float] = 3.0
+GEMINI_LIVE_AUDIO_OUTPUT_COST_PER_1M: Final[float] = 12.0
+GEMINI_LIVE_TEXT_INPUT_COST_PER_1M: Final[float] = 0.30
+GEMINI_LIVE_TEXT_OUTPUT_COST_PER_1M: Final[float] = 2.50
+
 
 def _openai_tool_specs_to_gemini(specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Convert OpenAI-style tool specs to Gemini function_declarations format.
@@ -286,6 +295,11 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
         self._tts_start_at: float | None = None
         self._first_audio_at: float | None = None
 
+        # Aggregated cost in USD, computed from usage_metadata frames. Mirrors
+        # the BaseRealtimeHandler.cumulative_cost field so dashboards that
+        # already read that name keep working.
+        self.cumulative_cost: float = 0.0
+
     def copy(self) -> "GeminiLiveHandler":
         """Create a copy of the handler."""
         return GeminiLiveHandler(
@@ -320,6 +334,69 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
         self._llm_start_at = None
         self._tts_start_at = None
         self._first_audio_at = None
+
+    def _record_usage_metadata(self, usage: Any) -> None:
+        """Convert Gemini Live usage_metadata to cost + OTel attributes.
+
+        Gemini reports modality-broken-down token counts in
+        ``prompt_tokens_details`` and ``response_tokens_details`` (each a list
+        of ``ModalityTokenCount`` with ``modality`` and ``token_count``). We
+        price AUDIO and TEXT separately; other modalities (IMAGE/VIDEO/etc.)
+        fall back to text pricing since we have no per-modality rate for them.
+        """
+        if usage is None:
+            return
+
+        def _by_modality(details: Any) -> Dict[str, int]:
+            buckets: Dict[str, int] = {}
+            if not details:
+                return buckets
+            for entry in details:
+                modality = getattr(entry, "modality", None)
+                if modality is None:
+                    continue
+                key = getattr(modality, "value", str(modality)).upper()
+                buckets[key] = buckets.get(key, 0) + (getattr(entry, "token_count", 0) or 0)
+            return buckets
+
+        prompt_by_mod = _by_modality(getattr(usage, "prompt_tokens_details", None))
+        response_by_mod = _by_modality(getattr(usage, "response_tokens_details", None))
+
+        prompt_total = getattr(usage, "prompt_token_count", 0) or 0
+        response_total = getattr(usage, "response_token_count", 0) or 0
+
+        audio_in = prompt_by_mod.get("AUDIO", 0)
+        text_in = max(prompt_total - audio_in, 0) if not prompt_by_mod else prompt_by_mod.get("TEXT", 0)
+        audio_out = response_by_mod.get("AUDIO", 0)
+        text_out = max(response_total - audio_out, 0) if not response_by_mod else response_by_mod.get("TEXT", 0)
+
+        cost = (
+            audio_in * GEMINI_LIVE_AUDIO_INPUT_COST_PER_1M / 1e6
+            + text_in * GEMINI_LIVE_TEXT_INPUT_COST_PER_1M / 1e6
+            + audio_out * GEMINI_LIVE_AUDIO_OUTPUT_COST_PER_1M / 1e6
+            + text_out * GEMINI_LIVE_TEXT_OUTPUT_COST_PER_1M / 1e6
+        )
+        self.cumulative_cost += cost
+        logger.debug(
+            "Cost: $%.4f | Cumulative: $%.4f (in=%d audio=%d text=%d, out=%d audio=%d text=%d)",
+            cost,
+            self.cumulative_cost,
+            prompt_total,
+            audio_in,
+            text_in,
+            response_total,
+            audio_out,
+            text_out,
+        )
+
+        if self._llm_span is not None:
+            try:
+                self._llm_span.set_attribute("gen_ai.usage.input_tokens", prompt_total)
+                self._llm_span.set_attribute("gen_ai.usage.output_tokens", response_total)
+                if cost > 0:
+                    self._llm_span.set_attribute("gen_ai.usage.cost_usd", round(cost, 6))
+            except Exception:
+                pass
 
     def _set_listening_state(self, listening: bool) -> None:
         """Avoid queueing redundant listening-state updates."""
@@ -850,6 +927,12 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
                             # Handle tool calls
                             if response.tool_call:
                                 await self._handle_tool_call(response)
+
+                            # Cost tracking — emitted by the server at varying
+                            # cadence (typically per response or per turn end).
+                            usage_metadata = getattr(response, "usage_metadata", None)
+                            if usage_metadata is not None:
+                                self._record_usage_metadata(usage_metadata)
 
                     except Exception as e:
                         if self._stop_event.is_set():
