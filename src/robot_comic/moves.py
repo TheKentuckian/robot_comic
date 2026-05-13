@@ -50,6 +50,11 @@ from reachy_mini.utils.interpolation import (
     compose_world_offset,
     linear_pose_interpolation,
 )
+from robot_comic.motion_safety import (
+    HEAD_MAX_VEL_RAD_S,
+    clamp_head_pose,
+    cap_head_velocity,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -306,6 +311,12 @@ class MovementManager:
             self.speed_factor: float = _cfg.MOVEMENT_SPEED_FACTOR
         except Exception:
             self.speed_factor: float = 0.6
+
+        # Safety: per-axis angular velocity cap (rad/s) applied before every set_target.
+        # Reads REACHY_MINI_HEAD_MAX_VEL_RAD_S from the environment via motion_safety.
+        self._head_max_vel_rad_s: float = HEAD_MAX_VEL_RAD_S
+        # Last head pose that was actually issued to the robot (used by vel cap).
+        self._last_safe_head_pose: NDArray[np.float32] = create_head_pose(0, 0, 0, 0, 0, 0, degrees=True)
 
         # Cross-thread signalling
         self._command_queue: "Queue[Tuple[str, Any]]" = Queue()
@@ -712,6 +723,8 @@ class MovementManager:
             else:
                 self._set_target_err_suppressed += 1
         else:
+            # Update velocity-cap reference with the pose we just issued.
+            self._last_safe_head_pose = head
             with self._status_lock:
                 self._last_commanded_pose = clone_full_body_pose((head, antennas, body_yaw))
 
@@ -910,6 +923,17 @@ class MovementManager:
 
             # 4) Build primary and secondary full-body poses, then fuse them
             head, antennas, body_yaw = self._compose_full_body_pose(loop_start)
+
+            # 4a) Safety layer: clamp head pose to safe RPY envelope, then
+            #     cap angular velocity so the head cannot lurch toward the
+            #     target faster than HEAD_MAX_VEL_RAD_S rad/s.  Both transforms
+            #     run every tick regardless of move source (tools, dances,
+            #     breathing, face-tracking) because they are applied at the
+            #     single control point just before set_target.
+            dt = loop_start - prev_loop_start if loop_count > 1 else self.target_period
+            head = clamp_head_pose(head)
+            head = cap_head_velocity(self._last_safe_head_pose, head, dt, self._head_max_vel_rad_s)
+            head = clamp_head_pose(head)  # re-clamp after vel-cap in case interpolation drifted
 
             # 5) Apply listening antenna freeze or blend-back
             antennas_cmd = self._calculate_blended_antennas(antennas)
