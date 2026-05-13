@@ -22,10 +22,12 @@ from robot_comic.config import (
     CHATTERBOX_DEFAULT_GAIN,
     CHATTERBOX_DEFAULT_VOICE,
     CHATTERBOX_DEFAULT_CFG_WEIGHT,
+    CHATTERBOX_DEFAULT_TARGET_DBFS,
     CHATTERBOX_DEFAULT_TEMPERATURE,
     CHATTERBOX_DEFAULT_EXAGGERATION,
     config,
 )
+from robot_comic.audio_gain import normalize_gain
 from robot_comic.llama_base import _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.chatterbox_voice_clone import load_voice_clone_ref
@@ -111,6 +113,14 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
     def _gain(self) -> float:
         params = self._load_profile_params()
         return float(params.get("gain", getattr(config, "CHATTERBOX_GAIN", CHATTERBOX_DEFAULT_GAIN)))
+
+    @property
+    def _auto_gain_enabled(self) -> bool:
+        return bool(getattr(config, "CHATTERBOX_AUTO_GAIN_ENABLED", True))
+
+    @property
+    def _target_dbfs(self) -> float:
+        return float(getattr(config, "CHATTERBOX_TARGET_DBFS", CHATTERBOX_DEFAULT_TARGET_DBFS))
 
     async def _prepare_startup_credentials(self) -> None:
         await super()._prepare_startup_credentials()
@@ -284,7 +294,12 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
             try:
                 r = await self._http.post(f"{self._chatterbox_url}/tts", json=payload)
                 r.raise_for_status()
-                result = self._wav_to_pcm(r.content, gain=self._gain)
+                result = self._wav_to_pcm(
+                    r.content,
+                    gain=self._gain,
+                    auto_gain=self._auto_gain_enabled,
+                    target_dbfs=self._target_dbfs,
+                )
                 _elapsed = time.perf_counter() - _call_start
                 _slow_thresh = float(getattr(config, "REACHY_MINI_TTS_SLOW_WARN_S", 10.0))
                 if _elapsed > _slow_thresh:
@@ -303,8 +318,17 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
         return None
 
     @staticmethod
-    def _wav_to_pcm(wav_bytes: bytes, gain: float = 1.0) -> bytes:
-        """Strip WAV header, resample to 24 kHz mono int16 PCM, and apply gain."""
+    def _wav_to_pcm(
+        wav_bytes: bytes,
+        gain: float = 1.0,
+        auto_gain: bool = False,
+        target_dbfs: float = -16.0,
+    ) -> bytes:
+        """Strip WAV header, resample to 24 kHz mono int16 PCM, and apply gain.
+
+        When *auto_gain* is True the manual *gain* multiplier is applied first,
+        then ``normalize_gain`` scales the result to *target_dbfs* dBFS.
+        """
         import io
         import wave
 
@@ -323,7 +347,10 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
             audio = resample(audio, target_len)
         if gain != 1.0:
             audio = audio * gain
-        return np.clip(audio, -32768, 32767).astype(np.int16).tobytes()
+        pcm = np.clip(audio, -32768, 32767).astype(np.int16)
+        if auto_gain:
+            pcm = normalize_gain(pcm, target_dbfs=target_dbfs)
+        return pcm.tobytes()
 
 
 class LocalSTTChatterboxHandler(LocalSTTInputMixin, ChatterboxTTSResponseHandler):
