@@ -932,8 +932,17 @@ class LocalStream:
                     )
             except Exception:
                 pass
+            from robot_comic.startup_timer import log_checkpoint
+
+            async def _start_up_with_checkpoints() -> None:
+                log_checkpoint("handler.start_up begin", logger)
+                try:
+                    await self.handler.start_up()
+                finally:
+                    log_checkpoint("handler.start_up complete", logger)
+
             self._tasks = [
-                asyncio.create_task(self.handler.start_up(), name="openai-handler"),
+                asyncio.create_task(_start_up_with_checkpoints(), name="openai-handler"),
                 asyncio.create_task(self.record_loop(), name="stream-record-loop"),
                 asyncio.create_task(self.play_loop(), name="stream-play-loop"),
             ]

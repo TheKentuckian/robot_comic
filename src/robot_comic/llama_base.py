@@ -589,6 +589,9 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                                 if not first_token_time_recorded and ("content" in delta or "tool_calls" in delta):
                                     ttft = time.perf_counter() - request_sent_time
                                     telemetry.record_ttft(ttft, {"gen_ai.system": "llama_cpp"})
+                                    from robot_comic.startup_timer import log_once
+
+                                    log_once("first LLM token", logger)
                                     first_token_time_recorded = True
 
                                 # Emit text deltas

@@ -745,6 +745,9 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
                                                     self._tts_start_at = self._first_audio_at
                                                     self._tts_span = telemetry.get_tracer().start_span("tts.synthesize")
 
+                                            from robot_comic.startup_timer import log_once
+
+                                            log_once("first TTS audio frame", logger)
                                             await self.output_queue.put(
                                                 (GEMINI_OUTPUT_SAMPLE_RATE, audio_array),
                                             )

@@ -284,6 +284,9 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             if pcm_bytes is None:
                 continue
             for frame in self._pcm_to_frames(pcm_bytes):
+                from robot_comic.startup_timer import log_once
+
+                log_once("first TTS audio frame", logger)
                 await self.output_queue.put((GEMINI_TTS_OUTPUT_SAMPLE_RATE, frame))
             any_audio = True
 

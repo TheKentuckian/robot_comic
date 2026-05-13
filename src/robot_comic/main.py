@@ -1,6 +1,11 @@
 """Entrypoint for Robot Comic."""
 
+# Import the startup stopwatch first so STARTUP_T0 captures the earliest
+# possible Python time. Any later "Startup: +X.XXs ..." log — including
+# handler-side first-event hooks — shares this origin.
 import warnings
+
+from robot_comic import startup_timer  # noqa: F401  (side-effect: captures t0)
 
 
 warnings.filterwarnings(
@@ -113,6 +118,7 @@ def run(
             logger.warning("Failed to load startup settings: %s", e)
 
     from robot_comic import telemetry as _telemetry
+
     _telemetry.init()
 
     if config.BACKEND_PROVIDER == HF_BACKEND:
@@ -130,23 +136,22 @@ def run(
             config.MODEL_NAME,
         )
 
-    _t0 = time.perf_counter()
-
     from robot_comic.pause import PauseController
+    from robot_comic.startup_timer import log_checkpoint
 
-    logger.info("Startup: +%.2fs import pause", time.perf_counter() - _t0)
+    log_checkpoint("import pause", logger)
     from robot_comic.console import LocalStream
 
-    logger.info("Startup: +%.2fs import console", time.perf_counter() - _t0)
+    log_checkpoint("import console", logger)
     from robot_comic.pause_settings import read_pause_settings
 
-    logger.info("Startup: +%.2fs import pause_settings", time.perf_counter() - _t0)
+    log_checkpoint("import pause_settings", logger)
     from robot_comic.tools.core_tools import ToolDependencies
 
-    logger.info("Startup: +%.2fs import core_tools", time.perf_counter() - _t0)
+    log_checkpoint("import core_tools", logger)
     from robot_comic.audio.head_wobbler import HeadWobbler
 
-    logger.info("Startup: +%.2fs import head_wobbler", time.perf_counter() - _t0)
+    log_checkpoint("import head_wobbler", logger)
 
     if args.no_camera and get_requested_head_tracker(args) is not None:
         logger.warning("Head tracking disabled: --no-camera flag is set. Remove --no-camera to enable head tracking.")
@@ -175,7 +180,20 @@ def run(
             logger.error("Please check your configuration and try again.")
             sys.exit(1)
 
-    logger.info("Startup: +%.2fs robot available", time.perf_counter() - _t0)
+    log_checkpoint("robot available", logger)
+
+    # Fire warmup audio as early as possible on headless on-robot startup, in
+    # parallel with the rest of the stack loading. The handler will take over
+    # the speakers once it spins up; the warmup subprocess being cut off
+    # mid-playback is expected, not a bug.
+    if not args.sim and config.WARMUP_WAV_ENABLED:
+        try:
+            from robot_comic.warmup_audio import play_warmup_wav
+
+            play_warmup_wav(config.WARMUP_WAV_PATH)
+            log_checkpoint("warmup wav dispatched", logger)
+        except Exception as e:
+            logger.warning("Warmup WAV playback failed: %s", e)
 
     # Auto-enable Gradio in simulation mode (both MuJoCo for daemon and mockup-sim for desktop app)
     status = robot.client.get_status()
@@ -197,13 +215,13 @@ def run(
     except CameraVisionInitializationError as e:
         logger.error("Failed to initialize camera/vision: %s", e)
         sys.exit(1)
-    logger.info("Startup: +%.2fs camera/vision init", time.perf_counter() - _t0)
+    log_checkpoint("camera/vision init", logger)
 
     movement_manager = MovementManager(
         current_robot=robot,
         camera_worker=camera_worker,
     )
-    logger.info("Startup: +%.2fs movement manager", time.perf_counter() - _t0)
+    log_checkpoint("movement manager", logger)
 
     head_wobbler = HeadWobbler(
         set_speech_offsets=movement_manager.set_speech_offsets,
@@ -319,7 +337,7 @@ def run(
             startup_voice=startup_settings.voice,
         )  # type: ignore[assignment]
 
-    logger.info("Startup: +%.2fs handler ready", time.perf_counter() - _t0)
+    log_checkpoint("handler ready", logger)
 
     stream_manager: Any = None
 
@@ -340,7 +358,7 @@ def run(
                 os.path.join(current_file_path, "images", "reachymini_avatar.png"),
             ),
         )
-        logger.info("Startup: +%.2fs chatbot ready", time.perf_counter() - _t0)
+        log_checkpoint("chatbot ready", logger)
 
         # Bridge audio to the browser via FastRTC; admin UI at "/" (same as
         # headless), FastRTC chat UI at "/chat".
@@ -383,6 +401,7 @@ def run(
             pause_controller=pause_controller,
             movement_manager=movement_manager,
         )
+        log_checkpoint("LocalStream constructed", logger)
 
     # Each async service → its own thread/loop
     movement_manager.start()

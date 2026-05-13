@@ -942,6 +942,9 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
                             if self._tts_span is None:
                                 self._tts_start_at = self._turn_first_audio_at
                                 self._tts_span = telemetry.get_tracer().start_span("tts.synthesize")
+                        from robot_comic.startup_timer import log_once
+
+                        log_once("first TTS audio frame", logger)
                         await self.output_queue.put(
                             (
                                 self.output_sample_rate,
