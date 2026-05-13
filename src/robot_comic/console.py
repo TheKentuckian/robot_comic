@@ -949,11 +949,20 @@ class LocalStream:
                 log_checkpoint("handler.start_up begin", logger)
                 try:
                     await self.handler.start_up()
-                finally:
+                except Exception:
+                    log_checkpoint("handler.start_up complete", logger)
+                    raise
+                else:
                     log_checkpoint("handler.start_up complete", logger)
 
+            _startup_task = asyncio.create_task(_start_up_with_checkpoints(), name="openai-handler")
+            # Emit a dispatched checkpoint immediately so the startup timeline
+            # records when the handler session was handed off to its task, not
+            # when the (long-running) session eventually tears down.
+            log_checkpoint("handler.start_up dispatched", logger)
+
             self._tasks = [
-                asyncio.create_task(_start_up_with_checkpoints(), name="openai-handler"),
+                _startup_task,
                 asyncio.create_task(self.record_loop(), name="stream-record-loop"),
                 asyncio.create_task(self.play_loop(), name="stream-play-loop"),
             ]
