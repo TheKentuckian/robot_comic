@@ -87,7 +87,7 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         self._stop_event: asyncio.Event = asyncio.Event()
         self._conversation_history: list[dict[str, Any]] = []
         self.tool_manager = BackgroundToolManager()
-        self.output_queue: asyncio.Queue = asyncio.Queue()
+        self.output_queue: asyncio.Queue[Any] = asyncio.Queue()
         # Serialize turns so llama-server never receives two concurrent requests.
         self._turn_lock: asyncio.Lock = asyncio.Lock()
 
@@ -190,7 +190,12 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
     async def _handle_tool_notification(self, notification: ToolNotification) -> None:
         logger.info("Tool %s finished: status=%s", notification.tool_name, notification.status.value)
 
-    async def _synthesize_and_enqueue(self, response_text: str, tts_start: float | None = None) -> None:
+    async def _synthesize_and_enqueue(
+        self,
+        response_text: str,
+        tts_start: float | None = None,
+        target_queue: "asyncio.Queue[Any] | None" = None,
+    ) -> None:
         raise NotImplementedError
 
     async def _stream_response_and_synthesize(
@@ -211,14 +216,14 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         # drain task that awaits the previous tail before pumping its own local
         # queue into self.output_queue, preserving order while letting the
         # synth HTTP requests overlap.
-        playback_chain: asyncio.Task | None = None
+        playback_chain: asyncio.Task[None] | None = None
 
         async def _dispatch_parallel_synth(
             sentence_text: str,
             tts_start_inner: float | None,
         ) -> None:
             nonlocal playback_chain
-            local_q: asyncio.Queue = asyncio.Queue()
+            local_q: asyncio.Queue[Any] = asyncio.Queue()
 
             async def _synth_with_sentinel() -> None:
                 try:
@@ -815,7 +820,7 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         return np.zeros(n_samples, dtype=np.int16).tobytes()
 
     @staticmethod
-    def _pcm_to_frames(pcm_bytes: bytes) -> list[np.ndarray]:
+    def _pcm_to_frames(pcm_bytes: bytes) -> "list[np.ndarray[Any, Any]]":
         audio = np.frombuffer(pcm_bytes, dtype=np.int16)
         return [
             audio[i : i + _CHUNK_SAMPLES]
