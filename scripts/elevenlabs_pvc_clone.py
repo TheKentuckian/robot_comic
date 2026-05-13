@@ -39,13 +39,15 @@ Requirements:
     - 30 min to 3 hr of clean audio per persona for best results
     - Samples should be: clear speech, minimal background noise, no music
 """
+
 import os
+import re
 import sys
 import argparse
-import re
 from pathlib import Path
 
 import requests
+
 
 API_BASE = "https://api.elevenlabs.io/v1"
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -107,8 +109,10 @@ def cmd_create(args: argparse.Namespace) -> None:
     """Create a new PVC voice and upload sample files."""
     wav_files = resolve_wav_files(args.profile, args.files, args.all)
     total_mb = sum(p.stat().st_size for p in wav_files) / (1024 * 1024)
-    print(f"Creating PVC voice '{args.name}' for profile '{args.profile}' "
-          f"with {len(wav_files)} samples ({total_mb:.1f} MB total)...")
+    print(
+        f"Creating PVC voice '{args.name}' for profile '{args.profile}' "
+        f"with {len(wav_files)} samples ({total_mb:.1f} MB total)..."
+    )
 
     create_resp = requests.post(
         f"{API_BASE}/voices/pvc",
@@ -140,7 +144,7 @@ def cmd_create(args: argparse.Namespace) -> None:
             continue
         print(f"  ✓ Uploaded {wav.name}")
 
-    print(f"\nAll samples uploaded. Next step:")
+    print("\nAll samples uploaded. Next step:")
     print(f"  python scripts/elevenlabs_pvc_clone.py train {voice_id}")
 
 
@@ -155,7 +159,7 @@ def cmd_train(args: argparse.Namespace) -> None:
         print(f"ERROR starting training: {resp.status_code} {resp.text}", file=sys.stderr)
         sys.exit(1)
     print(f"✓ Training started for voice_id={args.voice_id}")
-    print(f"  Training typically takes 1-4 hours.")
+    print("  Training typically takes 1-4 hours.")
     print(f"  Check status: python scripts/elevenlabs_pvc_clone.py status {args.voice_id}")
 
 
@@ -200,9 +204,9 @@ def cmd_status(args: argparse.Namespace) -> None:
         if args.write_config and args.profile:
             write_voice_id_to_config(args.profile, args.voice_id)
         else:
-            print(f"\n✓ Ready to use! Update profiles/<profile>/elevenlabs.txt:")
+            print("\n✓ Ready to use! Update profiles/<profile>/elevenlabs.txt:")
             print(f"  voice_id={args.voice_id}")
-            print(f"  (or re-run with --profile <name> --write-config to do it automatically)")
+            print("  (or re-run with --profile <name> --write-config to do it automatically)")
 
 
 def cmd_list(args: argparse.Namespace) -> None:
@@ -224,21 +228,22 @@ def cmd_list(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="ElevenLabs PVC voice cloning helper (multi-persona)"
-    )
+    parser = argparse.ArgumentParser(description="ElevenLabs PVC voice cloning helper (multi-persona)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_create = sub.add_parser("create", help="Create a new PVC voice and upload samples")
-    p_create.add_argument("--profile", required=True,
-                          help="Persona profile name (e.g. don_rickles). "
-                               "Resolves WAV files relative to profiles/<profile>/voice_prep/.")
+    p_create.add_argument(
+        "--profile",
+        required=True,
+        help="Persona profile name (e.g. don_rickles). Resolves WAV files relative to profiles/<profile>/voice_prep/.",
+    )
     p_create.add_argument("name", help="Voice name (e.g., 'Don Rickles')")
-    p_create.add_argument("files", nargs="*",
-                          help="WAV files to upload as samples (paths relative to "
-                               "profiles/<profile>/voice_prep/ unless absolute).")
-    p_create.add_argument("--all", action="store_true",
-                          help="Upload every .wav in the profile's voice_prep/ dir.")
+    p_create.add_argument(
+        "files",
+        nargs="*",
+        help="WAV files to upload as samples (paths relative to profiles/<profile>/voice_prep/ unless absolute).",
+    )
+    p_create.add_argument("--all", action="store_true", help="Upload every .wav in the profile's voice_prep/ dir.")
     p_create.add_argument("--description", default=None, help="Voice description")
     p_create.set_defaults(func=cmd_create)
 
@@ -248,12 +253,16 @@ def main() -> None:
 
     p_status = sub.add_parser("status", help="Check PVC voice training status")
     p_status.add_argument("voice_id", help="PVC voice ID")
-    p_status.add_argument("--profile", default=None,
-                          help="Profile to update with the voice_id when status==completed "
-                               "(requires --write-config).")
-    p_status.add_argument("--write-config", action="store_true",
-                          help="When state==completed, write voice_id into "
-                               "profiles/<profile>/elevenlabs.txt.")
+    p_status.add_argument(
+        "--profile",
+        default=None,
+        help="Profile to update with the voice_id when status==completed (requires --write-config).",
+    )
+    p_status.add_argument(
+        "--write-config",
+        action="store_true",
+        help="When state==completed, write voice_id into profiles/<profile>/elevenlabs.txt.",
+    )
     p_status.set_defaults(func=cmd_status)
 
     p_list = sub.add_parser("list", help="List all PVC voices")

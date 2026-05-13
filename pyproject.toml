@@ -147,6 +147,7 @@ ignore = [
   "E501",  # handled by formatter
   "D100",  # ignore missing module docstrings
   "D203",  # blank line before class docstring (conflicts with D211)
+  "D205",  # multi-line summary — conflicts with existing wrap-first-sentence style
   "D213",  # summary on second line (conflicts with D212)
 ]
 
@@ -155,6 +156,22 @@ ignore = [
 "src/robot_comic/main.py" = ["E402"]
 # Build-time scripts: allow late imports (sys.path tweaks, optional deps) and skip pydocstyle.
 "scripts/*.py" = ["D", "E402"]
+# Benchmarking script — not part of the installed package; skip pydocstyle.
+"bench_llm.py" = ["D"]
+# Voice-prep utility scripts — not part of the installed package; skip pydocstyle.
+"profiles/**/*.py" = ["D"]
+# Tests do not require public-API docstrings.
+"tests/**/*.py" = ["D"]
+# test_local_vision.py uses pytest.importorskip() before the module import (E402 is intentional).
+"tests/vision/test_local_vision.py" = ["E402"]
+# Subclass overrides are documented on the base class; skip per-method/init docstring rules.
+# gemini_tts.py also guards google-genai imports behind a try/except (E402 is intentional).
+"src/robot_comic/elevenlabs_tts.py" = ["D102", "D107"]
+"src/robot_comic/gemini_tts.py" = ["E402", "D102", "D107"]
+"src/robot_comic/llama_base.py" = ["D102", "D107"]
+"src/robot_comic/llama_elevenlabs_tts.py" = ["D102", "D107"]
+"src/robot_comic/llama_gemini_tts.py" = ["D102", "D107"]
+"src/robot_comic/monitor.py" = ["D102", "D107"]
 
 [tool.ruff.lint.isort]
 length-sort = true

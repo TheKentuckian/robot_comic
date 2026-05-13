@@ -1,5 +1,4 @@
-"""
-Task 4 benchmark: llama-server prefill/decode timing on representative Don Rickles payload.
+"""Task 4 benchmark: llama-server prefill/decode timing on representative Don Rickles payload.
 
 Usage:
     python bench_llm.py                    # single timed request, show metrics
@@ -10,19 +9,19 @@ Requires llama-server running on localhost:11434.
 """
 
 from __future__ import annotations
-
-import argparse
-import json
 import sys
+import json
 import time
-import urllib.request
+import argparse
 import urllib.error
+import urllib.request
 from typing import Any
+
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
 BASE_URL = "http://localhost:11434"
-MODEL_ID  = "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
+MODEL_ID = "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
 
 # Don Rickles system prompt (full instructions.txt)
 SYSTEM_PROMPT = """\
@@ -281,14 +280,32 @@ TOOLS = [
                     "emotion": {
                         "type": "string",
                         "enum": [
-                            "disgusted1", "curious1", "contempt1",
-                            "reprimand1", "reprimand2", "reprimand3", "furious1",
-                            "laughing1", "laughing2", "incomprehensible2",
-                            "surprised1", "surprised2", "no1", "no_excited1",
-                            "impatient1", "impatient2", "indifferent1",
-                            "inquiring1", "inquiring2", "inquiring3",
-                            "dying1", "proud1", "proud2", "proud3",
-                            "grateful1", "go_away1",
+                            "disgusted1",
+                            "curious1",
+                            "contempt1",
+                            "reprimand1",
+                            "reprimand2",
+                            "reprimand3",
+                            "furious1",
+                            "laughing1",
+                            "laughing2",
+                            "incomprehensible2",
+                            "surprised1",
+                            "surprised2",
+                            "no1",
+                            "no_excited1",
+                            "impatient1",
+                            "impatient2",
+                            "indifferent1",
+                            "inquiring1",
+                            "inquiring2",
+                            "inquiring3",
+                            "dying1",
+                            "proud1",
+                            "proud2",
+                            "proud3",
+                            "grateful1",
+                            "go_away1",
                         ],
                         "description": (
                             "Name of the emotion to play. Must be one of the listed codes. "
@@ -350,9 +367,7 @@ CONVERSATION_HISTORY = [
     {
         "role": "assistant",
         "content": None,
-        "tool_calls": [
-            {"id": "call_003", "type": "function", "function": {"name": "roast", "arguments": "{}"}}
-        ],
+        "tool_calls": [{"id": "call_003", "type": "function", "function": {"name": "roast", "arguments": "{}"}}],
     },
     {
         "role": "tool",
@@ -523,14 +538,14 @@ def run_single(temperature: float, max_tokens: int) -> None:
     tool_calls = msg.get("tool_calls", [])
     content = msg.get("content") or ""
 
-    print(f"\n=== Results ===================================================")
+    print("\n=== Results ===================================================")
     print(f"Total elapsed:      {elapsed:.2f}s")
     print(f"Prompt tokens:      {prompt_n}")
     print(f"Completion tokens:  {predicted_n}")
     if prompt_ms:
         print(f"Prefill time:       {prompt_ms:.0f}ms  ({prompt_per_second:.1f} tok/s)")
     else:
-        print(f"Prefill time:       n/a (no timings in response)")
+        print("Prefill time:       n/a (no timings in response)")
     if predicted_ms:
         print(f"Decode time:        {predicted_ms:.0f}ms  ({predicted_per_second:.1f} tok/s)")
     else:
@@ -550,7 +565,6 @@ def run_single(temperature: float, max_tokens: int) -> None:
         _print_mtp_metrics(metrics_before, metrics_after)
     except Exception as e:
         print(f"\n(metrics endpoint unavailable: {e})")
-
 
 
 def _print_mtp_metrics(before: str, after: str) -> None:
@@ -653,7 +667,7 @@ def run_sanity_check(n_turns: int, temperature: float) -> None:
         try:
             result, elapsed = _post(f"{BASE_URL}/v1/chat/completions", payload)
         except Exception as e:
-            print(f"  Turn {i+1:2d}: REQUEST FAILED — {e}")
+            print(f"  Turn {i + 1:2d}: REQUEST FAILED — {e}")
             fail_count += 1
             continue
 
@@ -672,7 +686,7 @@ def run_sanity_check(n_turns: int, temperature: float) -> None:
                 json.loads(args_str)
                 tc_summary.append(f"{fn.get('name')}({args_str[:60]})")
             except json.JSONDecodeError:
-                print(f"  Turn {i+1:2d}: INVALID JSON in tool_call for {fn.get('name')}: {args_str!r}")
+                print(f"  Turn {i + 1:2d}: INVALID JSON in tool_call for {fn.get('name')}: {args_str!r}")
                 valid = False
 
         status = "PASS" if valid else "FAIL"
@@ -687,14 +701,18 @@ def run_sanity_check(n_turns: int, temperature: float) -> None:
         content_preview = content[:70].replace("\n", " ") if content else ""
         usage = result.get("usage", {})
         toks = usage.get("completion_tokens", 0)
-        print(f"  Turn {i+1:2d}: {status}  {elapsed:.1f}s  {toks}tok  reason={finish_reason}  tools=[{tc_str}]  text={content_preview!r}")
+        print(
+            f"  Turn {i + 1:2d}: {status}  {elapsed:.1f}s  {toks}tok  reason={finish_reason}  tools=[{tc_str}]  text={content_preview!r}"
+        )
 
     print(f"\n=== Summary: {pass_count}/{n_turns} PASS  {fail_count} FAIL  tool_call_turns={tool_call_turns} --")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark llama-server with Don Rickles persona")
-    parser.add_argument("--turns", type=int, default=0, help="Run Task 5 sanity check with N turns (0=single benchmark)")
+    parser.add_argument(
+        "--turns", type=int, default=0, help="Run Task 5 sanity check with N turns (0=single benchmark)"
+    )
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature (0=greedy)")
     parser.add_argument("--max-tokens", type=int, default=200, help="Max generation tokens for single benchmark")
     args = parser.parse_args()

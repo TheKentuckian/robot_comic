@@ -38,9 +38,9 @@ _MAX_TURNS = 30
 
 # Thresholds (ms) for green / yellow / red colouring per stage
 _THRESHOLDS: dict[str, tuple[float, float]] = {
-    "stt":   (300,  600),
-    "llm":   (800,  2000),
-    "tts":   (500,  1500),
+    "stt": (300, 600),
+    "llm": (800, 2000),
+    "tts": (500, 1500),
     "total": (2000, 4000),
 }
 
@@ -66,6 +66,7 @@ def _service_active(unit: str) -> bool:
 # ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
+
 
 class TurnRecord:
     """Aggregates all spans for one conversational turn."""
@@ -137,9 +138,9 @@ class PendingTurn:
         self.started_at = time.perf_counter()
         self.stt_ms: Optional[float] = None
         self.llm_ms: float = 0.0
-        self.llm_count: int = 0   # completed llm.request spans seen
+        self.llm_count: int = 0  # completed llm.request spans seen
         self.tts_ms: float = 0.0
-        self.tts_count: int = 0   # completed tts.synthesize spans seen
+        self.tts_count: int = 0  # completed tts.synthesize spans seen
         self.tool_count: int = 0
 
     @property
@@ -150,6 +151,7 @@ class PendingTurn:
 # ---------------------------------------------------------------------------
 # Span buffer
 # ---------------------------------------------------------------------------
+
 
 class SpanBuffer:
     """Accumulates child spans until the root turn span closes the trace."""
@@ -205,6 +207,7 @@ class SpanBuffer:
 # Rendering
 # ---------------------------------------------------------------------------
 
+
 def _fmt(ms: Optional[float], stage: str) -> Text:
     """Format a millisecond value with threshold-based colour."""
     if ms is None:
@@ -242,19 +245,19 @@ def _build_table(turns: list[TurnRecord], pending: Optional[PendingTurn] = None)
         header_style="bold dim",
         row_styles=["", "dim"],
     )
-    t.add_column("Time",    width=8,  no_wrap=True)
-    t.add_column("What",    width=20, no_wrap=True)
-    t.add_column("STT",     width=8,  justify="right")
-    t.add_column("LLM",     width=8,  justify="right")
-    t.add_column("TTS",     width=8,  justify="right")
-    t.add_column("Total",   width=8,  justify="right")
-    t.add_column("Tools",   width=5,  justify="right")
-    t.add_column("",        width=1,  justify="center")
+    t.add_column("Time", width=8, no_wrap=True)
+    t.add_column("What", width=20, no_wrap=True)
+    t.add_column("STT", width=8, justify="right")
+    t.add_column("LLM", width=8, justify="right")
+    t.add_column("TTS", width=8, justify="right")
+    t.add_column("Total", width=8, justify="right")
+    t.add_column("Tools", width=5, justify="right")
+    t.add_column("", width=1, justify="center")
 
     if pending is not None:
         sp = _spin()
         stt_done = pending.stt_ms is not None
-        llm_started = stt_done          # LLM starts right after STT
+        llm_started = stt_done  # LLM starts right after STT
         tts_started = pending.llm_count > 0
         # LLM spinner: active while STT is done but no llm.request seen yet,
         # or after the last llm request if tts hasn't started.
@@ -267,9 +270,9 @@ def _build_table(turns: list[TurnRecord], pending: Optional[PendingTurn] = None)
         t.add_row(
             pending.ts.strftime("%H:%M:%S"),
             Text(f"{sp}", style="bold yellow"),
-            _fmt_spin(pending.stt_ms, stt_done,  "stt"),
-            _fmt_spin(llm_ms,        llm_active, "llm"),
-            _fmt_spin(tts_ms,        tts_active, "tts"),
+            _fmt_spin(pending.stt_ms, stt_done, "stt"),
+            _fmt_spin(llm_ms, llm_active, "llm"),
+            _fmt_spin(tts_ms, tts_active, "tts"),
             _fmt(pending.elapsed_ms, "total"),
             Text(str(pending.tool_count), style="cyan") if pending.tool_count else Text(""),
             Text(sp, style="yellow"),
@@ -282,9 +285,9 @@ def _build_table(turns: list[TurnRecord], pending: Optional[PendingTurn] = None)
         t.add_row(
             turn.ts.strftime("%H:%M:%S"),
             Text(excerpt, style="italic dim" if excerpt == "greeting" else ""),
-            _fmt(turn.stt_ms,   "stt"),
-            _fmt(turn.llm_ms,   "llm"),
-            _fmt(turn.tts_ms,   "tts"),
+            _fmt(turn.stt_ms, "stt"),
+            _fmt(turn.llm_ms, "llm"),
+            _fmt(turn.tts_ms, "tts"),
             _fmt(turn.total_ms, "total"),
             tools_cell,
             ok_icon,
@@ -295,6 +298,7 @@ def _build_table(turns: list[TurnRecord], pending: Optional[PendingTurn] = None)
 # ---------------------------------------------------------------------------
 # Log tailing
 # ---------------------------------------------------------------------------
+
 
 def _iter_journald(unit: str) -> Iterator[str]:
     """Stream lines from the systemd journal for a given unit."""
@@ -330,7 +334,7 @@ def _parse_span(line: str) -> Optional[dict]:
     if idx == -1:
         return None
     try:
-        return json.loads(line[idx + 7:])
+        return json.loads(line[idx + 7 :])
     except json.JSONDecodeError:
         return None
 
@@ -338,6 +342,7 @@ def _parse_span(line: str) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     """Run the live TUI monitor."""
@@ -347,11 +352,14 @@ def main() -> None:
     )
     source = parser.add_mutually_exclusive_group()
     source.add_argument(
-        "--unit", default=_JOURNALD_UNIT, metavar="UNIT",
+        "--unit",
+        default=_JOURNALD_UNIT,
+        metavar="UNIT",
         help=f"systemd unit to tail (default: {_JOURNALD_UNIT})",
     )
     source.add_argument(
-        "--file", metavar="PATH",
+        "--file",
+        metavar="PATH",
         help="tail a log file instead of the systemd journal",
     )
     args = parser.parse_args()
@@ -366,7 +374,7 @@ def main() -> None:
     watch_unit: Optional[str] = args.unit if not args.file else None
 
     # Service status — polled every ~3 s by the refresh thread.
-    _svc_active: list[bool] = [True]   # mutable box so refresh thread can update it
+    _svc_active: list[bool] = [True]  # mutable box so refresh thread can update it
     _svc_last_check: list[float] = [0.0]
 
     def _render() -> Panel:
@@ -412,7 +420,7 @@ def main() -> None:
                     _svc_active[0] = _service_active(watch_unit)
                     _svc_last_check[0] = now
             live.update(_render())
-            stop_event.wait(0.15)   # ~6 fps for smooth spinner
+            stop_event.wait(0.15)  # ~6 fps for smooth spinner
 
     try:
         with Live(_render(), console=console, refresh_per_second=4, screen=True) as live:

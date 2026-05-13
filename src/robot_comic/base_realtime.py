@@ -745,9 +745,7 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
                                 "robot.mode": self.BACKEND_PROVIDER,
                             },
                         )
-                        self._turn_ctx_token = otel_context.attach(
-                            trace.set_span_in_context(self._turn_span)
-                        )
+                        self._turn_ctx_token = otel_context.attach(trace.set_span_in_context(self._turn_span))
                         if hasattr(self, "_clear_queue") and callable(self._clear_queue):
                             self._clear_queue()
                         if self.deps.head_wobbler is not None:

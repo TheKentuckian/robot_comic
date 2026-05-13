@@ -1,5 +1,5 @@
 import importlib
-import os
+
 import pytest
 
 
@@ -23,6 +23,7 @@ def _reload_config(monkeypatch, env: dict):
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     import robot_comic.config as cfg_mod
+
     importlib.reload(cfg_mod)
     return cfg_mod.config
 

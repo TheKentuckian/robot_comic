@@ -1,11 +1,10 @@
 from __future__ import annotations
-
 from unittest.mock import MagicMock
 
 import pytest
 
-from robot_comic.tools.core_tools import ToolDependencies
 from robot_comic.tools.move_head import MoveHead
+from robot_comic.tools.core_tools import ToolDependencies
 
 
 def test_move_head_schema_keeps_down_but_marks_it_explicit_only() -> None:

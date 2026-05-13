@@ -1,5 +1,5 @@
-import asyncio
 import time as _time_mod
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -73,11 +73,16 @@ def _make_heartbeat_handler():
 
         def _log_heartbeat(self):
             import logging
+
             h = self._heartbeat
             age = _time_mod.monotonic() - h["last_event_at"]
             logging.getLogger("robot_comic.local_stt_realtime").info(
                 "[Moonshine] state=%s  last_event=%s  age=%.1fs  frames=%d  text=%r",
-                h["state"], h["last_event"], age, h["audio_frames"], (h["last_text"] or "")[:40],
+                h["state"],
+                h["last_event"],
+                age,
+                h["audio_frames"],
+                (h["last_text"] or "")[:40],
             )
 
     return _Stub()
@@ -93,6 +98,7 @@ def test_heartbeat_dict_has_required_keys():
 
 def test_log_heartbeat_emits_info(caplog):
     import logging
+
     obj = _make_heartbeat_handler()
     with caplog.at_level(logging.INFO, logger="robot_comic.local_stt_realtime"):
         obj._log_heartbeat()

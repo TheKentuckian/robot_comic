@@ -146,9 +146,7 @@ def _build_tts_config(
     ``_TTS_NO_SYSTEM_INSTRUCTION_MODELS`` to avoid 400 INVALID_ARGUMENT errors.
     """
     speech_config = types.SpeechConfig(
-        voice_config=types.VoiceConfig(
-            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
-        )
+        voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name))
     )
     if model in _TTS_NO_SYSTEM_INSTRUCTION_MODELS:
         return types.GenerateContentConfig(

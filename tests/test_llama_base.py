@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 from fastrtc import AdditionalOutputs
-
 from _helpers import make_stream_response
+
 from robot_comic.tools.core_tools import ToolDependencies
 
 

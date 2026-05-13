@@ -16,12 +16,12 @@ Pass ``--target some.module`` to profile a different import.
 """
 
 from __future__ import annotations
-
-import argparse
 import re
-import subprocess
 import sys
+import argparse
+import subprocess
 from dataclasses import dataclass
+
 
 # Top-level imports console.py performs (kept in sync with src/robot_comic/console.py).
 # We bucket cumulative load time by the first import of each of these names.
@@ -47,9 +47,7 @@ CONSOLE_TOP_LEVEL = [
 ]
 
 
-LINE_RE = re.compile(
-    r"^import time:\s+(?P<self>\d+)\s+\|\s+(?P<cum>\d+)\s+\|\s+(?P<indent>\s*)(?P<name>\S+)"
-)
+LINE_RE = re.compile(r"^import time:\s+(?P<self>\d+)\s+\|\s+(?P<cum>\d+)\s+\|\s+(?P<indent>\s*)(?P<name>\S+)")
 
 
 @dataclass

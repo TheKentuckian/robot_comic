@@ -1,5 +1,4 @@
-"""
-Pre-processing layer that translates Gemini Live delivery tags to Chatterbox TTS parameters.
+"""Pre-processing layer that translates Gemini Live delivery tags to Chatterbox TTS parameters.
 
 Gemini Live uses inline prosody tags ([fast], [slow], [annoyance], etc.) to shape delivery.
 Chatterbox has no equivalent prosody tags — instead it exposes two generation parameters:
@@ -31,8 +30,8 @@ Usage (local Chatterbox pipeline):
 
 from __future__ import annotations
 import re
-from dataclasses import dataclass, field
 from typing import Optional
+from dataclasses import dataclass
 
 
 # ---------------------------------------------------------------------------
@@ -41,12 +40,12 @@ from typing import Optional
 
 # (exaggeration, cfg_weight, turbo_paralinguistic_insert_or_None)
 _TAG_PARAMS: dict[str, tuple[float, float, Optional[str]]] = {
-    "fast":        (1.2, 0.30, None),
-    "slow":        (0.8, 0.80, None),
-    "annoyance":   (1.5, 0.40, None),
-    "aggression":  (1.6, 0.35, None),
-    "amusement":   (1.3, 0.40, "[chuckle]"),  # Turbo paralinguistic on amusement
-    "enthusiasm":  (1.4, 0.30, None),
+    "fast": (1.2, 0.30, None),
+    "slow": (0.8, 0.80, None),
+    "annoyance": (1.5, 0.40, None),
+    "aggression": (1.6, 0.35, None),
+    "amusement": (1.3, 0.40, "[chuckle]"),  # Turbo paralinguistic on amusement
+    "enthusiasm": (1.4, 0.30, None),
 }
 
 SILENCE_PADDING_MS = 400  # ms of silence to insert for [short pause]
@@ -60,13 +59,13 @@ SILENCE_PADDING_MS = 400  # ms of silence to insert for [short pause]
 # Tune these against actual Chatterbox output with the cloned reference audio.
 
 PERSONA_BASELINES: dict[str, dict[str, float]] = {
-    "don_rickles":        {"exaggeration": 1.00, "cfg_weight": 0.50},
+    "don_rickles": {"exaggeration": 1.00, "cfg_weight": 0.50},
     "rodney_dangerfield": {"exaggeration": 0.90, "cfg_weight": 0.50},  # weary baseline
-    "andrew_dice_clay":   {"exaggeration": 1.10, "cfg_weight": 0.50},  # swagger baseline
-    "robin_williams":     {"exaggeration": 1.30, "cfg_weight": 0.45},  # manic baseline
-    "bill_hicks":         {"exaggeration": 0.85, "cfg_weight": 0.55},  # dry baseline, spikes on aggression
-    "richard_pryor":      {"exaggeration": 1.00, "cfg_weight": 0.50},  # conversational baseline
-    "dave_chappelle":     {"exaggeration": 0.95, "cfg_weight": 0.50},  # loose but controlled
+    "andrew_dice_clay": {"exaggeration": 1.10, "cfg_weight": 0.50},  # swagger baseline
+    "robin_williams": {"exaggeration": 1.30, "cfg_weight": 0.45},  # manic baseline
+    "bill_hicks": {"exaggeration": 0.85, "cfg_weight": 0.55},  # dry baseline, spikes on aggression
+    "richard_pryor": {"exaggeration": 1.00, "cfg_weight": 0.50},  # conversational baseline
+    "dave_chappelle": {"exaggeration": 0.95, "cfg_weight": 0.50},  # loose but controlled
 }
 
 _DEFAULT_BASELINE: dict[str, float] = {"exaggeration": 1.00, "cfg_weight": 0.50}
@@ -76,6 +75,7 @@ _DEFAULT_BASELINE: dict[str, float] = {"exaggeration": 1.00, "cfg_weight": 0.50}
 # Data types
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ChatterboxSegment:
     """One generation unit for the Chatterbox TTS pipeline.
@@ -84,6 +84,7 @@ class ChatterboxSegment:
     Otherwise: generate speech from text using exaggeration and cfg_weight.
     If turbo_insert is set (Turbo model only): prepend to text before generation.
     """
+
     text: str
     exaggeration: float
     cfg_weight: float
@@ -102,6 +103,7 @@ _TAG_RE = re.compile(r"(\[short pause\]|\[\w+\])")
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def translate(
     text: str,
@@ -126,6 +128,7 @@ def translate(
     Returns:
         Ordered list of ChatterboxSegment — one per generation call, plus any
         silence segments for [short pause].
+
     """
     baseline = PERSONA_BASELINES.get(persona, _DEFAULT_BASELINE)
     base_exag = baseline["exaggeration"]
@@ -141,11 +144,13 @@ def translate(
 
     # parts[0] is any text before the first tag (no associated tag)
     if parts[0].strip():
-        segments.append(ChatterboxSegment(
-            text=parts[0].strip(),
-            exaggeration=base_exag,
-            cfg_weight=base_cfg,
-        ))
+        segments.append(
+            ChatterboxSegment(
+                text=parts[0].strip(),
+                exaggeration=base_exag,
+                cfg_weight=base_cfg,
+            )
+        )
 
     # Remaining parts alternate: tag at odd index, text at even index
     i = 1
@@ -156,19 +161,23 @@ def translate(
 
         if tag == "[short pause]":
             # Silence segment — use prev params so the pause "sounds like" the last segment
-            segments.append(ChatterboxSegment(
-                text="",
-                exaggeration=prev_exag,
-                cfg_weight=prev_cfg,
-                silence_ms=SILENCE_PADDING_MS,
-            ))
-            # Any text following the pause before the next tag uses prev params
-            if chunk:
-                segments.append(ChatterboxSegment(
-                    text=chunk,
+            segments.append(
+                ChatterboxSegment(
+                    text="",
                     exaggeration=prev_exag,
                     cfg_weight=prev_cfg,
-                ))
+                    silence_ms=SILENCE_PADDING_MS,
+                )
+            )
+            # Any text following the pause before the next tag uses prev params
+            if chunk:
+                segments.append(
+                    ChatterboxSegment(
+                        text=chunk,
+                        exaggeration=prev_exag,
+                        cfg_weight=prev_cfg,
+                    )
+                )
         else:
             tag_name = tag[1:-1]  # strip square brackets
             params = _TAG_PARAMS.get(tag_name)
@@ -179,12 +188,14 @@ def translate(
 
             if chunk:
                 insert = turbo_insert if use_turbo else None
-                segments.append(ChatterboxSegment(
-                    text=chunk,
-                    exaggeration=exag,
-                    cfg_weight=cfg,
-                    turbo_insert=insert,
-                ))
+                segments.append(
+                    ChatterboxSegment(
+                        text=chunk,
+                        exaggeration=exag,
+                        cfg_weight=cfg,
+                        turbo_insert=insert,
+                    )
+                )
                 prev_exag, prev_cfg = exag, cfg
 
     return segments

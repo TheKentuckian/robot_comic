@@ -415,6 +415,7 @@ async def test_video_task_not_started_when_streaming_disabled(monkeypatch):
 
     # Flag off (default)
     import robot_comic.config as cfg_mod
+
     monkeypatch.setattr(cfg_mod.config, "GEMINI_LIVE_VIDEO_STREAMING", False)
 
     video_sender_calls = []
