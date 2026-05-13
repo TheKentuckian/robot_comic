@@ -117,7 +117,7 @@ def _init_otel() -> None:
     # ConsoleMetricExporter floods journald with multi-hundred-line JSON every 60 s.
     # Gate it behind ROBOT_METRICS_CONSOLE so it is opt-in for developer debug only.
     _metrics_console = os.getenv("ROBOT_METRICS_CONSOLE", "").strip().lower() in {"1", "true", "yes"}
-    readers: list = []
+    readers: list[Any] = []
     if _metrics_console:
         readers.append(PeriodicExportingMetricReader(ConsoleMetricExporter(), export_interval_millis=60_000))
 

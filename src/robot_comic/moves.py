@@ -310,7 +310,7 @@ class MovementManager:
 
             self.speed_factor: float = _cfg.MOVEMENT_SPEED_FACTOR
         except Exception:
-            self.speed_factor: float = 0.6
+            self.speed_factor = 0.6
 
         # Safety: per-axis angular velocity cap (rad/s) applied before every set_target.
         # Reads REACHY_MINI_HEAD_MAX_VEL_RAD_S from the environment via motion_safety.
