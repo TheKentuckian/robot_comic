@@ -252,7 +252,10 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                         "index": idx,
                         "function": {"name": "", "arguments": ""},
                     }
-                tool_calls_by_idx[idx]["function"]["arguments"] += delta["arguments"]
+                if delta.get("name"):
+                    tool_calls_by_idx[idx]["function"]["name"] = delta["name"]
+                if delta.get("arguments") is not None:
+                    tool_calls_by_idx[idx]["function"]["arguments"] += delta["arguments"]
 
             elif delta["type"] == "finish_reason":
                 pass  # Stream has ended
@@ -603,18 +606,23 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                                         "content": delta["content"],
                                     }
 
-                                # Emit tool call deltas
+                                # Emit tool call deltas. OpenAI-compatible streams
+                                # typically send the function name in one chunk and
+                                # argument fragments in subsequent chunks; carry both.
                                 if "tool_calls" in delta:
                                     for tool_call in delta["tool_calls"]:
                                         if "index" in tool_call:
                                             idx = tool_call["index"]
                                             if "function" in tool_call:
                                                 fn = tool_call["function"]
-                                                if fn.get("arguments") is not None:
+                                                name = fn.get("name")
+                                                arguments = fn.get("arguments")
+                                                if name is not None or arguments is not None:
                                                     yield {
                                                         "type": "tool_call_delta",
                                                         "index": idx,
-                                                        "arguments": fn["arguments"],
+                                                        "name": name,
+                                                        "arguments": arguments,
                                                     }
 
                                 # Emit finish when we have finish_reason
@@ -664,7 +672,10 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                         "index": idx,
                         "function": {"name": "", "arguments": ""},
                     }
-                tool_calls_by_idx[idx]["function"]["arguments"] += delta["arguments"]
+                if delta.get("name"):
+                    tool_calls_by_idx[idx]["function"]["name"] = delta["name"]
+                if delta.get("arguments") is not None:
+                    tool_calls_by_idx[idx]["function"]["arguments"] += delta["arguments"]
 
             elif delta["type"] == "finish_reason":
                 # End of stream; parse tool calls if needed
