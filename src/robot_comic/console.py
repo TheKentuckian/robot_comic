@@ -28,9 +28,8 @@ from robot_comic.config import (
     LOCKED_PROFILE,
     OPENAI_BACKEND,
     CHATTERBOX_OUTPUT,
-    GEMINI_TTS_OUTPUT,
     ELEVENLABS_OUTPUT,
-    LLAMA_ELEVENLABS_TTS_OUTPUT,
+    GEMINI_TTS_OUTPUT,
     LOCAL_STT_BACKEND,
     CHATTERBOX_URL_ENV,
     LOCAL_STT_MODEL_ENV,
@@ -44,6 +43,7 @@ from robot_comic.config import (
     CHATTERBOX_DEFAULT_VOICE,
     HF_LOCAL_CONNECTION_MODE,
     HF_DEPLOYED_CONNECTION_MODE,
+    LLAMA_ELEVENLABS_TTS_OUTPUT,
     LOCAL_STT_UPDATE_INTERVAL_ENV,
     LOCAL_STT_RESPONSE_BACKEND_ENV,
     HF_REALTIME_CONNECTION_MODE_ENV,
@@ -134,6 +134,7 @@ class LocalStream:
         settings_app: Optional[FastAPI] = None,
         instance_path: Optional[str] = None,
         app_stop_event: Optional[Any] = None,
+        restart_requested_event: Optional[Any] = None,
         pause_controller: Optional[Any] = None,
         movement_manager: Optional[Any] = None,
     ):
@@ -147,6 +148,10 @@ class LocalStream:
         - ``instance_path``: directory where per-instance ``.env`` should be stored.
         - ``app_stop_event``: optional ``threading.Event`` used by the admin restart endpoint to
           trigger the graceful shutdown path (the autostart service is expected to relaunch).
+        - ``restart_requested_event``: optional ``threading.Event`` set by the admin
+          restart endpoint in addition to ``app_stop_event``. ``main`` uses this to
+          distinguish admin-requested restarts (exit 75 → systemd relaunches) from
+          plain stops (exit 0).
         - ``pause_controller``: optional ``PauseController`` whose phrase lists the admin
           endpoints can read and hot-reload.
         - ``movement_manager``: optional ``MovementManager`` used by the admin
@@ -162,6 +167,7 @@ class LocalStream:
         self._settings_app: Optional[FastAPI] = settings_app
         self._instance_path: Optional[str] = instance_path
         self._app_stop_event = app_stop_event
+        self._restart_requested_event = restart_requested_event
         self._pause_controller = pause_controller
         self._movement_manager = movement_manager
         self._settings_initialized = False
@@ -818,6 +824,10 @@ class LocalStream:
                 )
             logger.info("Admin requested restart — setting app_stop_event")
             try:
+                # Signal restart intent BEFORE the stop event so main can see it
+                # in time to exit with the restart sentinel code.
+                if self._restart_requested_event is not None:
+                    self._restart_requested_event.set()
                 self._app_stop_event.set()
             except Exception as e:
                 logger.error("Failed to set app_stop_event: %s", e)
@@ -916,6 +926,7 @@ class LocalStream:
             # Fetch ElevenLabs voice catalog at startup (one-time, cached for process lifetime)
             try:
                 from robot_comic import config
+
                 await config.refresh_elevenlabs_voices()
             except Exception as e:
                 logger.debug("Failed to refresh ElevenLabs voice catalog: %s", e)
