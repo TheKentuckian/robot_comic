@@ -148,6 +148,29 @@ def _strip_tts_delivery_tags(instructions: str) -> str:
     return result.strip()
 
 
+def _load_profile_live_styling() -> str | None:
+    """Read profiles/<name>/gemini_live.txt if present.
+
+    Unlike Gemini TTS — which renders prepared text through a separate TTS
+    call and supports inline [delivery_tag] markers — Gemini Live produces
+    audio inside the live session. Per-profile styling here is appended to
+    the base system instructions as a delivery guideline the model can
+    apply while it speaks. Returns None if the profile or file is absent.
+    """
+    profile: str | None = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
+    if not profile:
+        return None
+    try:
+        path = config.PROFILES_DIRECTORY / profile / "gemini_live.txt"
+        if path.exists():
+            text: str = path.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+    except Exception as exc:
+        logger.warning("Could not read gemini_live.txt for profile %r: %s", profile, exc)
+    return None
+
+
 def _resolve_gemini_voice(profile_voice: str) -> str:
     """Map a profile voice name to the closest Gemini voice.
 
@@ -512,6 +535,14 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
     def _build_live_config(self) -> types.LiveConnectConfig:
         """Build the LiveConnectConfig for a Gemini Live session."""
         instructions = _strip_tts_delivery_tags(get_session_instructions())
+
+        # Append any profile-specific delivery guidance (Brooklyn rapid-fire
+        # for Rickles, drawl for Pryor, etc.) so Gemini Live speaks in the
+        # persona's voice without needing those cues baked into every line.
+        live_styling = _load_profile_live_styling()
+        if live_styling:
+            instructions = f"{instructions}\n\n## DELIVERY\n{live_styling}"
+
         voice = _resolve_gemini_voice(self._voice_override or get_session_voice())
 
         # Convert OpenAI-style tool specs to Gemini function declarations
