@@ -42,6 +42,7 @@ from robot_comic.gemini_retry import (
     describe_quota_failure,
     extract_retry_after_seconds,
 )
+from robot_comic.presence_monitor import PresenceMonitor
 from robot_comic.tools.core_tools import (
     ToolDependencies,
     get_active_tool_specs,
@@ -279,6 +280,30 @@ def _resolve_gemini_startup_voice(voice: str | None) -> str | None:
     return resolved
 
 
+_QUESTION_RE = re.compile(
+    r"""
+    \?                                   # ends with ?
+    |
+    \b(who|what|where|when|why|how      # interrogative words
+    |are\s+you|do\s+you|can\s+you
+    |would\s+you|will\s+you|have\s+you
+    |did\s+you|is\s+that|isn't\s+that
+    |don't\s+you|doesn't\s+that
+    )\b
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+
+def _is_question_turn(transcript: str) -> bool:
+    """Return True when the assistant's finalised transcript looks like a question.
+
+    Heuristic: ends with '?' or contains a common interrogative.  Intentionally
+    lenient so borderline prompts ("Tell me about yourself…") don't fall through.
+    """
+    return bool(_QUESTION_RE.search(transcript.strip()))
+
+
 class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
     """Gemini Live API handler for fastrtc Stream."""
 
@@ -337,6 +362,20 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
         # the BaseRealtimeHandler.cumulative_cost field so dashboards that
         # already read that name keep working.
         self.cumulative_cost: float = 0.0
+
+        # Presence monitor — arms after question turns, fires re-prompt nudges
+        # on exponential backoff, then enters silent-wait after max_attempts.
+        # Only instantiated when GEMINI_LIVE_PRESENCE_ENABLED is set.
+        self._presence_monitor: PresenceMonitor | None = (
+            PresenceMonitor(
+                probe_callback=self._send_presence_probe,
+                first_s=config.GEMINI_LIVE_PRESENCE_FIRST_S,
+                backoff_factor=config.GEMINI_LIVE_PRESENCE_BACKOFF_FACTOR,
+                max_attempts=config.GEMINI_LIVE_PRESENCE_MAX_ATTEMPTS,
+            )
+            if config.GEMINI_LIVE_PRESENCE_ENABLED
+            else None
+        )
 
     def copy(self) -> "GeminiLiveHandler":
         """Create a copy of the handler."""
@@ -443,6 +482,21 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
         self._listening_state = listening
         self.deps.movement_manager.set_listening(listening)
 
+    async def _send_presence_probe(self, attempt: int, nudge: str) -> None:
+        """Probe callback invoked by PresenceMonitor when the user has been silent.
+
+        Sends the nudge as synthetic user-content text so the model sees it as
+        an in-conversation cue rather than a system instruction.
+        """
+        if not self.session:
+            logger.debug("PresenceMonitor probe %d: no active session, skipping nudge", attempt)
+            return
+        try:
+            await self.session.send_realtime_input(text=nudge)
+            logger.debug("PresenceMonitor probe %d sent: %r", attempt, nudge)
+        except Exception as exc:
+            logger.warning("PresenceMonitor probe %d: failed to send nudge: %s", attempt, exc)
+
     async def _flush_transcript_chunks(self, role: str, chunks: list[str]) -> None:
         """Emit one finalized transcript message for the current turn.
 
@@ -480,6 +534,10 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
         """Switch out of user-listening mode when the model begins responding."""
         await self._flush_transcript_chunks("user", self._pending_user_transcript_chunks)
         self._set_listening_state(False)
+        # New assistant turn starting — cancel any pending presence probe so we
+        # don't double-fire if the nudge itself triggered a model response.
+        if self._presence_monitor is not None:
+            self._presence_monitor.cancel()
 
     async def _handle_interruption(self) -> None:
         """Stop current playback and preserve any transcript already spoken."""
@@ -496,11 +554,21 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
         """Finalize the current turn and restore post-speech motion state."""
         logger.debug("Gemini turn complete")
         await self._flush_transcript_chunks("user", self._pending_user_transcript_chunks)
+
+        # Capture the assistant transcript *before* flushing so we can
+        # classify it as a question turn for the presence monitor.
+        assistant_transcript = "".join(self._pending_assistant_transcript_chunks).strip()
         await self._flush_transcript_chunks("assistant", self._pending_assistant_transcript_chunks)
+
         self._close_turn_span("success")
         self._set_listening_state(False)
         if self.deps.head_wobbler is not None:
             self.deps.head_wobbler.request_reset_after_current_audio()
+
+        # Arm presence monitor when the assistant ends on a question.
+        if self._presence_monitor is not None and assistant_transcript and _is_question_turn(assistant_transcript):
+            logger.debug("Presence monitor armed after question turn")
+            self._presence_monitor.arm()
 
     async def apply_personality(self, profile: str | None) -> str:
         """Apply a new personality (profile) at runtime.
@@ -619,6 +687,10 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
     async def _restart_session(self) -> None:
         """Force-close the current session and start a fresh one."""
         try:
+            # Drop any pending presence probe; do not carry timers across reconnects.
+            if self._presence_monitor is not None:
+                self._presence_monitor.cancel()
+
             if self.session is not None:
                 try:
                     await self.session.close()
@@ -975,6 +1047,9 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
                                         )
                                     self._pending_user_transcript_chunks.append(transcript)
                                     self._set_listening_state(True)
+                                    # User is speaking — cancel any pending presence probe.
+                                    if self._presence_monitor is not None:
+                                        self._presence_monitor.on_user_activity()
 
                                 # Handle output transcription (model speech)
                                 if content.output_transcription and content.output_transcription.text:
@@ -1061,6 +1136,9 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
     async def shutdown(self) -> None:
         """Shutdown the handler."""
         self._stop_event.set()
+
+        if self._presence_monitor is not None:
+            self._presence_monitor.shutdown()
 
         await self.tool_manager.shutdown()
 
