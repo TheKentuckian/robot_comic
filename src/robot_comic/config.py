@@ -613,13 +613,11 @@ class Config:
     WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
     WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None
 
-    # Kiosk-mode startup screen: play a welcome prompt + persona listing before
-    # the first persona is selected.  Off by default to preserve existing flows.
-    STARTUP_SCREEN_ENABLED = _env_flag("REACHY_MINI_STARTUP_SCREEN", default=False)
-    # Optional comma-separated list of profile names used to curate persona
-    # listing order.  Unrecognised names are silently skipped; remaining profiles
-    # are appended alphabetically.  Empty / unset → fully alphabetical.
-    STARTUP_SCREEN_PERSONA_ORDER = os.getenv("REACHY_MINI_STARTUP_SCREEN_PERSONA_ORDER") or ""
+    # Disengagement guardrail for high-intensity personas (e.g. Bill Hicks).
+    # When unset, the guardrail activates automatically for profiles in
+    # guardrail.GUARDRAIL_PROFILES.  Set to 1/true to force-enable for any
+    # profile, or 0/false to force-disable globally.
+    GUARDRAIL_ENABLED = _env_flag("REACHY_MINI_GUARDRAIL_ENABLED", default=False)
 
     # Persist recent punchlines across sessions and inject a "don't repeat"
     # section into the system prompt.  Set to 0/false to disable.
@@ -776,6 +774,7 @@ def refresh_runtime_config_from_env() -> None:
     config.STARTUP_SCREEN_PERSONA_ORDER = os.getenv("REACHY_MINI_STARTUP_SCREEN_PERSONA_ORDER") or ""
     config.JOKE_HISTORY_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_ENABLED", default=True)
     config.FORCE_DELIVERY_TAGS = _env_flag("REACHY_MINI_FORCE_DELIVERY_TAGS", default=False)
+    config.GUARDRAIL_ENABLED = _env_flag("REACHY_MINI_GUARDRAIL_ENABLED", default=False)
 
 
 def get_backend_choice(model_name: str | None = None) -> str:
