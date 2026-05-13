@@ -1511,4 +1511,66 @@ async function init() {
   }
 }
 
+// ── Battery indicator ─────────────────────────────────────────────────────────
+
+function _batteryIcon(source, percent) {
+  // Simple unicode battery icon chosen by level.
+  if (source === "sim" || source === "unknown" || percent === null || percent === undefined) {
+    return "🔋"; // 🔋 generic
+  }
+  if (percent < 20) return "🪫"; // 🪫 empty
+  if (percent < 50) return "🔋"; // 🔋 mid
+  return "🔋"; // 🔋 full
+}
+
+function _applyBatteryUI(data) {
+  const el = document.getElementById("battery-indicator");
+  if (!el) return;
+
+  const source = data.source || "unknown";
+
+  // Hide the indicator entirely in sim mode or if source is unknown
+  if (source === "sim" || source === "unknown") {
+    el.hidden = true;
+    return;
+  }
+
+  const percent = data.percent;
+  const charging = data.charging;
+
+  // Remove all level classes
+  el.classList.remove("battery--full", "battery--med", "battery--low");
+
+  let levelClass = "battery--full";
+  if (percent !== null && percent !== undefined) {
+    if (percent < 20) levelClass = "battery--low";
+    else if (percent < 50) levelClass = "battery--med";
+  }
+  el.classList.add(levelClass);
+
+  const icon = charging ? "⚡" : _batteryIcon(source, percent);
+  const label =
+    percent !== null && percent !== undefined
+      ? `${icon} ${percent}%${charging ? " ⚡" : ""}`
+      : `${icon} --`;
+  el.textContent = label;
+  el.hidden = false;
+}
+
+let _batteryPollTimer = null;
+
+async function pollBattery() {
+  try {
+    const resp = await fetchWithTimeout("/api/battery", {}, 4000);
+    if (resp.ok) {
+      const data = await resp.json();
+      _applyBatteryUI(data);
+    }
+  } catch (_) {
+    // Silently ignore — battery is informational only
+  }
+  _batteryPollTimer = setTimeout(pollBattery, 30000);
+}
+
 window.addEventListener("DOMContentLoaded", init);
+window.addEventListener("DOMContentLoaded", () => { pollBattery(); });
