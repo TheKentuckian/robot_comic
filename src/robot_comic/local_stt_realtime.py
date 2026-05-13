@@ -354,6 +354,14 @@ class LocalSTTInputMixin:
         if self._local_stt_stream is None:
             return
 
+        # Skip pumping mic audio while the robot is speaking. Without this,
+        # Moonshine's streaming VAD treats the robot's own TTS as one
+        # continuous utterance and never emits `completed`, stalling the
+        # next user turn. The post-transcript echo guard alone is too late.
+        speaking_until = getattr(self, "_speaking_until", 0.0)
+        if time.perf_counter() < speaking_until:
+            return
+
         input_sample_rate, audio_frame = frame
         if audio_frame.ndim == 2:
             if audio_frame.shape[1] > audio_frame.shape[0]:

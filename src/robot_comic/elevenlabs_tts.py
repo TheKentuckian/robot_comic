@@ -60,6 +60,8 @@ _TTS_RETRY_BASE_DELAY = 0.5
 _LLM_MAX_RETRIES = 4
 _LLM_RETRY_BASE_DELAY = 1.0
 _LLM_MAX_TOOL_ROUNDS = 5
+# Extra seconds added after the last audio frame to cover device-buffer latency.
+_ECHO_COOLDOWN_S: float = 0.5
 
 
 def _read_kv_file(path) -> dict[str, str]:
@@ -161,11 +163,20 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         self._last_tts_rate_limited: bool = False
         self.output_queue: asyncio.Queue = asyncio.Queue()
         self.cumulative_cost: float = 0.0
+        # Drop-not-queue guard for concurrent Moonshine 'completed' events.
+        # Without this, two coroutines can mutate _conversation_history in
+        # parallel and break Gemini's strict role-alternation invariant,
+        # which stalls the conversation after the greeting.
+        self._dispatch_in_flight: bool = False
 
         # Attributes referenced by LocalSTTInputMixin
         self._turn_user_done_at: float | None = None
         self._turn_response_created_at: float | None = None
         self._turn_first_audio_at: float | None = None
+        # Echo guard: time.perf_counter() deadline after which TTS is done playing.
+        # Checked by LocalSTTInputMixin to suppress transcripts caused by speaker echo.
+        self._speaking_until: float = 0.0
+        self._is_responding: bool = False
 
     def _mark_activity(self, label: str) -> None:
         """No-op activity marker."""
@@ -217,7 +228,12 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def emit(self) -> Any:
         """Yield the next audio frame or status message from the output queue."""
-        return await wait_for_item(self.output_queue)
+        item = await wait_for_item(self.output_queue)
+        if isinstance(item, tuple):
+            remaining = self.output_queue.qsize()
+            frame_s = _CHUNK_SAMPLES / ELEVENLABS_OUTPUT_SAMPLE_RATE
+            self._speaking_until = time.perf_counter() + (remaining + 1) * frame_s + _ECHO_COOLDOWN_S
+        return item
 
     async def apply_personality(self, profile: str | None) -> str:
         """Switch personality profile and reset conversation history."""
@@ -278,6 +294,16 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _dispatch_completed_transcript(self, transcript: str) -> None:
         """ElevenLabs + Gemini response cycle: LLM → tools → TTS → audio frames."""
+        if self._is_responding:
+            logger.info("Dropping concurrent transcript dispatch (already responding): %r", transcript[:60])
+            return
+        self._is_responding = True
+        try:
+            await self._dispatch_completed_transcript_impl(transcript)
+        finally:
+            self._is_responding = False
+
+    async def _dispatch_completed_transcript_impl(self, transcript: str) -> None:
         self._conversation_history.append({"role": "user", "parts": [{"text": transcript}]})
         trim_history_in_place(self._conversation_history, role_key="role")
 
