@@ -211,7 +211,7 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         # surface a rate-limit-specific message to the chat UI.
         self._last_tts_rate_limited: bool = False
         self._last_tts_quota: str | None = None
-        self.output_queue: asyncio.Queue = asyncio.Queue()
+        self.output_queue: asyncio.Queue[Any] = asyncio.Queue()
 
         # Attributes referenced by LocalSTTInputMixin (declared to satisfy type checker and MRO)
         self._turn_user_done_at: float | None = None
@@ -391,7 +391,7 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
         tool_specs = get_active_tool_specs(self.deps)
         function_declarations = _openai_tool_specs_to_gemini(tool_specs)
-        tools_config = [types.Tool(function_declarations=function_declarations)] if function_declarations else []
+        tools_config = [types.Tool(function_declarations=function_declarations)] if function_declarations else []  # type: ignore[arg-type]
         gen_config = types.GenerateContentConfig(
             system_instruction=get_session_instructions(),
             tools=tools_config,  # type: ignore[arg-type]
@@ -448,8 +448,8 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                     contents=contents,
                     config=tts_config,
                 )
-                data = response.candidates[0].content.parts[0].inline_data.data
-                return base64.b64decode(data) if isinstance(data, str) else bytes(data)
+                data = response.candidates[0].content.parts[0].inline_data.data  # type: ignore[index,union-attr]
+                return base64.b64decode(data) if isinstance(data, str) else bytes(data)  # type: ignore[arg-type]
             except Exception as exc:
                 rate_limited = is_rate_limit_error(exc)
                 if rate_limited:
@@ -486,7 +486,7 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         return None
 
     @staticmethod
-    def _pcm_to_frames(pcm_bytes: bytes) -> list[np.ndarray]:
+    def _pcm_to_frames(pcm_bytes: bytes) -> "list[np.ndarray[Any, Any]]":
         """Split raw 16-bit PCM bytes into ~100 ms numpy frames."""
         audio = np.frombuffer(pcm_bytes, dtype=np.int16)
         return [

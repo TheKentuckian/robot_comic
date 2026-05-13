@@ -64,7 +64,7 @@ _LLM_MAX_TOOL_ROUNDS = 5
 _ECHO_COOLDOWN_S: float = 0.5
 
 
-def _read_kv_file(path) -> dict[str, str]:
+def _read_kv_file(path: Any) -> dict[str, str]:
     params: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -161,7 +161,7 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         self._stop_event: asyncio.Event = asyncio.Event()
         self._conversation_history: list[dict[str, Any]] = []
         self._last_tts_rate_limited: bool = False
-        self.output_queue: asyncio.Queue = asyncio.Queue()
+        self.output_queue: asyncio.Queue[Any] = asyncio.Queue()
         self.cumulative_cost: float = 0.0
         # Drop-not-queue guard for concurrent Moonshine 'completed' events.
         # Without this, two coroutines can mutate _conversation_history in
@@ -391,7 +391,7 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
         tool_specs = get_active_tool_specs(self.deps)
         function_declarations = _openai_tool_specs_to_gemini(tool_specs)
-        tools_config = [types.Tool(function_declarations=function_declarations)] if function_declarations else []
+        tools_config = [types.Tool(function_declarations=function_declarations)] if function_declarations else []  # type: ignore[arg-type]
         gen_config = types.GenerateContentConfig(
             system_instruction=get_session_instructions(),
             tools=tools_config,  # type: ignore[arg-type]
@@ -552,7 +552,7 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         return False
 
     @staticmethod
-    def _pcm_to_frames(pcm_bytes: bytes) -> list[np.ndarray]:
+    def _pcm_to_frames(pcm_bytes: bytes) -> "list[np.ndarray[Any, Any]]":
         """Split raw 16-bit PCM bytes into ~100 ms numpy frames."""
         audio = np.frombuffer(pcm_bytes, dtype=np.int16)
         return [

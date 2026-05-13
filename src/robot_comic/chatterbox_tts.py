@@ -10,6 +10,7 @@ Audio output: 24 kHz, mono, 16-bit PCM — matches the existing pipeline.
 import time
 import asyncio
 import logging
+from typing import Any
 
 import numpy as np
 from fastrtc import AdditionalOutputs
@@ -210,7 +211,12 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
     # TTS synthesis                                                        #
     # ------------------------------------------------------------------ #
 
-    async def _synthesize_and_enqueue(self, response_text: str, tts_start: float | None = None) -> None:
+    async def _synthesize_and_enqueue(
+        self,
+        response_text: str,
+        tts_start: float | None = None,
+        target_queue: "asyncio.Queue[Any] | None" = None,
+    ) -> None:
         """Translate response_text to TTS segments and enqueue PCM frames."""
         if not response_text:
             return

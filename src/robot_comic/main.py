@@ -316,6 +316,7 @@ def run(
         local_stt_response_backend = getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
         logger.info("Using %s", get_backend_label(config.BACKEND_PROVIDER))
 
+        handler_class: type[Any]
         if local_stt_response_backend == HF_BACKEND:
             handler_class = LocalSTTHuggingFaceRealtimeHandler
         elif local_stt_response_backend == GEMINI_TTS_OUTPUT:
