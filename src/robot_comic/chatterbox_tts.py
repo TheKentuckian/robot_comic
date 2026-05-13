@@ -10,7 +10,6 @@ Audio output: 24 kHz, mono, 16-bit PCM — matches the existing pipeline.
 import time
 import asyncio
 import logging
-from typing import Any, Optional
 
 import numpy as np
 from fastrtc import AdditionalOutputs
@@ -24,12 +23,11 @@ from robot_comic.config import (
     CHATTERBOX_DEFAULT_TEMPERATURE,
     CHATTERBOX_DEFAULT_EXAGGERATION,
     config,
-    set_custom_profile,
 )
-from robot_comic.llama_base import BaseLlamaResponseHandler, _OUTPUT_SAMPLE_RATE, split_sentences
+from robot_comic.llama_base import _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.chatterbox_tag_translator import translate
-from robot_comic.tools.core_tools import ToolDependencies
+
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +46,8 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
     _TTS_SYSTEM = "chatterbox"
 
     def copy(self) -> "ChatterboxTTSResponseHandler":
-        return ChatterboxTTSResponseHandler(
+        """Create a new instance of this handler with the same configuration."""
+        return type(self)(
             self.deps,
             self.sim_mode,
             self.instance_path,
@@ -84,12 +83,14 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
         if self._voice_override:
             return self._voice_override
         params = self._load_profile_params()
-        return params.get("voice") or getattr(config, "CHATTERBOX_VOICE", CHATTERBOX_DEFAULT_VOICE)
+        return str(params.get("voice") or getattr(config, "CHATTERBOX_VOICE", CHATTERBOX_DEFAULT_VOICE))
 
     @property
     def _exaggeration(self) -> float:
         params = self._load_profile_params()
-        return float(params.get("exaggeration", getattr(config, "CHATTERBOX_EXAGGERATION", CHATTERBOX_DEFAULT_EXAGGERATION)))
+        return float(
+            params.get("exaggeration", getattr(config, "CHATTERBOX_EXAGGERATION", CHATTERBOX_DEFAULT_EXAGGERATION))
+        )
 
     @property
     def _cfg_weight(self) -> float:
@@ -99,7 +100,9 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
     @property
     def _temperature(self) -> float:
         params = self._load_profile_params()
-        return float(params.get("temperature", getattr(config, "CHATTERBOX_TEMPERATURE", CHATTERBOX_DEFAULT_TEMPERATURE)))
+        return float(
+            params.get("temperature", getattr(config, "CHATTERBOX_TEMPERATURE", CHATTERBOX_DEFAULT_TEMPERATURE))
+        )
 
     @property
     def _gain(self) -> float:
@@ -117,6 +120,24 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
             self._cfg_weight,
             self._temperature,
         )
+        await self._warmup_tts()
+
+    async def _warmup_tts(self) -> None:
+        """Send a silent warmup request to force the voice model into memory.
+
+        Chatterbox loads the voice model lazily on the first real TTS call,
+        which causes a 20-40 s pause on CPU. Doing it here at startup makes
+        the cold-start visible in logs and keeps the first user turn snappy.
+        """
+        logger.info("chatterbox: warming up voice model …")
+        _t0 = time.perf_counter()
+        try:
+            await self._call_chatterbox_tts(".")
+        except Exception as exc:
+            logger.warning("chatterbox: warmup failed (continuing): %s", exc)
+            return
+        _dt = time.perf_counter() - _t0
+        logger.info("chatterbox: warmup complete in %.1f s", _dt)
 
     # ------------------------------------------------------------------ #
     # Voice management                                                     #
@@ -134,9 +155,11 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
             return [self._chatterbox_voice]
 
     def get_current_voice(self) -> str:
+        """Return the Chatterbox voice reference file currently in use."""
         return self._chatterbox_voice
 
     async def change_voice(self, voice: str) -> str:
+        """Switch to a different Chatterbox voice reference file."""
         self._voice_override = voice
         return f"Voice changed to {voice}."
 
@@ -149,6 +172,7 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
         if not response_text:
             return
         from robot_comic import telemetry
+
         persona = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None) or "default"
         segments = translate(response_text, persona=persona, use_turbo=False)
         any_audio = False
@@ -177,9 +201,7 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
                             await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
                         any_audio = True
         if not any_audio:
-            await self.output_queue.put(
-                AdditionalOutputs({"role": "assistant", "content": "[TTS error]"})
-            )
+            await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": "[TTS error]"}))
 
     async def _call_chatterbox_tts(
         self,
@@ -203,13 +225,25 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
             "temperature": self._temperature,
         }
 
+        _call_start = time.perf_counter()
         for attempt in range(_TTS_MAX_RETRIES):
             try:
                 r = await self._http.post(f"{self._chatterbox_url}/tts", json=payload)
                 r.raise_for_status()
-                return self._wav_to_pcm(r.content, gain=self._gain)
+                result = self._wav_to_pcm(r.content, gain=self._gain)
+                _elapsed = time.perf_counter() - _call_start
+                _slow_thresh = float(getattr(config, "REACHY_MINI_TTS_SLOW_WARN_S", 10.0))
+                if _elapsed > _slow_thresh:
+                    logger.warning(
+                        "chatterbox: TTS call took %.1f s (threshold %.0f s) — voice model may have been evicted",
+                        _elapsed,
+                        _slow_thresh,
+                    )
+                return result
             except Exception as exc:
-                logger.warning("TTS attempt %d/%d failed: %s: %s", attempt + 1, _TTS_MAX_RETRIES, type(exc).__name__, exc)
+                logger.warning(
+                    "TTS attempt %d/%d failed: %s: %s", attempt + 1, _TTS_MAX_RETRIES, type(exc).__name__, exc
+                )
                 if attempt < _TTS_MAX_RETRIES - 1:
                     await asyncio.sleep(_TTS_RETRY_DELAY)
         return None
@@ -219,7 +253,9 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
         """Strip WAV header, resample to 24 kHz mono int16 PCM, and apply gain."""
         import io
         import wave
+
         from scipy.signal import resample
+
         with wave.open(io.BytesIO(wav_bytes)) as wf:
             src_rate = wf.getframerate()
             n_channels = wf.getnchannels()

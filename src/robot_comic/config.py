@@ -87,11 +87,36 @@ GEMINI_AVAILABLE_VOICES: list[str] = [
 
 # Voices supported by the Gemini TTS API (gemini-3.1-flash-tts-preview)
 GEMINI_TTS_AVAILABLE_VOICES: list[str] = [
-    "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
-    "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
-    "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
-    "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
-    "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat",
+    "Zephyr",
+    "Puck",
+    "Charon",
+    "Kore",
+    "Fenrir",
+    "Leda",
+    "Orus",
+    "Aoede",
+    "Callirrhoe",
+    "Autonoe",
+    "Enceladus",
+    "Iapetus",
+    "Umbriel",
+    "Algieba",
+    "Despina",
+    "Erinome",
+    "Algenib",
+    "Rasalgethi",
+    "Laomedeia",
+    "Achernar",
+    "Alnilam",
+    "Schedar",
+    "Gacrux",
+    "Pulcherrima",
+    "Achird",
+    "Zubenelgenubi",
+    "Vindemiatrix",
+    "Sadachbia",
+    "Sadaltager",
+    "Sulafat",
 ]
 GEMINI_TTS_DEFAULT_VOICE = "Algenib"
 
@@ -199,7 +224,15 @@ LOCAL_STT_DEFAULT_PROVIDER = "moonshine"
 LOCAL_STT_DEFAULT_CACHE_DIR = "./cache/moonshine_voice"
 
 LOCAL_STT_DEFAULT_RESPONSE_BACKEND = OPENAI_BACKEND
-LOCAL_STT_RESPONSE_BACKEND_CHOICES = (OPENAI_BACKEND, HF_BACKEND, GEMINI_TTS_OUTPUT, CHATTERBOX_OUTPUT, LLAMA_GEMINI_TTS_OUTPUT, ELEVENLABS_OUTPUT, LLAMA_ELEVENLABS_TTS_OUTPUT)
+LOCAL_STT_RESPONSE_BACKEND_CHOICES = (
+    OPENAI_BACKEND,
+    HF_BACKEND,
+    GEMINI_TTS_OUTPUT,
+    CHATTERBOX_OUTPUT,
+    LLAMA_GEMINI_TTS_OUTPUT,
+    ELEVENLABS_OUTPUT,
+    LLAMA_ELEVENLABS_TTS_OUTPUT,
+)
 LOCAL_STT_DEFAULT_LANGUAGE = "en"
 LOCAL_STT_DEFAULT_MODEL = "tiny_streaming"
 LOCAL_STT_MODEL_CHOICES = ("tiny_streaming", "small_streaming")
@@ -560,6 +593,7 @@ class Config:
     CHATTERBOX_CFG_WEIGHT = float(os.getenv("CHATTERBOX_CFG_WEIGHT", str(CHATTERBOX_DEFAULT_CFG_WEIGHT)))
     CHATTERBOX_TEMPERATURE = float(os.getenv("CHATTERBOX_TEMPERATURE", str(CHATTERBOX_DEFAULT_TEMPERATURE)))
     CHATTERBOX_GAIN = float(os.getenv("CHATTERBOX_GAIN", str(CHATTERBOX_DEFAULT_GAIN)))
+    REACHY_MINI_TTS_SLOW_WARN_S = float(os.getenv("REACHY_MINI_TTS_SLOW_WARN_S", "10.0"))
     LLAMA_CPP_URL = os.getenv(LLAMA_CPP_URL_ENV, LLAMA_CPP_DEFAULT_URL)
 
     WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
@@ -676,7 +710,9 @@ def refresh_runtime_config_from_env() -> None:
     config.HF_TOKEN = os.getenv("HF_TOKEN")
     config.LOCAL_STT_PROVIDER = (os.getenv(LOCAL_STT_PROVIDER_ENV) or LOCAL_STT_DEFAULT_PROVIDER).strip().lower()
     config.LOCAL_STT_CACHE_DIR = os.getenv(LOCAL_STT_CACHE_DIR_ENV, LOCAL_STT_DEFAULT_CACHE_DIR)
-    config.LOCAL_STT_RESPONSE_BACKEND = _normalize_local_stt_response_backend(os.getenv(LOCAL_STT_RESPONSE_BACKEND_ENV))
+    config.LOCAL_STT_RESPONSE_BACKEND = _normalize_local_stt_response_backend(
+        os.getenv(LOCAL_STT_RESPONSE_BACKEND_ENV)
+    )
     config.LOCAL_STT_LANGUAGE = _normalize_local_stt_language(os.getenv(LOCAL_STT_LANGUAGE_ENV))
     config.LOCAL_STT_MODEL = _normalize_local_stt_model(os.getenv(LOCAL_STT_MODEL_ENV))
     config.LOCAL_STT_UPDATE_INTERVAL = _normalize_local_stt_update_interval(os.getenv(LOCAL_STT_UPDATE_INTERVAL_ENV))
@@ -695,6 +731,7 @@ def refresh_runtime_config_from_env() -> None:
     config.CHATTERBOX_CFG_WEIGHT = float(os.getenv("CHATTERBOX_CFG_WEIGHT", str(CHATTERBOX_DEFAULT_CFG_WEIGHT)))
     config.CHATTERBOX_TEMPERATURE = float(os.getenv("CHATTERBOX_TEMPERATURE", str(CHATTERBOX_DEFAULT_TEMPERATURE)))
     config.CHATTERBOX_GAIN = float(os.getenv("CHATTERBOX_GAIN", str(CHATTERBOX_DEFAULT_GAIN)))
+    config.REACHY_MINI_TTS_SLOW_WARN_S = float(os.getenv("REACHY_MINI_TTS_SLOW_WARN_S", "10.0"))
     config.LLAMA_CPP_URL = os.getenv(LLAMA_CPP_URL_ENV, LLAMA_CPP_DEFAULT_URL)
     config.ROBOT_INSTRUMENTATION = os.getenv("ROBOT_INSTRUMENTATION", "")
     config.WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
