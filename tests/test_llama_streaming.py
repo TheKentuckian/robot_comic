@@ -177,14 +177,6 @@ async def test_null_arguments_fragment_is_skipped() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG-1: _call_llm leaves id='' when SSE stream omits the id field. "
-        "Auto-generation only happens in _start_tool_calls, not in the accumulator. "
-        "File a bug and fix in production code; remove xfail then."
-    ),
-)
 async def test_tool_call_id_auto_generated_when_absent() -> None:
     """When the SSE stream omits the ``id`` field, _call_llm must auto-generate one.
 
@@ -407,14 +399,6 @@ async def test_midstream_partial_text_before_drop() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG-2: KeyError for missing 'choices' key in a valid-JSON SSE chunk is not caught. "
-        "Only json.JSONDecodeError is caught; KeyError bubbles up and trips the retry logic. "
-        "Fix: add KeyError to the except clause in _stream_llm_deltas."
-    ),
-)
 async def test_chunk_missing_choices_key_is_skipped() -> None:
     """A valid-JSON SSE chunk missing the 'choices' key should be skipped silently.
 
@@ -445,14 +429,6 @@ async def test_chunk_missing_choices_key_is_skipped() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG-2: KeyError for missing 'delta' sub-key is not caught inside the SSE try/except. "
-        "The unhandled KeyError bubbles out, triggers retry logic, and eventually re-raises. "
-        "Fix: broaden the except clause in _stream_llm_deltas to include KeyError."
-    ),
-)
 async def test_chunk_missing_delta_key_is_skipped() -> None:
     """A chunk with 'choices' but no 'delta' sub-key should be skipped gracefully.
 
