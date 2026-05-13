@@ -538,6 +538,14 @@ class Config:
     LOCAL_STT_UPDATE_INTERVAL = _normalize_local_stt_update_interval(os.getenv(LOCAL_STT_UPDATE_INTERVAL_ENV))
 
     GEMINI_LIVE_VIDEO_STREAMING = _env_flag("GEMINI_LIVE_VIDEO_STREAMING", default=False)
+    # Gemini Live server-side VAD tuning. Defaults raise the end-of-speech bar
+    # well above the SDK's eager defaults so brief pauses / breaths during the
+    # user's reply don't fire a fresh turn while the model is still responding.
+    GEMINI_LIVE_VAD_SILENCE_MS = int(os.getenv("GEMINI_LIVE_VAD_SILENCE_MS", "800"))
+    GEMINI_LIVE_VAD_PREFIX_MS = int(os.getenv("GEMINI_LIVE_VAD_PREFIX_MS", "200"))
+    # One of: HIGH | LOW | UNSPECIFIED. LOW = harder to trigger (fewer false positives).
+    GEMINI_LIVE_VAD_START_SENSITIVITY = os.getenv("GEMINI_LIVE_VAD_START_SENSITIVITY", "LOW").upper()
+    GEMINI_LIVE_VAD_END_SENSITIVITY = os.getenv("GEMINI_LIVE_VAD_END_SENSITIVITY", "LOW").upper()
     MOVEMENT_SPEED_FACTOR = _env_float_clamped("MOVEMENT_SPEED_FACTOR", default=0.3, lo=0.1, hi=2.0)
     IDLE_ANIMATION_ENABLED = _env_flag("IDLE_ANIMATION_ENABLED", default=False)
     MOONSHINE_HEARTBEAT = _env_flag("MOONSHINE_HEARTBEAT", default=False)
@@ -668,6 +676,10 @@ def refresh_runtime_config_from_env() -> None:
     config.LOCAL_STT_UPDATE_INTERVAL = _normalize_local_stt_update_interval(os.getenv(LOCAL_STT_UPDATE_INTERVAL_ENV))
     config.REACHY_MINI_CUSTOM_PROFILE = LOCKED_PROFILE or os.getenv("REACHY_MINI_CUSTOM_PROFILE")
     config.GEMINI_LIVE_VIDEO_STREAMING = _env_flag("GEMINI_LIVE_VIDEO_STREAMING", default=False)
+    config.GEMINI_LIVE_VAD_SILENCE_MS = int(os.getenv("GEMINI_LIVE_VAD_SILENCE_MS", "800"))
+    config.GEMINI_LIVE_VAD_PREFIX_MS = int(os.getenv("GEMINI_LIVE_VAD_PREFIX_MS", "200"))
+    config.GEMINI_LIVE_VAD_START_SENSITIVITY = os.getenv("GEMINI_LIVE_VAD_START_SENSITIVITY", "LOW").upper()
+    config.GEMINI_LIVE_VAD_END_SENSITIVITY = os.getenv("GEMINI_LIVE_VAD_END_SENSITIVITY", "LOW").upper()
     config.MOVEMENT_SPEED_FACTOR = _env_float_clamped("MOVEMENT_SPEED_FACTOR", default=0.3, lo=0.1, hi=2.0)
     config.IDLE_ANIMATION_ENABLED = _env_flag("IDLE_ANIMATION_ENABLED", default=False)
     config.MOONSHINE_HEARTBEAT = _env_flag("MOONSHINE_HEARTBEAT", default=False)

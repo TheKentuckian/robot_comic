@@ -70,6 +70,43 @@ GEMINI_LIVE_AUDIO_OUTPUT_COST_PER_1M: Final[float] = 12.0
 GEMINI_LIVE_TEXT_INPUT_COST_PER_1M: Final[float] = 0.30
 GEMINI_LIVE_TEXT_OUTPUT_COST_PER_1M: Final[float] = 2.50
 
+_START_SENSITIVITY_MAP: Final[Dict[str, "types.StartSensitivity"]] = {
+    "HIGH": types.StartSensitivity.START_SENSITIVITY_HIGH,
+    "LOW": types.StartSensitivity.START_SENSITIVITY_LOW,
+    "UNSPECIFIED": types.StartSensitivity.START_SENSITIVITY_UNSPECIFIED,
+}
+_END_SENSITIVITY_MAP: Final[Dict[str, "types.EndSensitivity"]] = {
+    "HIGH": types.EndSensitivity.END_SENSITIVITY_HIGH,
+    "LOW": types.EndSensitivity.END_SENSITIVITY_LOW,
+    "UNSPECIFIED": types.EndSensitivity.END_SENSITIVITY_UNSPECIFIED,
+}
+
+
+def _build_realtime_input_config() -> types.RealtimeInputConfig:
+    """Build a RealtimeInputConfig with our tuned activity-detection knobs.
+
+    The SDK defaults are eager: short pauses, breaths, and even the assistant's
+    own audio leaking into the mic can fire a fresh turn. We bias towards
+    LOW sensitivity and longer silence so brief user pauses don't preempt the
+    model mid-response. All four knobs are env-overridable for tuning.
+    """
+    start_sens = _START_SENSITIVITY_MAP.get(
+        config.GEMINI_LIVE_VAD_START_SENSITIVITY,
+        types.StartSensitivity.START_SENSITIVITY_LOW,
+    )
+    end_sens = _END_SENSITIVITY_MAP.get(
+        config.GEMINI_LIVE_VAD_END_SENSITIVITY,
+        types.EndSensitivity.END_SENSITIVITY_LOW,
+    )
+    return types.RealtimeInputConfig(
+        automatic_activity_detection=types.AutomaticActivityDetection(
+            start_of_speech_sensitivity=start_sens,
+            end_of_speech_sensitivity=end_sens,
+            prefix_padding_ms=config.GEMINI_LIVE_VAD_PREFIX_MS,
+            silence_duration_ms=config.GEMINI_LIVE_VAD_SILENCE_MS,
+        ),
+    )
+
 
 def _openai_tool_specs_to_gemini(specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Convert OpenAI-style tool specs to Gemini function_declarations format.
@@ -647,13 +684,19 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
             tools=tools_config,  # type: ignore[arg-type]
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
+            realtime_input_config=_build_realtime_input_config(),
         )
 
         logger.info(
-            "Gemini Live config: model=%r voice=%r tools=%d",
+            "Gemini Live config: model=%r voice=%r tools=%d vad_silence=%dms vad_prefix=%dms "
+            "vad_start=%s vad_end=%s",
             config.MODEL_NAME,
             voice,
             len(function_declarations),
+            config.GEMINI_LIVE_VAD_SILENCE_MS,
+            config.GEMINI_LIVE_VAD_PREFIX_MS,
+            config.GEMINI_LIVE_VAD_START_SENSITIVITY,
+            config.GEMINI_LIVE_VAD_END_SENSITIVITY,
         )
         return live_config
 
