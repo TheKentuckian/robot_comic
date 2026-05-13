@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from fastrtc import AdditionalOutputs
 
-from tests._helpers import make_stream_response
+from _helpers import make_stream_response
 from robot_comic.tools.core_tools import ToolDependencies
 
 
