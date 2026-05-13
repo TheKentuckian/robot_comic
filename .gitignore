@@ -74,6 +74,10 @@ src/reachy_mini_conversation_app/profiles/user_personalities/
 # Voice prep — large source audio files (source recordings, multi-hundred MB)
 profiles/don_rickles/voice_prep/*.wav
 
+# Per-persona reference clips used by local cloning tools (Chatterbox, etc.).
+# Archival/copyrighted source — keep local, never commit.
+profiles/*/voice_ref.wav
+
 # Per-profile ElevenLabs overrides — keep cloned voice_ids out of public commits.
 # The non-local elevenlabs.txt is committed; .local.txt overlays it at runtime.
 profiles/*/elevenlabs.local.txt
