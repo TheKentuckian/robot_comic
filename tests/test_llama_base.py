@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 from fastrtc import AdditionalOutputs
 
+from _helpers import make_stream_response
 from robot_comic.tools.core_tools import ToolDependencies
 
 
@@ -79,14 +80,19 @@ async def test_tts_called_once_per_sentence() -> None:
 
     tts_texts: list[str] = []
 
-    async def fake_llm() -> tuple[str, list, dict]:
-        return "Hello! How are you today?", [], {}
-
     async def fake_tts(text: str, *, exaggeration=None, cfg_weight=None) -> bytes:
         tts_texts.append(text)
         return _pcm_bytes(2400)
 
-    handler._call_llm = fake_llm  # type: ignore[method-assign]
+    # _stream_response_and_synthesize uses _http.stream (not _http.post)
+    handler._http.stream = MagicMock(
+        return_value=make_stream_response(
+            [
+                'data: {"choices":[{"delta":{"content":"Hello! How are you today?"},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ]
+        )
+    )
     handler._call_chatterbox_tts = fake_tts  # type: ignore[method-assign]
 
     await handler._dispatch_completed_transcript("hi")
@@ -105,9 +111,6 @@ async def test_frames_emitted_per_sentence_not_buffered() -> None:
     tts_call_order: list[str] = []
     queue_snapshots: dict[str, int] = {}
 
-    async def fake_llm() -> tuple[str, list, dict]:
-        return "First sentence. Second sentence.", [], {}
-
     async def fake_tts(text: str, *, exaggeration=None, cfg_weight=None) -> bytes:
         tts_call_order.append(text)
         if "First" in text:
@@ -117,7 +120,14 @@ async def test_frames_emitted_per_sentence_not_buffered() -> None:
             queue_snapshots["before_second_tts"] = handler.output_queue.qsize()
         return _pcm_bytes(2400)
 
-    handler._call_llm = fake_llm  # type: ignore[method-assign]
+    handler._http.stream = MagicMock(
+        return_value=make_stream_response(
+            [
+                'data: {"choices":[{"delta":{"content":"First sentence. Second sentence."},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ]
+        )
+    )
     handler._call_chatterbox_tts = fake_tts  # type: ignore[method-assign]
 
     await handler._dispatch_completed_transcript("go")
@@ -131,13 +141,17 @@ async def test_single_sentence_still_produces_audio() -> None:
     """A response with no sentence boundary still generates audio frames."""
     handler = _make_handler()
 
-    async def fake_llm() -> tuple[str, list, dict]:
-        return "Hiya!", [], {}
-
     async def fake_tts(text: str, *, exaggeration=None, cfg_weight=None) -> bytes:
         return _pcm_bytes(4800)
 
-    handler._call_llm = fake_llm  # type: ignore[method-assign]
+    handler._http.stream = MagicMock(
+        return_value=make_stream_response(
+            [
+                'data: {"choices":[{"delta":{"content":"Hiya!"},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ]
+        )
+    )
     handler._call_chatterbox_tts = fake_tts  # type: ignore[method-assign]
 
     await handler._dispatch_completed_transcript("hey")
@@ -151,13 +165,17 @@ async def test_tts_error_on_all_sentences_pushes_error_output() -> None:
     """When every TTS call returns None, an error AdditionalOutputs is queued."""
     handler = _make_handler()
 
-    async def fake_llm() -> tuple[str, list, dict]:
-        return "Hello. World.", [], {}
-
     async def failing_tts(text: str, *, exaggeration=None, cfg_weight=None) -> None:
         return None
 
-    handler._call_llm = fake_llm  # type: ignore[method-assign]
+    handler._http.stream = MagicMock(
+        return_value=make_stream_response(
+            [
+                'data: {"choices":[{"delta":{"content":"Hello. World."},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ]
+        )
+    )
     handler._call_chatterbox_tts = failing_tts  # type: ignore[method-assign]
 
     await handler._dispatch_completed_transcript("go")
@@ -173,16 +191,9 @@ async def test_split_text_disabled_in_tts_payload() -> None:
     handler = _make_handler()
     captured_payloads: list[dict] = []
 
-    async def fake_llm() -> tuple[str, list, dict]:
-        return "Hello. World.", [], {}
-
-    # Intercept the actual HTTP call to inspect the payload
-    import httpx
-
-    fake_response = MagicMock(spec=httpx.Response)
-    fake_response.raise_for_status = MagicMock()
-
-    import io, wave
+    # Intercept the actual TTS HTTP call to inspect the payload
+    import io
+    import wave
 
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
@@ -192,16 +203,26 @@ async def test_split_text_disabled_in_tts_payload() -> None:
         wf.writeframes(_pcm_bytes(2400))
     wav_bytes = buf.getvalue()
 
-    fake_response.content = wav_bytes
-    handler._http.post = AsyncMock(return_value=fake_response)  # type: ignore[method-assign]
+    import httpx
+
+    fake_tts_response = MagicMock(spec=httpx.Response)
+    fake_tts_response.raise_for_status = MagicMock()
+    fake_tts_response.content = wav_bytes
 
     async def capturing_post(url, *, json=None, **kwargs):
         captured_payloads.append(json or {})
-        return fake_response
+        return fake_tts_response
 
+    # Mock LLM streaming path and TTS POST path separately
+    handler._http.stream = MagicMock(
+        return_value=make_stream_response(
+            [
+                'data: {"choices":[{"delta":{"content":"Hello. World."},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ]
+        )
+    )
     handler._http.post = capturing_post  # type: ignore[method-assign]
-
-    handler._call_llm = fake_llm  # type: ignore[method-assign]
 
     await handler._dispatch_completed_transcript("go")
 
@@ -213,16 +234,17 @@ async def test_split_text_disabled_in_tts_payload() -> None:
 @pytest.mark.asyncio
 async def test_call_llm_returns_raw_message() -> None:
     """_call_llm returns a 3-tuple; the third element is the raw assistant message dict."""
-    import httpx
-
     handler = _make_handler()
 
-    fake_resp = MagicMock(spec=httpx.Response)
-    fake_resp.raise_for_status = MagicMock()
-    fake_resp.json.return_value = {
-        "choices": [{"message": {"role": "assistant", "content": "Hey there!", "tool_calls": []}}]
-    }
-    handler._http.post = AsyncMock(return_value=fake_resp)
+    # _call_llm → _stream_llm_deltas → _http.stream (SSE streaming)
+    handler._http.stream = MagicMock(
+        return_value=make_stream_response(
+            [
+                'data: {"choices":[{"delta":{"content":"Hey there!"},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ]
+        )
+    )
 
     result = await handler._call_llm()
 
@@ -236,7 +258,7 @@ async def test_call_llm_returns_raw_message() -> None:
 @pytest.mark.asyncio
 async def test_start_tool_calls_returns_bg_tools() -> None:
     """_start_tool_calls returns (call_id, BackgroundTool) pairs, one per tool call."""
-    from robot_comic.tools.background_tool_manager import BackgroundTool, ToolState
+    from robot_comic.tools.background_tool_manager import ToolState, BackgroundTool
 
     handler = _make_handler()
 
@@ -272,7 +294,7 @@ async def test_start_tool_calls_returns_bg_tools() -> None:
 @pytest.mark.asyncio
 async def test_second_llm_pass_fires_on_meaningful_result() -> None:
     """Camera returns a long description → two LLM calls, two TTS calls."""
-    from robot_comic.tools.background_tool_manager import BackgroundTool, ToolState
+    from robot_comic.tools.background_tool_manager import ToolState, BackgroundTool
 
     handler = _make_handler()
     tts_texts: list[str] = []
@@ -292,19 +314,26 @@ async def test_second_llm_pass_fires_on_meaningful_result() -> None:
 
     call_count = 0
 
-    async def patched_llm(extra_messages=None):
+    # First pass: _run_turn calls _stream_response_and_synthesize (streaming)
+    async def patched_stream_response(extra_messages=None, tts_span=None):
         nonlocal call_count
         call_count += 1
-        if call_count == 1:
-            return (
-                "Let me take a look!",
-                [{"function": {"name": "camera", "arguments": {}}}],
-                {
-                    "role": "assistant",
-                    "content": "Let me take a look!",
-                    "tool_calls": [{"function": {"name": "camera", "arguments": {}}}],
-                },
-            )
+        # Synthesize the first-pass text so TTS is exercised
+        await handler._synthesize_and_enqueue("Let me take a look!")
+        return (
+            "Let me take a look!",
+            [{"function": {"name": "camera", "arguments": {}}}],
+            {
+                "role": "assistant",
+                "content": "Let me take a look!",
+                "tool_calls": [{"function": {"name": "camera", "arguments": {}}}],
+            },
+        )
+
+    # Follow-up pass: _run_turn calls _call_llm (non-streaming)
+    async def patched_follow_up_llm(extra_messages=None):
+        nonlocal call_count
+        call_count += 1
         return (
             "Oh yeah, I see a grinning woman!",
             [],
@@ -318,7 +347,8 @@ async def test_second_llm_pass_fires_on_meaningful_result() -> None:
     async def fake_start_tool_calls(tool_calls):
         return [("cam1", bg_tool)]
 
-    handler._call_llm = patched_llm  # type: ignore[method-assign]
+    handler._stream_response_and_synthesize = patched_stream_response  # type: ignore[method-assign]
+    handler._call_llm = patched_follow_up_llm  # type: ignore[method-assign]
     handler._call_chatterbox_tts = fake_tts  # type: ignore[method-assign]
     handler._start_tool_calls = fake_start_tool_calls  # type: ignore[method-assign]
 
@@ -331,7 +361,7 @@ async def test_second_llm_pass_fires_on_meaningful_result() -> None:
 @pytest.mark.asyncio
 async def test_no_second_pass_for_action_tools() -> None:
     """Dance returns {} → only one LLM call is made."""
-    from robot_comic.tools.background_tool_manager import BackgroundTool, ToolState
+    from robot_comic.tools.background_tool_manager import ToolState, BackgroundTool
 
     handler = _make_handler()
     llm_call_count = 0
@@ -348,7 +378,8 @@ async def test_no_second_pass_for_action_tools() -> None:
     )
     bg_tool._task = asyncio.create_task(instant_task())
 
-    async def patched_llm(extra_messages=None):
+    # First (and only) LLM pass goes through _stream_response_and_synthesize
+    async def patched_stream_response(extra_messages=None, tts_span=None):
         nonlocal llm_call_count
         llm_call_count += 1
         return (
@@ -367,7 +398,7 @@ async def test_no_second_pass_for_action_tools() -> None:
     async def fake_start_tool_calls(tool_calls):
         return [("dance1", bg_tool)]
 
-    handler._call_llm = patched_llm  # type: ignore[method-assign]
+    handler._stream_response_and_synthesize = patched_stream_response  # type: ignore[method-assign]
     handler._call_chatterbox_tts = fake_tts  # type: ignore[method-assign]
     handler._start_tool_calls = fake_start_tool_calls  # type: ignore[method-assign]
 
@@ -379,11 +410,10 @@ async def test_no_second_pass_for_action_tools() -> None:
 @pytest.mark.asyncio
 async def test_tool_message_appended_to_history() -> None:
     """A role=tool message with tool_call_id appears in history before the second LLM call."""
-    from robot_comic.tools.background_tool_manager import BackgroundTool, ToolState
+    from robot_comic.tools.background_tool_manager import ToolState, BackgroundTool
 
     handler = _make_handler()
     messages_seen_on_second_call: list[dict] = []
-    call_count = 0
     camera_result = {"description": "An older gentleman in a Hawaiian shirt waves at the camera enthusiastically."}
 
     async def instant_task() -> None:
@@ -398,19 +428,20 @@ async def test_tool_message_appended_to_history() -> None:
     )
     bg_tool._task = asyncio.create_task(instant_task())
 
-    async def patched_llm(extra_messages=None):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return (
-                "Checking the camera!",
-                [{"function": {"name": "camera", "arguments": {}}}],
-                {
-                    "role": "assistant",
-                    "content": "Checking the camera!",
-                    "tool_calls": [{"function": {"name": "camera", "arguments": {}}}],
-                },
-            )
+    # First LLM pass (streaming path)
+    async def patched_stream_response(extra_messages=None, tts_span=None):
+        return (
+            "Checking the camera!",
+            [{"function": {"name": "camera", "arguments": {}}}],
+            {
+                "role": "assistant",
+                "content": "Checking the camera!",
+                "tool_calls": [{"function": {"name": "camera", "arguments": {}}}],
+            },
+        )
+
+    # Follow-up LLM pass (non-streaming path)
+    async def patched_follow_up_llm(extra_messages=None):
         messages_seen_on_second_call.extend(list(handler._conversation_history))
         return "I see someone waving!", [], {"role": "assistant", "content": "I see someone waving!"}
 
@@ -420,7 +451,8 @@ async def test_tool_message_appended_to_history() -> None:
     async def fake_start_tool_calls(tool_calls):
         return [("cam2", bg_tool)]
 
-    handler._call_llm = patched_llm  # type: ignore[method-assign]
+    handler._stream_response_and_synthesize = patched_stream_response  # type: ignore[method-assign]
+    handler._call_llm = patched_follow_up_llm  # type: ignore[method-assign]
     handler._call_chatterbox_tts = fake_tts  # type: ignore[method-assign]
     handler._start_tool_calls = fake_start_tool_calls  # type: ignore[method-assign]
 
@@ -437,10 +469,11 @@ async def test_tool_message_appended_to_history() -> None:
 
 @pytest.mark.asyncio
 async def test_assistant_message_preserves_tool_calls_field() -> None:
-    """When Ollama returns tool_calls, the history entry has a tool_calls field."""
+    """When the LLM returns tool_calls, the history entry has a tool_calls field."""
     handler = _make_handler()
 
-    async def patched_llm(extra_messages=None):
+    # First (and only) pass uses _stream_response_and_synthesize
+    async def patched_stream_response(extra_messages=None, tts_span=None):
         raw_msg = {
             "role": "assistant",
             "content": "",
@@ -451,7 +484,7 @@ async def test_assistant_message_preserves_tool_calls_field() -> None:
     async def fake_start_tool_calls(tool_calls):
         return []
 
-    handler._call_llm = patched_llm  # type: ignore[method-assign]
+    handler._stream_response_and_synthesize = patched_stream_response  # type: ignore[method-assign]
     handler._start_tool_calls = fake_start_tool_calls  # type: ignore[method-assign]
 
     await handler._dispatch_completed_transcript("dance!")
@@ -478,7 +511,8 @@ def _drain_queue(q: asyncio.Queue) -> list:
 
 
 def _make_wav_bytes(samples: np.ndarray, sample_rate: int = 24000) -> bytes:
-    import io, wave
+    import io
+    import wave
 
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
@@ -528,7 +562,8 @@ def test_wav_to_pcm_default_gain_is_one() -> None:
 @pytest.mark.asyncio
 async def test_handler_applies_chatterbox_gain_from_config() -> None:
     """Handler reads CHATTERBOX_GAIN from config and passes it to _wav_to_pcm."""
-    import io, wave
+    import io
+    import wave
     from unittest.mock import patch
 
     handler = _make_handler()
@@ -595,7 +630,7 @@ def test_meaningful_result_action_filtered() -> None:
 @pytest.mark.asyncio
 async def test_await_tool_results_returns_completed() -> None:
     """Completed tool tasks have their results returned."""
-    from robot_comic.tools.background_tool_manager import BackgroundTool, ToolState
+    from robot_comic.tools.background_tool_manager import ToolState, BackgroundTool
 
     handler = _make_handler()
     expected_result = {"description": "A smiling person stands before a plain background, facing the camera."}
@@ -620,7 +655,7 @@ async def test_await_tool_results_returns_completed() -> None:
 @pytest.mark.asyncio
 async def test_await_tool_results_timeout_excluded() -> None:
     """A tool that doesn't finish within the timeout is excluded from results."""
-    from robot_comic.tools.background_tool_manager import BackgroundTool, ToolState
+    from robot_comic.tools.background_tool_manager import ToolState, BackgroundTool
 
     handler = _make_handler()
 
@@ -656,30 +691,17 @@ async def test_stream_llm_deltas_yields_text_chunks() -> None:
     """_stream_llm_deltas yields individual text chunks from SSE stream."""
     handler = _make_handler()
 
-    async def mock_stream(*args, **kwargs):
-        class MockResponse:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                pass
-
-            def raise_for_status(self):
-                pass
-
-            async def aiter_lines(self):
-                lines = [
-                    'data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}',
-                    'data: {"choices":[{"delta":{"content":" world"},"finish_reason":null}]}',
-                    'data: {"choices":[{"delta":{"content":"!"},"finish_reason":"stop"}]}',
-                    "data: [DONE]",
-                ]
-                for line in lines:
-                    yield line
-
-        return MockResponse()
-
-    handler._http.stream = mock_stream  # type: ignore[method-assign]
+    # stream() must be a regular callable (not a coroutine) returning an async CM
+    handler._http.stream = MagicMock(
+        return_value=make_stream_response(
+            [
+                'data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}',
+                'data: {"choices":[{"delta":{"content":" world"},"finish_reason":null}]}',
+                'data: {"choices":[{"delta":{"content":"!"},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ]
+        )
+    )
 
     deltas = []
     async for delta in handler._stream_llm_deltas():
@@ -697,30 +719,16 @@ async def test_stream_llm_deltas_accumulates_tool_calls() -> None:
     """_stream_llm_deltas accumulates tool_call arguments across chunks."""
     handler = _make_handler()
 
-    async def mock_stream(*args, **kwargs):
-        class MockResponse:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                pass
-
-            def raise_for_status(self):
-                pass
-
-            async def aiter_lines(self):
-                lines = [
-                    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"s"}}]},"finish_reason":null}]}',
-                    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"tyle\\":\\"wave"}}]},"finish_reason":null}]}',
-                    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"}"}]},"finish_reason":"stop"}]}',
-                    "data: [DONE]",
-                ]
-                for line in lines:
-                    yield line
-
-        return MockResponse()
-
-    handler._http.stream = mock_stream  # type: ignore[method-assign]
+    handler._http.stream = MagicMock(
+        return_value=make_stream_response(
+            [
+                'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"s"}}]},"finish_reason":null}]}',
+                'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"tyle\\":\\"wave"}}]},"finish_reason":null}]}',
+                'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"}"}}]},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ]
+        )
+    )
 
     deltas = []
     async for delta in handler._stream_llm_deltas():
@@ -738,35 +746,22 @@ async def test_stream_and_synthesize_sentences_on_period() -> None:
     handler = _make_handler()
     tts_texts: list[str] = []
 
-    async def mock_stream(*args, **kwargs):
-        class MockResponse:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                pass
-
-            def raise_for_status(self):
-                pass
-
-            async def aiter_lines(self):
-                lines = [
-                    'data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}',
-                    'data: {"choices":[{"delta":{"content":"."},"finish_reason":null}]}',
-                    'data: {"choices":[{"delta":{"content":" World"},"finish_reason":null}]}',
-                    'data: {"choices":[{"delta":{"content":"!"},"finish_reason":"stop"}]}',
-                    "data: [DONE]",
-                ]
-                for line in lines:
-                    yield line
-
-        return MockResponse()
+    handler._http.stream = MagicMock(
+        return_value=make_stream_response(
+            [
+                'data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}',
+                'data: {"choices":[{"delta":{"content":"."},"finish_reason":null}]}',
+                'data: {"choices":[{"delta":{"content":" World"},"finish_reason":null}]}',
+                'data: {"choices":[{"delta":{"content":"!"},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ]
+        )
+    )
 
     async def fake_tts(text: str, *, exaggeration=None, cfg_weight=None) -> bytes:
         tts_texts.append(text)
         return _pcm_bytes(2400)
 
-    handler._http.stream = mock_stream  # type: ignore[method-assign]
     handler._call_chatterbox_tts = fake_tts  # type: ignore[method-assign]
 
     await handler._stream_response_and_synthesize()
@@ -781,28 +776,14 @@ async def test_stream_end_on_done_terminator() -> None:
     """_stream_llm_deltas ends when it receives [DONE] terminator."""
     handler = _make_handler()
 
-    async def mock_stream(*args, **kwargs):
-        class MockResponse:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                pass
-
-            def raise_for_status(self):
-                pass
-
-            async def aiter_lines(self):
-                lines = [
-                    'data: {"choices":[{"delta":{"content":"Hi"},"finish_reason":null}]}',
-                    "data: [DONE]",
-                ]
-                for line in lines:
-                    yield line
-
-        return MockResponse()
-
-    handler._http.stream = mock_stream  # type: ignore[method-assign]
+    handler._http.stream = MagicMock(
+        return_value=make_stream_response(
+            [
+                'data: {"choices":[{"delta":{"content":"Hi"},"finish_reason":null}]}',
+                "data: [DONE]",
+            ]
+        )
+    )
 
     deltas = []
     async for delta in handler._stream_llm_deltas():
@@ -819,30 +800,16 @@ async def test_stream_handles_malformed_json_lines() -> None:
     """_stream_llm_deltas skips malformed SSE lines gracefully."""
     handler = _make_handler()
 
-    async def mock_stream(*args, **kwargs):
-        class MockResponse:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                pass
-
-            def raise_for_status(self):
-                pass
-
-            async def aiter_lines(self):
-                lines = [
-                    'data: {"choices":[{"delta":{"content":"Good"},"finish_reason":null}]}',
-                    "data: {invalid json}",
-                    'data: {"choices":[{"delta":{"content":"Bye"},"finish_reason":"stop"}]}',
-                    "data: [DONE]",
-                ]
-                for line in lines:
-                    yield line
-
-        return MockResponse()
-
-    handler._http.stream = mock_stream  # type: ignore[method-assign]
+    handler._http.stream = MagicMock(
+        return_value=make_stream_response(
+            [
+                'data: {"choices":[{"delta":{"content":"Good"},"finish_reason":null}]}',
+                "data: {invalid json}",
+                'data: {"choices":[{"delta":{"content":"Bye"},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ]
+        )
+    )
 
     deltas = []
     async for delta in handler._stream_llm_deltas():
