@@ -10,7 +10,6 @@ Audio output: 24 kHz, mono, 16-bit PCM — matches the existing pipeline.
 import time
 import asyncio
 import logging
-from typing import Any, Optional
 
 import numpy as np
 from fastrtc import AdditionalOutputs
@@ -24,12 +23,12 @@ from robot_comic.config import (
     CHATTERBOX_DEFAULT_TEMPERATURE,
     CHATTERBOX_DEFAULT_EXAGGERATION,
     config,
-    set_custom_profile,
 )
-from robot_comic.llama_base import BaseLlamaResponseHandler, _OUTPUT_SAMPLE_RATE, split_sentences
+from robot_comic.llama_base import _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
+from robot_comic.chatterbox_voice_clone import load_voice_clone_ref
 from robot_comic.chatterbox_tag_translator import translate
-from robot_comic.tools.core_tools import ToolDependencies
+
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +88,9 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
     @property
     def _exaggeration(self) -> float:
         params = self._load_profile_params()
-        return float(params.get("exaggeration", getattr(config, "CHATTERBOX_EXAGGERATION", CHATTERBOX_DEFAULT_EXAGGERATION)))
+        return float(
+            params.get("exaggeration", getattr(config, "CHATTERBOX_EXAGGERATION", CHATTERBOX_DEFAULT_EXAGGERATION))
+        )
 
     @property
     def _cfg_weight(self) -> float:
@@ -99,7 +100,9 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
     @property
     def _temperature(self) -> float:
         params = self._load_profile_params()
-        return float(params.get("temperature", getattr(config, "CHATTERBOX_TEMPERATURE", CHATTERBOX_DEFAULT_TEMPERATURE)))
+        return float(
+            params.get("temperature", getattr(config, "CHATTERBOX_TEMPERATURE", CHATTERBOX_DEFAULT_TEMPERATURE))
+        )
 
     @property
     def _gain(self) -> float:
@@ -108,6 +111,12 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
 
     async def _prepare_startup_credentials(self) -> None:
         await super()._prepare_startup_credentials()
+        # Resolve per-persona voice-clone reference audio once at startup.
+        profile = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
+        if profile:
+            self._voice_clone_ref_path = load_voice_clone_ref(config.PROFILES_DIRECTORY / profile)
+        else:
+            self._voice_clone_ref_path = None
         logger.info(
             "ChatterboxTTS handler initialised: llm=%s/v1/chat/completions tts=%s voice=%s exag=%.2f cfg=%.2f temp=%.2f",
             self._llama_cpp_url,
@@ -149,6 +158,7 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
         if not response_text:
             return
         from robot_comic import telemetry
+
         persona = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None) or "default"
         segments = translate(response_text, persona=persona, use_turbo=False)
         any_audio = False
@@ -177,9 +187,7 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
                             await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
                         any_audio = True
         if not any_audio:
-            await self.output_queue.put(
-                AdditionalOutputs({"role": "assistant", "content": "[TTS error]"})
-            )
+            await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": "[TTS error]"}))
 
     async def _call_chatterbox_tts(
         self,
@@ -192,16 +200,21 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
         assert self._http is not None
         voice = self._chatterbox_voice
         ref_file = voice if voice.endswith(".wav") else f"{voice}.wav"
-        payload = {
+        # Per-persona voice-clone ref overrides the generic predefined voice when present.
+        clone_ref = getattr(self, "_voice_clone_ref_path", None)
+        payload: dict[str, object] = {
             "text": text,
             "voice_mode": "clone",
-            "reference_audio_filename": ref_file,
             "output_format": "wav",
             "split_text": False,
             "exaggeration": exaggeration if exaggeration is not None else self._exaggeration,
             "cfg_weight": cfg_weight if cfg_weight is not None else self._cfg_weight,
             "temperature": self._temperature,
         }
+        if clone_ref is not None:
+            payload["audio_prompt_path"] = str(clone_ref)
+        else:
+            payload["reference_audio_filename"] = ref_file
 
         for attempt in range(_TTS_MAX_RETRIES):
             try:
@@ -209,7 +222,9 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
                 r.raise_for_status()
                 return self._wav_to_pcm(r.content, gain=self._gain)
             except Exception as exc:
-                logger.warning("TTS attempt %d/%d failed: %s: %s", attempt + 1, _TTS_MAX_RETRIES, type(exc).__name__, exc)
+                logger.warning(
+                    "TTS attempt %d/%d failed: %s: %s", attempt + 1, _TTS_MAX_RETRIES, type(exc).__name__, exc
+                )
                 if attempt < _TTS_MAX_RETRIES - 1:
                     await asyncio.sleep(_TTS_RETRY_DELAY)
         return None
@@ -219,7 +234,9 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
         """Strip WAV header, resample to 24 kHz mono int16 PCM, and apply gain."""
         import io
         import wave
+
         from scipy.signal import resample
+
         with wave.open(io.BytesIO(wav_bytes)) as wf:
             src_rate = wf.getframerate()
             n_channels = wf.getnchannels()
