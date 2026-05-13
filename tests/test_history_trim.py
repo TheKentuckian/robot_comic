@@ -230,3 +230,90 @@ async def test_llama_handler_trims_history_before_request(monkeypatch) -> None:
     # And the surviving turns are the most-recent user.
     user_msgs = [m for m in handler._conversation_history if m.get("role") == "user"]
     assert [m["content"] for m in user_msgs] == ["old3", "new"]
+
+
+@pytest.mark.asyncio
+async def test_chatterbox_handler_trims_history_before_request(monkeypatch) -> None:
+    """ChatterboxTTSResponseHandler caps _conversation_history to MAX_HISTORY_TURNS.
+
+    Verifies three requirements for issue #47:
+    1. History past the cap is trimmed before the LLM request is built.
+    2. The most recent user/assistant exchange is always preserved.
+    3. Setting REACHY_MINI_MAX_HISTORY_TURNS=0 disables trimming (see
+       test_chatterbox_handler_trim_disabled_when_cap_zero).
+    """
+    from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
+
+    monkeypatch.setenv("REACHY_MINI_MAX_HISTORY_TURNS", "3")
+
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = LocalSTTChatterboxHandler(deps)
+
+    # Seed 5 old turns (10 entries) — well above the cap of 3.
+    for i in range(5):
+        handler._conversation_history.append(_user(f"old{i}"))
+        handler._conversation_history.append(_assistant(f"oldA{i}"))
+
+    observed_lengths: list[int] = []
+
+    async def fake_stream(extra_messages=None, tts_span=None):
+        observed_lengths.append(len(handler._conversation_history))
+        return "reply", [], {"role": "assistant", "content": "reply"}
+
+    async def fake_tts(text: str, *, exaggeration=None, cfg_weight=None) -> bytes:
+        import numpy as np
+
+        return np.zeros(2400, dtype=np.int16).tobytes()
+
+    handler._stream_response_and_synthesize = fake_stream  # type: ignore[method-assign]
+    handler._call_chatterbox_tts = fake_tts  # type: ignore[method-assign]
+
+    await handler._dispatch_completed_transcript("newest")
+
+    # Requirement 1: trim ran before LLM — cap=3, new user message already appended,
+    # assistant reply not yet, so the LLM sees 3 user turns + 2 assistant replies = 5.
+    # Pre-trim count would have been 11 (5 old pairs + new user).
+    assert observed_lengths == [5]
+
+    # Requirement 2: the most recent exchange (old4 / newest) survived.
+    user_turns = [m for m in handler._conversation_history if m.get("role") == "user"]
+    assert user_turns[-1]["content"] == "newest"
+    assert user_turns[-2]["content"] == "old4"
+
+
+@pytest.mark.asyncio
+async def test_chatterbox_handler_trim_disabled_when_cap_zero(monkeypatch) -> None:
+    """Setting REACHY_MINI_MAX_HISTORY_TURNS=0 disables history trimming entirely."""
+    from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
+
+    monkeypatch.setenv("REACHY_MINI_MAX_HISTORY_TURNS", "0")
+
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = LocalSTTChatterboxHandler(deps)
+
+    # Seed 10 turns — far above any sensible cap.
+    for i in range(10):
+        handler._conversation_history.append(_user(f"u{i}"))
+        handler._conversation_history.append(_assistant(f"a{i}"))
+
+    observed_lengths: list[int] = []
+
+    async def fake_stream(extra_messages=None, tts_span=None):
+        observed_lengths.append(len(handler._conversation_history))
+        return "reply", [], {"role": "assistant", "content": "reply"}
+
+    async def fake_tts(text: str, *, exaggeration=None, cfg_weight=None) -> bytes:
+        import numpy as np
+
+        return np.zeros(2400, dtype=np.int16).tobytes()
+
+    handler._stream_response_and_synthesize = fake_stream  # type: ignore[method-assign]
+    handler._call_chatterbox_tts = fake_tts  # type: ignore[method-assign]
+
+    await handler._dispatch_completed_transcript("extra")
+
+    # With cap=0 (disabled), all 20 seeded entries + the new user message = 21.
+    assert observed_lengths == [21]
+    # All original turns are still present.
+    user_turns = [m for m in handler._conversation_history if m.get("role") == "user"]
+    assert len(user_turns) == 11  # 10 seeded + 1 new
