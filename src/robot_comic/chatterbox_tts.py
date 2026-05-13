@@ -27,8 +27,9 @@ from robot_comic.config import (
     CHATTERBOX_DEFAULT_EXAGGERATION,
     config,
 )
-from robot_comic.audio_gain import normalize_gain
+from robot_comic.prompts import get_session_instructions
 from robot_comic.llama_base import _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
+from robot_comic.tools.core_tools import get_active_tool_specs
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.chatterbox_voice_clone import load_voice_clone_ref
 from robot_comic.chatterbox_tag_translator import translate
@@ -140,6 +141,7 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
             self._temperature,
         )
         await self._probe_llama_health()
+        await self._warmup_llm_kv_cache()
         await self._warmup_tts()
 
     async def _probe_llama_health(self) -> None:
@@ -175,6 +177,58 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
                 url,
                 exc,
             )
+
+    async def _warmup_llm_kv_cache(self) -> None:
+        """Pre-warm llama-server's KV cache with the active system prompt.
+
+        Fires a fire-and-forget ``/v1/chat/completions`` request using the
+        current system prompt and a trivial user message so that the KV cache
+        is populated before the first real user turn.  This eliminates the
+        cold-prefill latency (~3-5 s for Qwen3 14B) that would otherwise land
+        on the user during the opening exchange.
+
+        Gated by ``REACHY_MINI_LLM_WARMUP_ENABLED`` (default: on).
+        Automatically skipped when ``REACHY_MINI_LLAMA_HEALTH_CHECK=0`` because
+        there is no point warming a server whose availability is unknown.
+        Failure is best-effort: logs WARNING and continues.
+        """
+        if not getattr(config, "LLM_WARMUP_ENABLED", True):
+            logger.debug("LLM KV-cache warmup disabled via REACHY_MINI_LLM_WARMUP_ENABLED=0")
+            return
+        if not getattr(config, "LLAMA_HEALTH_CHECK_ENABLED", True):
+            logger.debug("LLM KV-cache warmup skipped because health check is disabled")
+            return
+
+        logger.info("llm warmup: begin (priming KV cache with system prompt)")
+        _t0 = time.perf_counter()
+        try:
+            system_prompt = get_session_instructions()
+            tool_specs = get_active_tool_specs(self.deps)
+            chat_tools = [
+                {"type": "function", "function": {k: v for k, v in t.items() if k != "type"}} for t in tool_specs
+            ]
+            payload: dict[str, object] = {
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": "ping"},
+                ],
+                "tools": chat_tools,
+                "max_tokens": 1,
+                "chat_template_kwargs": {"enable_thinking": False},
+                "stream": True,
+            }
+            assert self._http is not None
+            url = f"{self._llama_cpp_url}/v1/chat/completions"
+            async with self._http.stream("POST", url, json=payload) as resp:
+                resp.raise_for_status()
+                # Drain the stream so the server considers the request complete.
+                async for _ in resp.aiter_bytes():
+                    pass
+        except Exception as exc:
+            logger.warning("llm warmup: failed (continuing): %s", exc)
+            return
+        _dt = time.perf_counter() - _t0
+        logger.info("llm warmup: complete in %.1f s", _dt)
 
     async def _warmup_tts(self) -> None:
         """Send a silent warmup request to force the voice model into memory.
