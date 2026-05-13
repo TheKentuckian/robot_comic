@@ -61,6 +61,11 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
     # Subclasses override these for telemetry labelling.
     _BACKEND_LABEL: str = "llama"
     _TTS_SYSTEM: str = "unknown"
+    # When True, _stream_response_and_synthesize dispatches each sentence's
+    # TTS as a background task while playback drains them in order. Eliminates
+    # the per-sentence first-byte-latency stall that's audible on long replies.
+    # Subclasses must support a `target_queue` kwarg on _synthesize_and_enqueue.
+    _PARALLEL_SENTENCE_TTS: bool = False
 
     def __init__(
         self,
@@ -202,6 +207,61 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         tool_calls_by_idx: dict[int, dict[str, Any]] = {}
         pending_text: str = ""
         first_audio_logged = False
+        # Tail of the per-sentence playback chain. Each new sentence appends a
+        # drain task that awaits the previous tail before pumping its own local
+        # queue into self.output_queue, preserving order while letting the
+        # synth HTTP requests overlap.
+        playback_chain: asyncio.Task | None = None
+
+        async def _dispatch_parallel_synth(
+            sentence_text: str,
+            tts_start_inner: float | None,
+        ) -> None:
+            nonlocal playback_chain
+            local_q: asyncio.Queue = asyncio.Queue()
+
+            async def _synth_with_sentinel() -> None:
+                try:
+                    await self._synthesize_and_enqueue(
+                        sentence_text,
+                        tts_start=tts_start_inner,
+                        target_queue=local_q,
+                    )
+                finally:
+                    # Sentinel signals end-of-sentence to the drainer.
+                    await local_q.put(None)
+
+            synth_task = asyncio.create_task(_synth_with_sentinel())
+            prev_chain = playback_chain
+
+            async def _drain_after_prev() -> None:
+                if prev_chain is not None:
+                    try:
+                        await prev_chain
+                    except Exception as exc:
+                        logger.warning("Previous sentence playback failed: %s", exc)
+                while True:
+                    item = await local_q.get()
+                    if item is None:
+                        return
+                    await self.output_queue.put(item)
+                # Ensure the synth task itself is awaited so exceptions propagate
+                # and the task doesn't get garbage-collected mid-flight.
+
+            drain_task = asyncio.create_task(_drain_after_prev())
+
+            # Keep a reference to the synth task by attaching to drain so neither
+            # is collected prematurely; surface synth errors via drain.
+            async def _await_both() -> None:
+                try:
+                    await drain_task
+                finally:
+                    try:
+                        await synth_task
+                    except Exception as exc:
+                        logger.warning("Sentence synth task failed: %s", exc)
+
+            playback_chain = asyncio.create_task(_await_both())
 
         async for delta in self._stream_llm_deltas(extra_messages):
             if delta["type"] == "text_delta":
@@ -219,29 +279,36 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
 
                         if sentence:
                             await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": sentence}))
-                            if tts_span is not None:
-                                _tts_span = telemetry.get_tracer().start_span(
-                                    "tts.synthesize",
-                                    attributes={"gen_ai.system": self._TTS_SYSTEM},
-                                )
-                            else:
-                                _tts_span = None
-
                             _tts_start = time.perf_counter()
-                            try:
-                                await self._synthesize_and_enqueue(
+                            if self._PARALLEL_SENTENCE_TTS:
+                                await _dispatch_parallel_synth(
                                     sentence,
-                                    tts_start=_tts_start if not first_audio_logged else None,
+                                    _tts_start if not first_audio_logged else None,
                                 )
                                 if not first_audio_logged:
                                     first_audio_logged = True
-                            finally:
-                                if _tts_span is not None:
-                                    _tts_span.end()
-                                    telemetry.record_tts(
-                                        time.perf_counter() - _tts_start,
-                                        {"gen_ai.system": self._TTS_SYSTEM},
+                            else:
+                                if tts_span is not None:
+                                    _tts_span = telemetry.get_tracer().start_span(
+                                        "tts.synthesize",
+                                        attributes={"gen_ai.system": self._TTS_SYSTEM},
                                     )
+                                else:
+                                    _tts_span = None
+                                try:
+                                    await self._synthesize_and_enqueue(
+                                        sentence,
+                                        tts_start=_tts_start if not first_audio_logged else None,
+                                    )
+                                    if not first_audio_logged:
+                                        first_audio_logged = True
+                                finally:
+                                    if _tts_span is not None:
+                                        _tts_span.end()
+                                        telemetry.record_tts(
+                                            time.perf_counter() - _tts_start,
+                                            {"gen_ai.system": self._TTS_SYSTEM},
+                                        )
                     else:
                         break
 
@@ -270,26 +337,40 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         if pending_text.strip():
             text_parts.append(pending_text)
             await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": pending_text}))
-            if tts_span is not None:
-                _tts_span = telemetry.get_tracer().start_span(
-                    "tts.synthesize",
-                    attributes={"gen_ai.system": self._TTS_SYSTEM},
+            _tts_start = time.perf_counter()
+            if self._PARALLEL_SENTENCE_TTS:
+                await _dispatch_parallel_synth(
+                    pending_text,
+                    _tts_start if not first_audio_logged else None,
                 )
             else:
-                _tts_span = None
-            _tts_start = time.perf_counter()
-            try:
-                await self._synthesize_and_enqueue(
-                    pending_text,
-                    tts_start=_tts_start if not first_audio_logged else None,
-                )
-            finally:
-                if _tts_span is not None:
-                    _tts_span.end()
-                    telemetry.record_tts(
-                        time.perf_counter() - _tts_start,
-                        {"gen_ai.system": self._TTS_SYSTEM},
+                if tts_span is not None:
+                    _tts_span = telemetry.get_tracer().start_span(
+                        "tts.synthesize",
+                        attributes={"gen_ai.system": self._TTS_SYSTEM},
                     )
+                else:
+                    _tts_span = None
+                try:
+                    await self._synthesize_and_enqueue(
+                        pending_text,
+                        tts_start=_tts_start if not first_audio_logged else None,
+                    )
+                finally:
+                    if _tts_span is not None:
+                        _tts_span.end()
+                        telemetry.record_tts(
+                            time.perf_counter() - _tts_start,
+                            {"gen_ai.system": self._TTS_SYSTEM},
+                        )
+
+        # In parallel mode, ensure all sentence playback completes before this
+        # turn returns. Otherwise tool_calls follow-up could race with audio.
+        if self._PARALLEL_SENTENCE_TTS and playback_chain is not None:
+            try:
+                await playback_chain
+            except Exception as exc:
+                logger.warning("Sentence playback chain failed: %s", exc)
 
         # Parse tool call arguments
         raw_text = "".join(text_parts).strip()

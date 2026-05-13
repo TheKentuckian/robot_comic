@@ -95,6 +95,10 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
 
     _BACKEND_LABEL = "llama_elevenlabs_tts"
     _TTS_SYSTEM = "elevenlabs"
+    # Dispatch each sentence's TTS in parallel; a playback chain pumps the
+    # per-sentence local queues into output_queue in order. Eliminates the
+    # ~300-1000ms first-byte stall per sentence that's audible on long replies.
+    _PARALLEL_SENTENCE_TTS = True
     # ElevenLabs Turbo v2.5 pricing: $0.50 per 1M characters (Creator tier)
     # verify against current ElevenLabs pricing
     ELEVENLABS_COST_PER_1M_CHARS: float = 0.50
@@ -193,9 +197,15 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
     # TTS synthesis                                                        #
     # ------------------------------------------------------------------ #
 
-    async def _synthesize_and_enqueue(self, response_text: str, tts_start: float | None = None) -> None:
+    async def _synthesize_and_enqueue(
+        self,
+        response_text: str,
+        tts_start: float | None = None,
+        target_queue: asyncio.Queue | None = None,
+    ) -> None:
         if not response_text:
             return
+        out_queue = target_queue if target_queue is not None else self.output_queue
         sentences = split_sentences(response_text) or [response_text]
         any_audio = False
         # List used as a one-shot first-audio marker shared with _stream_tts_to_queue.
@@ -211,8 +221,8 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
                 continue
             if SHORT_PAUSE_TAG in tags:
                 for frame in self._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS, _OUTPUT_SAMPLE_RATE)):
-                    await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
-            sentence_had_audio = await self._stream_tts_to_queue(spoken, first_audio_marker, tags)
+                    await out_queue.put((_OUTPUT_SAMPLE_RATE, frame))
+            sentence_had_audio = await self._stream_tts_to_queue(spoken, first_audio_marker, tags, target_queue=out_queue)
             if sentence_had_audio:
                 any_audio = True
 
@@ -221,6 +231,8 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
                 msg = "[ElevenLabs TTS rate-limited; try again later]"
             else:
                 msg = "[TTS error — ElevenLabs TTS failed]"
+            # Error markers always go to the main queue so the chat UI sees them
+            # regardless of whether we're streaming into a per-sentence buffer.
             await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": msg}))
 
     async def _stream_tts_to_queue(
@@ -228,6 +240,7 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
         text: str,
         first_audio_marker: list[float] | None = None,
         tags: list[str] | None = None,
+        target_queue: asyncio.Queue | None = None,
     ) -> bool:
         """Stream ElevenLabs TTS PCM chunks directly into ``output_queue``.
 
@@ -282,6 +295,7 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
             "voice_settings": voice_settings,
         }
 
+        out_queue = target_queue if target_queue is not None else self.output_queue
         self._last_tts_rate_limited = False
         frame_bytes = _CHUNK_SAMPLES * 2  # int16 = 2 bytes/sample
         for attempt in range(_TTS_MAX_RETRIES):
@@ -304,12 +318,12 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
                         leftover += chunk
                         while len(leftover) >= frame_bytes:
                             frame = np.frombuffer(leftover[:frame_bytes], dtype=np.int16)
-                            await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
+                            await out_queue.put((_OUTPUT_SAMPLE_RATE, frame))
                             leftover = leftover[frame_bytes:]
                 if leftover:
                     tail = np.frombuffer(leftover[: (len(leftover) // 2) * 2], dtype=np.int16)
                     if len(tail) > 0:
-                        await self.output_queue.put((_OUTPUT_SAMPLE_RATE, tail))
+                        await out_queue.put((_OUTPUT_SAMPLE_RATE, tail))
                 return got_audio
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code == 429:
