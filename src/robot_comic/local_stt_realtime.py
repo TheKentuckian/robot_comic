@@ -1,5 +1,7 @@
 """Local speech-to-text frontend for realtime response-audio backends."""
 
+import os
+import sys
 import time
 import asyncio
 import logging
@@ -43,6 +45,63 @@ LOCAL_STT_SAMPLE_RATE = 16000
 
 class LocalSTTDependencyError(RuntimeError):
     """Raised when the optional local STT dependency is not installed."""
+
+
+def resolve_ort_model_path(model_path: Path) -> tuple[Path, str]:
+    """Return (resolved_path, format_str) preferring .ort over .onnx.
+
+    If *model_path* is a directory, we look for any ``.ort`` file inside it
+    first; if none is found we look for any ``.onnx`` file and return that
+    (falling back to the original path so the caller can pass it straight to
+    ``Transcriber``).  If *model_path* is a file, we just swap the suffix.
+
+    The returned *format_str* is ``"ort"`` or ``"onnx"`` and is used only for
+    the startup log line.
+    """
+    if model_path.is_dir():
+        ort_files = sorted(model_path.glob("*.ort"))
+        if ort_files:
+            return ort_files[0], "ort"
+        onnx_files = sorted(model_path.glob("*.onnx"))
+        if onnx_files:
+            return model_path, "onnx"
+        return model_path, "onnx"
+
+    ort_candidate = model_path.with_suffix(".ort")
+    if ort_candidate.exists():
+        return ort_candidate, "ort"
+    return model_path, "onnx"
+
+
+def prewarm_model_file(model_path: Path, chunk_size: int = 1024 * 1024) -> None:
+    """Pull the model file into the OS page cache by reading it sequentially.
+
+    This is a no-op on Windows where the page-cache concept does not apply in
+    the same way and the overhead is not worthwhile.
+    """
+    if sys.platform == "win32":
+        return
+    resolved = model_path if model_path.is_file() else model_path
+    # If model_path is a directory, prewarm the first .ort or .onnx file found.
+    if resolved.is_dir():
+        candidates = sorted(resolved.glob("*.ort")) or sorted(resolved.glob("*.onnx"))
+        if not candidates:
+            return
+        resolved = candidates[0]
+    if not resolved.is_file():
+        return
+    try:
+        fd = os.open(str(resolved), os.O_RDONLY)
+        try:
+            while True:
+                chunk = os.read(fd, chunk_size)
+                if not chunk:
+                    break
+        finally:
+            os.close(fd)
+        logger.debug("Moonshine page-cache prewarm complete: %s", resolved)
+    except OSError as exc:
+        logger.debug("Moonshine prewarm skipped (%s): %s", resolved, exc)
 
 
 def _resolve_moonshine_arch(moonshine_voice: Any, model_name: str) -> Any:
@@ -174,12 +233,22 @@ class LocalSTTInputMixin:
             model_path, model_arch = get_model_for_language(language, cache_root=cache_root)
             model_arch = requested_arch or model_arch
 
+        # Prefer .ort (ONNX Runtime FlatBuffer) when available — loads ~3-5x
+        # faster than plain .onnx because it skips the graph parse step.
+        model_path, model_format = resolve_ort_model_path(Path(model_path))
+
+        # Pull the model file into the OS page cache before handing it to
+        # ONNX Runtime.  No-op on Windows.
+        prewarm_model_file(model_path)
+
         logger.info(
-            "Starting local Moonshine STT: language=%s model=%s update_interval=%.2fs cache=%s",
+            "Starting local Moonshine STT: language=%s model=%s format=%s update_interval=%.2fs cache=%s path=%s",
             language,
             model_name,
+            model_format,
             update_interval,
             cache_root,
+            model_path,
         )
 
         transcriber = Transcriber(model_path=model_path, model_arch=model_arch, update_interval=update_interval)
