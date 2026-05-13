@@ -31,6 +31,7 @@ from robot_comic.gemini_tts import (
     _silence_pcm,
     extract_delivery_tags,
 )
+from robot_comic.elevenlabs_tts import load_profile_elevenlabs_config as _shared_load_profile_elevenlabs_config
 from robot_comic.llama_base import _CHUNK_SAMPLES, _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
 from robot_comic.tools.core_tools import ToolDependencies
 from robot_comic.elevenlabs_voices import get_elevenlabs_voices
@@ -45,24 +46,11 @@ _TTS_RETRY_BASE_DELAY = 0.5
 
 
 def load_profile_elevenlabs_config() -> dict[str, str]:
-    """Read profiles/<name>/elevenlabs.txt as key=value pairs, if present."""
-    profile: str | None = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
-    if not profile:
-        return {}
-    try:
-        path = config.PROFILES_DIRECTORY / profile / "elevenlabs.txt"
-        if not path.exists():
-            return {}
-        params: dict[str, str] = {}
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and "=" in line and not line.startswith("#"):
-                k, _, v = line.partition("=")
-                params[k.strip()] = v.strip()
-        return params
-    except Exception as exc:
-        logger.warning("Could not read elevenlabs.txt for profile %r: %s", profile, exc)
-        return {}
+    """Delegate to the shared loader so this path picks up `.local.txt` overrides
+    (e.g. the IVC voice_id). Kept as a thin wrapper for backward compatibility
+    with any external imports of this name.
+    """
+    return _shared_load_profile_elevenlabs_config()
 
 
 def apply_voice_settings_deltas(
