@@ -27,6 +27,7 @@ from robot_comic.config import (
     set_custom_profile,
 )
 from robot_comic.llama_base import split_sentences
+from robot_comic.joke_history import JokeHistory, last_sentence_of, default_history_path
 from robot_comic.chatterbox_tag_translator import strip_gemini_tags
 
 
@@ -313,6 +314,13 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
         self._conversation_history.append({"role": "model", "parts": [{"text": response_text}]})
         await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": response_text}))
+
+        # Capture punchline for avoid-repeat history (best-effort).
+        if getattr(config, "JOKE_HISTORY_ENABLED", True):
+            try:
+                JokeHistory(default_history_path()).add(last_sentence_of(response_text))
+            except Exception as _jh_exc:
+                logger.debug("joke_history capture failed: %s", _jh_exc)
 
         base_instruction = load_profile_tts_instruction()
         sentences = split_sentences(response_text) or [response_text]

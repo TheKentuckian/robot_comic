@@ -73,6 +73,8 @@ def test_prompts_load_from_compact_builtin_profile(monkeypatch: pytest.MonkeyPat
     """Prompt loading should read compact built-in profile instructions directly."""
     monkeypatch.setattr(config, "REACHY_MINI_CUSTOM_PROFILE", "mad_scientist_assistant")
     monkeypatch.setattr(config, "PROFILES_DIRECTORY", DEFAULT_PROFILES_DIRECTORY)
+    # Disable joke-history injection so the result matches the raw file exactly.
+    monkeypatch.setattr(config, "JOKE_HISTORY_ENABLED", False)
 
     expected = (
         (DEFAULT_PROFILES_DIRECTORY / "mad_scientist_assistant" / "instructions.txt")

@@ -23,6 +23,7 @@ from robot_comic import telemetry
 from robot_comic.config import config
 from robot_comic.prompts import get_session_instructions
 from robot_comic.history_trim import trim_history_in_place
+from robot_comic.joke_history import JokeHistory, last_sentence_of, default_history_path
 from robot_comic.tools.core_tools import ToolDependencies, get_active_tool_specs
 from robot_comic.conversation_handler import ConversationHandler
 from robot_comic.tools.background_tool_manager import (
@@ -469,6 +470,13 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                 telemetry.record_llm_duration(_llm_s, {"gen_ai.system": "llama_cpp", "gen_ai.operation.name": "chat"})
 
             self._conversation_history.append(raw_message)
+
+            # Capture punchline for avoid-repeat history (best-effort).
+            if response_text and getattr(config, "JOKE_HISTORY_ENABLED", True):
+                try:
+                    JokeHistory(default_history_path()).add(last_sentence_of(response_text))
+                except Exception as _jh_exc:
+                    logger.debug("joke_history capture failed: %s", _jh_exc)
 
             bg_tools: list[tuple[str, BackgroundTool]] = []
             if tool_calls:
