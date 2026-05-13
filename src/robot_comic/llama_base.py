@@ -594,8 +594,10 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                                     log_once("first LLM token", logger)
                                     first_token_time_recorded = True
 
-                                # Emit text deltas
-                                if "content" in delta:
+                                # Emit text deltas. OpenAI-compatible streams set
+                                # delta["content"] = null when a chunk carries only
+                                # tool_calls; skip those so downstream concat is safe.
+                                if delta.get("content") is not None:
                                     yield {
                                         "type": "text_delta",
                                         "content": delta["content"],
@@ -608,7 +610,7 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                                             idx = tool_call["index"]
                                             if "function" in tool_call:
                                                 fn = tool_call["function"]
-                                                if "arguments" in fn:
+                                                if fn.get("arguments") is not None:
                                                     yield {
                                                         "type": "tool_call_delta",
                                                         "index": idx,
