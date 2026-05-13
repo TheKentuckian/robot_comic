@@ -30,8 +30,8 @@ class CrowdWork(Tool):
     name = "crowd_work"
     description = (
         "Track what you've learned about the person. "
-        "action='update': store name, job, hometown, or freeform details. "
-        "action='query': get their full profile and callback hints to use mid-routine."
+        "action='update': store name, job, hometown, freeform details, or roast targets already used as punchlines. "
+        "action='query': get their full profile, callback hints, and which roast targets have already been used."
     )
     parameters_schema = {
         "type": "object",
@@ -48,6 +48,15 @@ class CrowdWork(Tool):
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Any other detail worth remembering: appearance, behaviour, something they said.",
+            },
+            "roast_targets_used": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Roast fields from the 'roast' tool that have already been used as punchlines "
+                    "(e.g. 'hair', 'clothing', 'build', 'expression', 'standout', 'energy'). "
+                    "Pass after delivering a punchline so these are not repeated."
+                ),
             },
         },
         "required": ["action"],
@@ -168,6 +177,9 @@ class CrowdWork(Tool):
             for detail in kwargs.get("details") or []:
                 if detail not in self._state["details"]:
                     self._state["details"].append(detail)
+            for target in kwargs.get("roast_targets_used") or []:
+                if target not in self._state["roast_targets_used"]:
+                    self._state["roast_targets_used"].append(target)
             self._state["last_updated"] = datetime.now().isoformat()
             self._schedule_write()
             return {
@@ -177,6 +189,7 @@ class CrowdWork(Tool):
                     "job": self._state["job"],
                     "hometown": self._state["hometown"],
                     "details": self._state["details"],
+                    "roast_targets_used": self._state["roast_targets_used"],
                 },
             }
 
@@ -189,6 +202,7 @@ class CrowdWork(Tool):
                     "details": self._state.get("details", []),
                 },
                 "callbacks": self._build_callbacks(),
+                "roast_targets_used": self._state.get("roast_targets_used", []),
             }
 
         return {"error": f"Unknown action {action!r}. Use 'update' or 'query'."}
