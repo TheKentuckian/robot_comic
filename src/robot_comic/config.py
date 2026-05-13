@@ -617,6 +617,10 @@ class Config:
 
     WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
     WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None
+    # When True, a tiny synthesised tone is played immediately at startup (before
+    # any disk I/O) so the robot sounds alive within ~1 s of process launch even
+    # if heavy imports take longer. Opt-in; default False.
+    WARMUP_BLIP_ENABLED = _env_flag("REACHY_MINI_WARMUP_BLIP_ENABLED", default=False)
 
     # Disengagement guardrail for high-intensity personas (e.g. Bill Hicks).
     # When unset, the guardrail activates automatically for profiles in
@@ -777,8 +781,7 @@ def refresh_runtime_config_from_env() -> None:
     config.ROBOT_INSTRUMENTATION = os.getenv("ROBOT_INSTRUMENTATION", "")
     config.WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
     config.WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None
-    config.STARTUP_SCREEN_ENABLED = _env_flag("REACHY_MINI_STARTUP_SCREEN", default=False)
-    config.STARTUP_SCREEN_PERSONA_ORDER = os.getenv("REACHY_MINI_STARTUP_SCREEN_PERSONA_ORDER") or ""
+    config.WARMUP_BLIP_ENABLED = _env_flag("REACHY_MINI_WARMUP_BLIP_ENABLED", default=False)
     config.JOKE_HISTORY_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_ENABLED", default=True)
     config.FORCE_DELIVERY_TAGS = _env_flag("REACHY_MINI_FORCE_DELIVERY_TAGS", default=False)
     config.GUARDRAIL_ENABLED = _env_flag("REACHY_MINI_GUARDRAIL_ENABLED", default=False)
