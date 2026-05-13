@@ -142,6 +142,7 @@ class PendingTurn:
         self.tts_ms: float = 0.0
         self.tts_count: int = 0  # completed tts.synthesize spans seen
         self.tool_count: int = 0
+        self.excerpt: str = ""  # populated from stt.infer turn.excerpt attribute
 
     @property
     def elapsed_ms(self) -> float:
@@ -178,6 +179,11 @@ class SpanBuffer:
             if trace_id not in self._inflight:
                 self._inflight[trace_id] = PendingTurn(trace_id)
             self._inflight[trace_id].stt_ms = span.get("dur_ms")
+            # Capture transcript excerpt from the completed stt.infer span so the
+            # pending row can display it while the outer turn span is still open.
+            excerpt = span.get("attrs", {}).get("turn.excerpt", "")
+            if excerpt:
+                self._inflight[trace_id].excerpt = str(excerpt)
         elif name == "llm.request":
             pt = self._inflight.get(trace_id)
             if pt is not None:
@@ -267,9 +273,15 @@ def _build_table(turns: list[TurnRecord], pending: Optional[PendingTurn] = None)
         tts_active = tts_started and pending.tts_count == 0
         tts_ms = pending.tts_ms if pending.tts_count > 0 else None
 
+        # Show excerpt from stt.infer span if available, otherwise spinner.
+        what_cell: Text
+        if pending.excerpt:
+            what_cell = Text(pending.excerpt, style="italic yellow")
+        else:
+            what_cell = Text(f"{sp}", style="bold yellow")
         t.add_row(
             pending.ts.strftime("%H:%M:%S"),
-            Text(f"{sp}", style="bold yellow"),
+            what_cell,
             _fmt_spin(pending.stt_ms, stt_done, "stt"),
             _fmt_spin(llm_ms, llm_active, "llm"),
             _fmt_spin(tts_ms, tts_active, "tts"),
@@ -334,7 +346,7 @@ def _parse_span(line: str) -> Optional[dict[str, Any]]:
     if idx == -1:
         return None
     try:
-        result: dict[str, Any] = json.loads(line[idx + 7:])
+        result: dict[str, Any] = json.loads(line[idx + 7 :])
         return result
     except json.JSONDecodeError:
         return None

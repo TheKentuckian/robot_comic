@@ -278,17 +278,21 @@ class LocalSTTInputMixin:
 
         self._mark_activity("local_stt_completed")  # type: ignore[attr-defined]
         self.deps.movement_manager.set_listening(False)
+        words = transcript.split()
+        excerpt = " ".join(words[:5]) + ("…" if len(words) > 5 else "")
         stt_span = getattr(self, "_stt_infer_span", None)
         if stt_span is not None:
             stt_s = now - getattr(self, "_stt_infer_start", now)
+            # Tag the stt.infer span with the excerpt *before* closing it so the
+            # monitor can read it from the completed child span while the outer
+            # turn span is still open (pending row).
+            stt_span.set_attribute("turn.excerpt", excerpt)
             stt_span.end()
             self._stt_infer_span = None
             telemetry.record_stt(stt_s, {"gen_ai.system": "local_stt", "stt.type": "moonshine"})
-        # Tag the outer turn span with a short excerpt so the monitor can label it.
+        # Tag the outer turn span with the same excerpt for the completed-row path.
         _outer_span = getattr(self, "_turn_span", None)
         if _outer_span is not None:
-            words = transcript.split()
-            excerpt = " ".join(words[:5]) + ("…" if len(words) > 5 else "")
             _outer_span.set_attribute("turn.excerpt", excerpt)
         self._turn_user_done_at = now
         self._turn_response_created_at = None
