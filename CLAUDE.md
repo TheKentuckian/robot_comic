@@ -101,3 +101,8 @@ In sim mode (`--sim`), `main.py` constructs a settings-only `LocalStream(handler
 - **Cross-platform**: All code must work on Linux, macOS, and Windows.
 - **Git branches**: `feat/<issue>-<desc>`, `fix/<issue>-<desc>`. `main` is the release branch; PRs require CI (lint + types + tests) to pass.
 - **Git remote**: The only remote is `origin` (TheKentuckian/robot_comic). There is no `upstream`. **Never** fetch from, push to, reference, or run any `gh` command targeting the upstream fork (`pollen-robotics/reachy_mini_conversation_app`) — not for issues, PRs, releases, or any other action. All GitHub interactions are scoped to `origin` only.
+- **Pre-commit hook**: A secrets-and-audio guard lives in `.githooks/pre-commit`. Enable it once per clone:
+  ```bash
+  git config core.hooksPath .githooks
+  ```
+  It blocks API keys and stray archival audio from being committed to the public repo. Use `git commit --no-verify` only if you are certain a flagged item is safe.

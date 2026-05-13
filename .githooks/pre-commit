@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit
+#
+# Defense-in-depth hook for robot_comic (public fork).
+# Opt in once per clone: git config core.hooksPath .githooks
+#
+# WHAT THIS HOOK BLOCKS
+# ---------------------
+# 1. Secret key patterns in staged diff content:
+#    - ElevenLabs:  sk_[a-f0-9]{40,}
+#    - Anthropic:   sk-ant-[A-Za-z0-9_-]{60,}
+#    - OpenAI:      sk-[A-Za-z0-9]{20,}   (checked after ElevenLabs; prefixes are distinct)
+#    - Google/Gemini: AIza[0-9A-Za-z_-]{35}
+#
+# 2. Archival audio outside known-safe paths:
+#    - *.wav / *.mp3 / *.flac / *.ogg under profiles/ that are not already gitignored.
+#      The .gitignore already covers:
+#        profiles/don_rickles/voice_prep/*.wav
+#        profiles/*/voice_ref.wav
+#        profiles/*/welcome_name.wav
+#      Any OTHER audio file under profiles/ is blocked here.
+#    - Under assets/welcome/, only these four filenames are safe:
+#        welcome.wav  list_intro.wav  not_understood.wav  switching.wav
+#      Anything else under assets/welcome/ is blocked.
+#
+# 3. ElevenLabs voice_id leak prevention:
+#    - profiles/*/elevenlabs.txt must NOT contain an uncommented voice_id= line.
+#      Use profiles/*/elevenlabs.local.txt (gitignored) for actual voice_ids.
+#
+# BYPASS
+# ------
+# If you are absolutely certain the flagged content is safe to commit
+# (e.g., a test fixture with a fake/example key):
+#   git commit --no-verify
+#
+# ACCEPTANCE SCENARIOS
+# --------------------
+# BLOCKED:
+#   1. File contains sk_a1b2c3d4e5f6[...]  (ElevenLabs key, 40+ hex chars)
+#   2. File contains sk-ant-api03-[...]     (Anthropic key)
+#   3. File contains AIzaSyABCDEF[...]      (Google/Gemini key)
+#   4. profiles/some_persona/source.wav staged (audio outside safe paths)
+#   5. Uncommented voice_id=abc123 in profiles/don_rickles/elevenlabs.txt
+# ALLOWED:
+#   6. assets/welcome/welcome.wav staged    (known-safe filename)
+#   7. Normal source code edit              (no secrets, no audio)
+
+set -euo pipefail
+
+ERRORS=0
+
+# ─── Helper: print a block header ────────────────────────────────────────────
+err() {
+  echo ""
+  echo "  PRE-COMMIT BLOCKED: $*" >&2
+}
+
+# ─── 1. Secret patterns in staged diff ───────────────────────────────────────
+#
+# We read added lines (+) from the diff. Binary files produce no text output,
+# so audio blobs won't generate false positives here.
+
+DIFF=$(git diff --cached -U0 2>/dev/null) || true
+
+check_secret() {
+  local label="$1"
+  local pattern="$2"
+
+  # grep -P for Perl-compatible regex; -n for line numbers; -o to show match
+  # We only look at added lines (start with +) to avoid flagging removed secrets.
+  local hits
+  hits=$(printf '%s\n' "$DIFF" | grep -nP "^\+" | grep -P "$pattern" || true)
+
+  if [[ -n "$hits" ]]; then
+    err "$label key detected in staged diff"
+    echo "" >&2
+    echo "  Pattern: $pattern" >&2
+    echo "  Matches (diff context, line numbers are diff line numbers):" >&2
+    printf '%s\n' "$hits" | head -5 | sed 's/^/    /' >&2
+    echo "" >&2
+    echo "  Move the key to an environment variable or a gitignored .local file." >&2
+    echo "  To override: git commit --no-verify" >&2
+    ERRORS=$((ERRORS + 1))
+  fi
+}
+
+# Check ElevenLabs first (sk_ prefix) then OpenAI (sk- prefix) to keep
+# error messages unambiguous — both start with sk but use different separators.
+check_secret "ElevenLabs"    'sk_[a-f0-9]{40,}'
+check_secret "Anthropic"     'sk-ant-[A-Za-z0-9_-]{60,}'
+check_secret "OpenAI"        'sk-[A-Za-z0-9]{20,}'
+check_secret "Google/Gemini" 'AIza[0-9A-Za-z_-]{35}'
+
+# ─── 2. Archival audio files outside known-safe paths ────────────────────────
+#
+# git diff --cached --name-only lists staged new/modified files.
+# We check extensions and then validate path allowlists.
+
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=AM 2>/dev/null) || true
+
+AUDIO_EXT_RE='\.(wav|mp3|flac|ogg)$'
+
+# Known-safe filenames under assets/welcome/
+SAFE_WELCOME_NAMES=( "welcome.wav" "list_intro.wav" "not_understood.wav" "switching.wav" )
+
+is_safe_welcome() {
+  local f="$1"   # e.g. assets/welcome/welcome.wav
+  local basename="${f##*/}"
+  for safe in "${SAFE_WELCOME_NAMES[@]}"; do
+    [[ "$basename" == "$safe" ]] && return 0
+  done
+  return 1
+}
+
+while IFS= read -r file; do
+  [[ -z "$file" ]] && continue
+
+  # Normalise to forward slashes (Windows git can emit backslashes)
+  file="${file//\\//}"
+
+  # Only care about audio extensions
+  if ! [[ "$file" =~ $AUDIO_EXT_RE ]]; then
+    continue
+  fi
+
+  # ── profiles/ subtree ────────────────────────────────────────────────────
+  if [[ "$file" == profiles/* ]]; then
+    # The .gitignore already excludes the known-safe clips. If git is tracking
+    # this file (it appeared in --diff-filter=AM) then it was force-added or
+    # the gitignore doesn't cover it. Either way, block it.
+    err "Archival audio staged under profiles/"
+    echo "" >&2
+    echo "  File:  $file" >&2
+    echo "" >&2
+    echo "  Audio files under profiles/ are blocked to prevent archival/copyrighted" >&2
+    echo "  source material from appearing in the public repo." >&2
+    echo "  Known-safe clips (voice_ref.wav, welcome_name.wav, voice_prep/*.wav)" >&2
+    echo "  are gitignored; they should never appear here." >&2
+    echo "  To override: git commit --no-verify" >&2
+    ERRORS=$((ERRORS + 1))
+    continue
+  fi
+
+  # ── assets/welcome/ subtree ──────────────────────────────────────────────
+  if [[ "$file" == assets/welcome/* ]]; then
+    if ! is_safe_welcome "$file"; then
+      err "Unknown audio file staged under assets/welcome/"
+      echo "" >&2
+      echo "  File:  $file" >&2
+      echo "" >&2
+      echo "  Only these filenames are allowed in assets/welcome/:" >&2
+      for n in "${SAFE_WELCOME_NAMES[@]}"; do
+        echo "    $n" >&2
+      done
+      echo "" >&2
+      echo "  If this is a new narrator asset, add it to the SAFE_WELCOME_NAMES list" >&2
+      echo "  in .githooks/pre-commit and re-commit." >&2
+      echo "  To override: git commit --no-verify" >&2
+      ERRORS=$((ERRORS + 1))
+    fi
+    continue
+  fi
+
+done <<< "$STAGED_FILES"
+
+# ─── 3. ElevenLabs voice_id leak in profiles/*/elevenlabs.txt ────────────────
+#
+# The committed elevenlabs.txt is safe to hold everything EXCEPT voice_id=.
+# Actual voice IDs live in elevenlabs.local.txt (gitignored).
+
+while IFS= read -r file; do
+  [[ -z "$file" ]] && continue
+  file="${file//\\//}"
+
+  # Match profiles/<anything>/elevenlabs.txt  (not .local.txt — those are gitignored)
+  if [[ "$file" =~ ^profiles/[^/]+/elevenlabs\.txt$ ]]; then
+    # Read the staged blob, not the working-tree version
+    staged_content=$(git show ":$file" 2>/dev/null) || continue
+
+    # Look for any non-comment line containing voice_id=
+    # Comment lines start with optional whitespace then #
+    bad_lines=$(printf '%s\n' "$staged_content" | grep -nP '^[^#]*voice_id\s*=' || true)
+
+    if [[ -n "$bad_lines" ]]; then
+      err "voice_id= found in $file"
+      echo "" >&2
+      echo "  Matching lines:" >&2
+      printf '%s\n' "$bad_lines" | head -5 | sed 's/^/    /' >&2
+      echo "" >&2
+      echo "  The committed elevenlabs.txt must NOT contain voice_id=." >&2
+      echo "  Store actual voice IDs in profiles/<persona>/elevenlabs.local.txt" >&2
+      echo "  (gitignored). The .local.txt overlay is loaded at runtime." >&2
+      echo "  To override: git commit --no-verify" >&2
+      ERRORS=$((ERRORS + 1))
+    fi
+  fi
+done <<< "$STAGED_FILES"
+
+# ─── Final gate ──────────────────────────────────────────────────────────────
+
+if [[ "$ERRORS" -gt 0 ]]; then
+  echo "" >&2
+  echo "  $ERRORS check(s) failed. Commit aborted." >&2
+  echo "  Fix the issues above, or use 'git commit --no-verify' to bypass." >&2
+  echo "" >&2
+  exit 1
+fi
+
+exit 0
