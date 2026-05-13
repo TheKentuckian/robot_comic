@@ -35,6 +35,7 @@ from robot_comic.config import (
     get_default_voice_for_backend,
     get_available_voices_for_backend,
 )
+from robot_comic.guardrail import SOFTEN_NOTE, EngagementMonitor
 from robot_comic.tools.core_tools import ToolDependencies
 from robot_comic.conversation_handler import ConversationHandler
 from robot_comic.tools.background_tool_manager import (
@@ -154,6 +155,10 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
         self.partial_transcript_task: asyncio.Task[None] | None = None
         self.partial_debounce_delay = 0.5  # seconds
         self.input_transcript_chunks_by_item = InputTranscriptChunksByItem()
+
+        # Disengagement guardrail (Bill Hicks and similar high-intensity personas).
+        _active_profile = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
+        self._engagement_monitor = EngagementMonitor(profile=_active_profile)
 
         # Internal lifecycle flags
         self._connected_event: asyncio.Event = asyncio.Event()
@@ -287,6 +292,7 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
             from robot_comic.config import set_custom_profile
 
             set_custom_profile(profile)
+            self._engagement_monitor.update_profile(profile)
             logger.info(
                 "Set custom profile to %r (config=%r)", profile, getattr(_config, "REACHY_MINI_CUSTOM_PROFILE", None)
             )
@@ -910,6 +916,28 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
                                 pause_controller.handle_transcript(transcript)
                             except Exception as e:
                                 logger.error("pause_controller.handle_transcript raised: %s", e)
+
+                        # Disengagement guardrail — analyze the user turn and
+                        # inject a soften note into the session instructions
+                        # when the persona should ease back.
+                        try:
+                            _score, _should_soften = self._engagement_monitor.analyze(transcript)
+                            if _should_soften and self.connection is not None:
+                                _base_instructions = self._get_session_instructions()
+                                _softened = SOFTEN_NOTE + "\n\n" + _base_instructions
+                                await self.connection.session.update(
+                                    session=RealtimeSessionCreateRequestParam(
+                                        type="realtime",
+                                        instructions=_softened,
+                                    ),
+                                )
+                                logger.info(
+                                    "Guardrail: soften note injected for profile=%r (consecutive=%d)",
+                                    getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None),
+                                    self._engagement_monitor.consecutive_discomfort,
+                                )
+                        except Exception as _guardrail_err:
+                            logger.warning("Guardrail analyze/inject failed: %s", _guardrail_err)
 
                     # Handle assistant transcription
                     if event.type == "response.output_audio_transcript.done":
