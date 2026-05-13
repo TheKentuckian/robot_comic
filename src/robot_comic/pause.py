@@ -16,9 +16,18 @@ The controller does *not* try to cancel the backend's in-progress LLM
 response. Existing VAD interruption already cuts the LLM audio when the
 user starts speaking, and a graceful menu prompt via TTS is left as a
 follow-up to keep the first slice small.
+
+Trigger prefix
+--------------
+The primary trigger prefix defaults to "robot" (more phonetically robust
+than "reachy" for Moonshine STT in noisy environments). The env var
+``REACHY_MINI_TRIGGER_PREFIX`` overrides it at runtime. The legacy
+"reachy" prefix is always recognised for backward compatibility regardless
+of the configured prefix.
 """
 
 from __future__ import annotations
+import os
 import re
 import enum
 import logging
@@ -28,21 +37,57 @@ from typing import Callable, Iterable, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Trigger prefix
+# ---------------------------------------------------------------------------
 
-DEFAULT_STOP_PHRASES: tuple[str, ...] = (
-    "reachy pause",
-    "reachy paws",  # common moonshine mishearing
-)
+#: Environment variable that selects the primary trigger prefix.
+#: Defaults to "robot" — phonetically clearer than "reachy" for Moonshine
+#: STT in noisy environments.  Set to any single word (e.g. "comic") to
+#: change the primary wake prefix.  The legacy "reachy" prefix is always
+#: included for backward compatibility.
+TRIGGER_PREFIX_ENV = "REACHY_MINI_TRIGGER_PREFIX"
+DEFAULT_TRIGGER_PREFIX = "robot"
+
+
+def _get_trigger_prefix() -> str:
+    """Return the active trigger prefix (env override or default)."""
+    raw = os.getenv(TRIGGER_PREFIX_ENV, "").strip().lower()
+    return raw if raw else DEFAULT_TRIGGER_PREFIX
+
+
+def _build_stop_phrases(prefix: str) -> tuple[str, ...]:
+    """Build the stop-phrase list for *prefix*, always including reachy variants."""
+    phrases: list[str] = []
+    # Primary prefix variants
+    if prefix != "reachy":
+        phrases.extend([f"{prefix} pause", f"{prefix} paws"])
+    # Legacy reachy variants — always included for backward compat
+    phrases.extend(["reachy pause", "reachy paws"])
+    return tuple(dict.fromkeys(phrases))  # deduplicate, preserve order
+
+
+def _build_shutdown_phrases(prefix: str) -> tuple[str, ...]:
+    """Build the shutdown-phrase list for *prefix*, always including reachy variants."""
+    phrases: list[str] = []
+    # Primary prefix variants
+    if prefix != "reachy":
+        phrases.extend([f"{prefix} shutdown", f"{prefix} shut down"])
+    # Legacy reachy variants — always included for backward compat
+    phrases.extend(["reachy shutdown", "reachy shut down"])
+    return tuple(dict.fromkeys(phrases))  # deduplicate, preserve order
+
+
+_PREFIX = _get_trigger_prefix()
+
+DEFAULT_STOP_PHRASES: tuple[str, ...] = _build_stop_phrases(_PREFIX)
 DEFAULT_RESUME_PHRASES: tuple[str, ...] = (
     "continue",
     "resume",
     "keep going",
     "carry on",
 )
-DEFAULT_SHUTDOWN_PHRASES: tuple[str, ...] = (
-    "reachy shutdown",
-    "reachy shut down",  # moonshine splits this into two words
-)
+DEFAULT_SHUTDOWN_PHRASES: tuple[str, ...] = _build_shutdown_phrases(_PREFIX)
 DEFAULT_SWITCH_PHRASES: tuple[str, ...] = (
     "switch",
     "switch comic",
@@ -176,7 +221,8 @@ class PauseController:
             return TranscriptDisposition.HANDLED
 
         logger.info(
-            "Paused; ignoring transcript (say continue, reachy shutdown, or switch): %r",
+            "Paused; ignoring transcript (say continue, %s shutdown, or switch): %r",
+            _PREFIX,
             transcript,
         )
         return TranscriptDisposition.HANDLED
@@ -241,7 +287,7 @@ class PauseController:
                 self._on_pause_state_changed(True)
             except Exception as e:
                 logger.error("on_pause_state_changed(True) raised: %s", e)
-        logger.info("Paused. Say 'continue', 'shutdown', or 'switch comic'.")
+        logger.info("Paused. Say 'continue', '%s shutdown', or 'switch comic'.", _PREFIX)
 
     def _enter_active(self, matched_phrase: str) -> None:
         with self._lock:
