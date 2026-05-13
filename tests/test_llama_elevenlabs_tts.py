@@ -245,7 +245,7 @@ async def test_synthesize_strips_tags_from_spoken_text(monkeypatch: pytest.Monke
     handler = _make_handler()
     captured: list[str] = []
 
-    async def fake_stream(self, text: str, first_audio_marker=None):  # type: ignore[no-untyped-def]
+    async def fake_stream(self, text: str, first_audio_marker=None, tags=None, target_queue=None):  # type: ignore[no-untyped-def]
         captured.append(text)
         return True
 
@@ -277,7 +277,7 @@ async def test_synthesize_short_pause_queues_silence_before_tts(monkeypatch: pyt
     handler = _make_handler()
     qdepths: list[int] = []
 
-    async def fake_stream(self, text: str, first_audio_marker=None):  # type: ignore[no-untyped-def]
+    async def fake_stream(self, text: str, first_audio_marker=None, tags=None, target_queue=None):  # type: ignore[no-untyped-def]
         qdepths.append(self.output_queue.qsize())
         return True
 
@@ -294,7 +294,7 @@ async def test_synthesize_all_failures_pushes_error(monkeypatch: pytest.MonkeyPa
 
     handler = _make_handler()
 
-    async def failing(self, text: str, first_audio_marker=None):  # type: ignore[no-untyped-def]
+    async def failing(self, text: str, first_audio_marker=None, tags=None, target_queue=None):  # type: ignore[no-untyped-def]
         return False
 
     monkeypatch.setattr(mod.LlamaElevenLabsTTSResponseHandler, "_stream_tts_to_queue", failing)
@@ -313,7 +313,7 @@ async def test_synthesize_rate_limited_message_when_all_429(monkeypatch: pytest.
 
     handler = _make_handler()
 
-    async def rl(self, text: str, first_audio_marker=None):  # type: ignore[no-untyped-def]
+    async def rl(self, text: str, first_audio_marker=None, tags=None, target_queue=None):  # type: ignore[no-untyped-def]
         self._last_tts_rate_limited = True
         return False
 
@@ -398,7 +398,7 @@ async def test_synthesize_applies_tags_before_streaming(monkeypatch: pytest.Monk
 
     captured_calls: list[tuple[str, list[str]]] = []
 
-    async def fake_stream(self, text: str, first_audio_marker=None, tags=None):  # type: ignore[no-untyped-def]
+    async def fake_stream(self, text: str, first_audio_marker=None, tags=None, target_queue=None):  # type: ignore[no-untyped-def]
         captured_calls.append((text, tags or []))
         return True
 
