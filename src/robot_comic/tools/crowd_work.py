@@ -31,15 +31,22 @@ class CrowdWork(Tool):
     description = (
         "Track what you've learned about the person. "
         "action='update': store name, job, hometown, freeform details, or roast targets already used as punchlines. "
-        "action='query': get their full profile, callback hints, and which roast targets have already been used."
+        "action='query': get their full profile, callback hints, and which roast targets have already been used. "
+        "action='clear': reset all in-memory state and start a fresh session (use when the user wants a fresh start)."
     )
     parameters_schema = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["update", "query"],
-                "description": "update: store new info about the person. query: get profile and callback hints.",
+                "enum": ["update", "query", "clear"],
+                "description": (
+                    "update: store new info about the person. "
+                    "query: get profile and callback hints. "
+                    "clear: reset all in-memory session state (name, job, hometown, details, "
+                    "roast_targets_used) and start a fresh session ID — use when the user asks "
+                    "to start over, pretend you don't know them, or have a fresh start."
+                ),
             },
             "name": {"type": "string", "description": "Their name, if learned."},
             "job": {"type": "string", "description": "What they do for a living."},
@@ -205,4 +212,19 @@ class CrowdWork(Tool):
                 "roast_targets_used": self._state.get("roast_targets_used", []),
             }
 
-        return {"error": f"Unknown action {action!r}. Use 'update' or 'query'."}
+        if action == "clear":
+            self._session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self._state = {
+                "session_id": self._session_id,
+                "started_at": datetime.now().isoformat(),
+                "name": None,
+                "job": None,
+                "hometown": None,
+                "details": [],
+                "roast_targets_used": [],
+                "last_updated": None,
+            }
+            logger.info("Session cleared — new session_id=%s", self._session_id)
+            return {"action": "clear", "ok": True}
+
+        return {"error": f"Unknown action {action!r}. Use 'update', 'query', or 'clear'."}

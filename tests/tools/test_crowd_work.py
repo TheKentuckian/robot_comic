@@ -172,6 +172,95 @@ async def test_load_recent_session_resumes_from_disk(tmp_path, CrowdWork):
 
 
 @pytest.mark.asyncio
+async def test_unknown_action_mentions_clear(crowd_work):
+    """The error message for an unknown action now lists 'clear' as a valid action."""
+    result = await crowd_work(make_deps(), action="explode")
+    assert "clear" in result.get("error", "")
+
+
+# --- clear action ---
+
+
+@pytest.mark.asyncio
+async def test_clear_returns_ok(crowd_work):
+    """Clear action returns {action: 'clear', ok: true}."""
+    result = await crowd_work(make_deps(), action="clear")
+    assert result == {"action": "clear", "ok": True}
+
+
+@pytest.mark.asyncio
+async def test_clear_resets_in_memory_state(crowd_work):
+    """After populating state via update, clear zeroes all fields."""
+    await crowd_work(
+        make_deps(),
+        action="update",
+        name="Tony",
+        job="engineer",
+        hometown="Pittsburgh",
+        details=["nervous laugh"],
+        roast_targets_used=["hair"],
+    )
+    await crowd_work(make_deps(), action="clear")
+    assert crowd_work._state["name"] is None
+    assert crowd_work._state["job"] is None
+    assert crowd_work._state["hometown"] is None
+    assert crowd_work._state["details"] == []
+    assert crowd_work._state["roast_targets_used"] == []
+
+
+@pytest.mark.asyncio
+async def test_clear_changes_session_id(crowd_work):
+    """After clear, _session_id is different from the pre-clear value."""
+    original_id = crowd_work._session_id
+    # Ensure enough time passes for a new timestamp (strftime resolution is 1 s)
+    import time
+
+    time.sleep(1.1)
+    await crowd_work(make_deps(), action="clear")
+    assert crowd_work._session_id != original_id
+
+
+@pytest.mark.asyncio
+async def test_clear_preserves_old_file(crowd_work, tmp_path):
+    """The on-disk file written before clear is not deleted."""
+    await crowd_work(make_deps(), action="update", name="Tony")
+    await asyncio.sleep(0.15)  # let the background write finish
+    session_dir = tmp_path / ".comedy_sessions"
+    files_before = list(session_dir.glob("session_*.json"))
+    assert len(files_before) == 1, "expected exactly one pre-clear session file"
+
+    await crowd_work(make_deps(), action="clear")
+
+    files_after = list(session_dir.glob("session_*.json"))
+    # The original file must still be present
+    assert files_before[0] in files_after
+
+
+@pytest.mark.asyncio
+async def test_clear_then_update_writes_new_file(crowd_work, tmp_path):
+    """After clear, an update writes a new session file (different from the pre-clear one)."""
+    await crowd_work(make_deps(), action="update", name="Tony")
+    await asyncio.sleep(0.15)
+    session_dir = tmp_path / ".comedy_sessions"
+    files_before = list(session_dir.glob("session_*.json"))
+    assert len(files_before) == 1
+
+    import time
+
+    time.sleep(1.1)  # ensure new timestamp-based session_id
+    await crowd_work(make_deps(), action="clear")
+    await crowd_work(make_deps(), action="update", name="Bob")
+    await asyncio.sleep(0.15)
+
+    files_after = list(session_dir.glob("session_*.json"))
+    assert len(files_after) == 2
+    new_files = [f for f in files_after if f not in files_before]
+    assert len(new_files) == 1
+    data = json.loads(new_files[0].read_text())
+    assert data["name"] == "Bob"
+
+
+@pytest.mark.asyncio
 async def test_load_does_not_resume_old_session(tmp_path, CrowdWork):
     """Sessions outside SESSION_WINDOW_HOURS should not be loaded."""
     session_dir = tmp_path / ".comedy_sessions"
