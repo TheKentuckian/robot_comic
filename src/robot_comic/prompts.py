@@ -3,7 +3,14 @@ import sys
 import logging
 from pathlib import Path
 
-from robot_comic.config import DEFAULT_PROFILES_DIRECTORY, config, get_default_voice_for_backend
+from robot_comic.config import (
+    GEMINI_TTS_OUTPUT,
+    LOCAL_STT_BACKEND,
+    LLAMA_GEMINI_TTS_OUTPUT,
+    DEFAULT_PROFILES_DIRECTORY,
+    config,
+    get_default_voice_for_backend,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -12,6 +19,66 @@ logger = logging.getLogger(__name__)
 PROMPTS_LIBRARY_DIRECTORY = Path(__file__).parent / "prompts"
 INSTRUCTIONS_FILENAME = "instructions.txt"
 VOICE_FILENAME = "voice.txt"
+
+# Regex that matches the entire "## GEMINI TTS DELIVERY TAGS" section up to the
+# next "##" heading or end-of-string.  re.DOTALL lets "." cross newlines.
+_TTS_SECTION_RE = re.compile(
+    r"## GEMINI TTS DELIVERY TAGS\b.*?(?=\r?\n##|\Z)",
+    re.DOTALL,
+)
+
+
+def _uses_gemini_tts(backend: str, local_stt_response: str) -> bool:
+    """Return True when the active audio pipeline renders Gemini TTS delivery tags.
+
+    Delivery tags are consumed by:
+    - ``gemini_tts`` output (GEMINI_TTS_OUTPUT)
+    - ``llama_gemini_tts`` output (LLAMA_GEMINI_TTS_OUTPUT)
+
+    They are NOT consumed by Gemini Live (``gemini`` BACKEND_PROVIDER), which
+    has its own speech synthesis and already strips the section internally, nor
+    by any other backend (Chatterbox, HuggingFace, OpenAI, ElevenLabs …).
+
+    For the LOCAL_STT backend the effective audio output is ``local_stt_response``.
+    """
+    if backend == LOCAL_STT_BACKEND:
+        return local_stt_response in (GEMINI_TTS_OUTPUT, LLAMA_GEMINI_TTS_OUTPUT)
+    return backend in (GEMINI_TTS_OUTPUT, LLAMA_GEMINI_TTS_OUTPUT)
+
+
+def _strip_tts_section(instructions: str) -> str:
+    """Remove the GEMINI TTS DELIVERY TAGS section from *instructions*.
+
+    Collapses any resulting triple-blank lines to a single blank line and
+    strips leading/trailing whitespace.
+    """
+    result = _TTS_SECTION_RE.sub("", instructions)
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip()
+
+
+def _filter_delivery_tags(instructions: str) -> str:
+    """Conditionally strip the GEMINI TTS DELIVERY TAGS section.
+
+    The section is kept when:
+    - ``REACHY_MINI_FORCE_DELIVERY_TAGS=1`` is set (debugging override), OR
+    - the active audio backend actually consumes the tags (Gemini TTS paths).
+
+    It is stripped when the active backend is anything else (Gemini Live,
+    Chatterbox, HuggingFace, OpenAI, ElevenLabs, …).
+    """
+    force: bool = getattr(config, "FORCE_DELIVERY_TAGS", False)
+    if force:
+        return instructions
+
+    backend: str = getattr(config, "BACKEND_PROVIDER", "")
+    local_stt_response: str = getattr(config, "LOCAL_STT_RESPONSE_BACKEND", "")
+
+    if _uses_gemini_tts(backend, local_stt_response):
+        # Tags are consumed — leave the section in place.
+        return instructions
+
+    return _strip_tts_section(instructions)
 
 
 def _expand_prompt_includes(content: str) -> str:
@@ -81,7 +148,9 @@ def get_session_instructions() -> str:
             if instructions:
                 # Expand [<name>] placeholders with content from prompts library
                 expanded_instructions = _expand_prompt_includes(instructions)
-                return expanded_instructions
+                # Strip GEMINI TTS DELIVERY TAGS section for backends that do
+                # not consume it (avoids wasted tokens + accidental tag leakage).
+                return _filter_delivery_tags(expanded_instructions)
             logger.error(f"Profile '{profile}' has empty {INSTRUCTIONS_FILENAME}")
             sys.exit(1)
         logger.error(f"Profile {profile} has no {INSTRUCTIONS_FILENAME}")
