@@ -194,6 +194,7 @@ CHATTERBOX_DEFAULT_GAIN = 2.0
 
 LLAMA_CPP_URL_ENV = "LLAMA_CPP_URL"
 LLAMA_CPP_DEFAULT_URL = "http://astralplane.lan:11434"
+LLAMA_HEALTH_CHECK_ENV = "REACHY_MINI_LLAMA_HEALTH_CHECK"
 
 LLAMA_GEMINI_TTS_OUTPUT = "llama_gemini_tts"
 LLAMA_ELEVENLABS_TTS_OUTPUT = "llama_elevenlabs_tts"
@@ -595,6 +596,7 @@ class Config:
     CHATTERBOX_GAIN = float(os.getenv("CHATTERBOX_GAIN", str(CHATTERBOX_DEFAULT_GAIN)))
     REACHY_MINI_TTS_SLOW_WARN_S = float(os.getenv("REACHY_MINI_TTS_SLOW_WARN_S", "10.0"))
     LLAMA_CPP_URL = os.getenv(LLAMA_CPP_URL_ENV, LLAMA_CPP_DEFAULT_URL)
+    LLAMA_HEALTH_CHECK_ENABLED = _env_flag(LLAMA_HEALTH_CHECK_ENV, default=True)
 
     WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
     WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None
@@ -733,6 +735,7 @@ def refresh_runtime_config_from_env() -> None:
     config.CHATTERBOX_GAIN = float(os.getenv("CHATTERBOX_GAIN", str(CHATTERBOX_DEFAULT_GAIN)))
     config.REACHY_MINI_TTS_SLOW_WARN_S = float(os.getenv("REACHY_MINI_TTS_SLOW_WARN_S", "10.0"))
     config.LLAMA_CPP_URL = os.getenv(LLAMA_CPP_URL_ENV, LLAMA_CPP_DEFAULT_URL)
+    config.LLAMA_HEALTH_CHECK_ENABLED = _env_flag(LLAMA_HEALTH_CHECK_ENV, default=True)
     config.ROBOT_INSTRUMENTATION = os.getenv("ROBOT_INSTRUMENTATION", "")
     config.WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
     config.WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None

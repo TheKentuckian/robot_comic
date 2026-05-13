@@ -16,6 +16,7 @@ from fastrtc import AdditionalOutputs
 
 from robot_comic.config import (
     CHATTERBOX_OUTPUT,
+    LLAMA_CPP_DEFAULT_URL,
     CHATTERBOX_DEFAULT_URL,
     CHATTERBOX_DEFAULT_GAIN,
     CHATTERBOX_DEFAULT_VOICE,
@@ -127,7 +128,42 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
             self._cfg_weight,
             self._temperature,
         )
+        await self._probe_llama_health()
         await self._warmup_tts()
+
+    async def _probe_llama_health(self) -> None:
+        """Ping llama-server /health at startup and emit a clear warning on failure.
+
+        On success (HTTP 200): logs INFO.
+        On non-200, timeout, or connection refused: logs WARNING so operators
+        see it in journalctl before the first LLM call fails.
+
+        Controlled by ``REACHY_MINI_LLAMA_HEALTH_CHECK`` env var (default enabled).
+        Set to ``0`` to skip the probe in environments where llama-server starts later.
+        """
+        if not getattr(config, "LLAMA_HEALTH_CHECK_ENABLED", True):
+            logger.debug("llama-server health check disabled via REACHY_MINI_LLAMA_HEALTH_CHECK=0")
+            return
+
+        url = getattr(config, "LLAMA_CPP_URL", LLAMA_CPP_DEFAULT_URL)
+        health_url = f"{url}/health"
+        assert self._http is not None
+        try:
+            resp = await self._http.get(health_url, timeout=3.0)
+            if resp.status_code == 200:
+                logger.info("llama-server health OK at %s", url)
+            else:
+                logger.warning(
+                    "llama-server health probe failed at %s: HTTP %s — first LLM call may fail",
+                    url,
+                    resp.status_code,
+                )
+        except Exception as exc:
+            logger.warning(
+                "llama-server health probe failed at %s: %s — first LLM call may fail",
+                url,
+                exc,
+            )
 
     async def _warmup_tts(self) -> None:
         """Send a silent warmup request to force the voice model into memory.
