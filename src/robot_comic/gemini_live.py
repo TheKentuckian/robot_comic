@@ -62,13 +62,14 @@ GEMINI_OUTPUT_SAMPLE_RATE: Final[int] = 24000
 _B64_IMAGE_RESULT_KEYS: Final[tuple[str, ...]] = ("b64_im", "b64_scene")
 
 # Per-million-token prices for `gemini-3.1-flash-live-preview` in USD.
-# Source: Google's published Gemini 3 Flash Live pricing; update here if pricing
-# changes. Used only for the locally-aggregated cost counter — Google bills off
+# Source: https://ai.google.dev/gemini-api/docs/pricing
+# Last verified: 2026-05-13
+# Used only for the locally-aggregated cost counter — Google bills off
 # their own metering, not ours.
 GEMINI_LIVE_AUDIO_INPUT_COST_PER_1M: Final[float] = 3.0
 GEMINI_LIVE_AUDIO_OUTPUT_COST_PER_1M: Final[float] = 12.0
-GEMINI_LIVE_TEXT_INPUT_COST_PER_1M: Final[float] = 0.30
-GEMINI_LIVE_TEXT_OUTPUT_COST_PER_1M: Final[float] = 2.50
+GEMINI_LIVE_TEXT_INPUT_COST_PER_1M: Final[float] = 0.75
+GEMINI_LIVE_TEXT_OUTPUT_COST_PER_1M: Final[float] = 4.50
 
 _START_SENSITIVITY_MAP: Final[Dict[str, "types.StartSensitivity"]] = {
     "HIGH": types.StartSensitivity.START_SENSITIVITY_HIGH,
