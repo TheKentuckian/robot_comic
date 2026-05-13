@@ -306,7 +306,14 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
         self.deps.movement_manager.set_listening(listening)
 
     async def _flush_transcript_chunks(self, role: str, chunks: list[str]) -> None:
-        """Emit one finalized transcript message for the current turn."""
+        """Emit one finalized transcript message for the current turn.
+
+        For user transcripts this also (a) sets ``turn.excerpt`` on the active
+        turn span so the monitor's "What" column gets populated, and (b)
+        routes the transcript through the pause controller so stop/resume
+        phrases work on Gemini Live the same way they do on the realtime
+        handlers that inherit from BaseRealtimeHandler.
+        """
         if not chunks:
             return
 
@@ -314,6 +321,20 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
         chunks.clear()
         if not transcript:
             return
+
+        if role == "user":
+            if self._turn_span is not None:
+                try:
+                    self._turn_span.set_attribute("turn.excerpt", transcript[:200])
+                except Exception:
+                    pass
+
+            pause_controller = getattr(self.deps, "pause_controller", None)
+            if pause_controller is not None:
+                try:
+                    pause_controller.handle_transcript(transcript)
+                except Exception as e:
+                    logger.error("pause_controller.handle_transcript raised: %s", e)
 
         await self.output_queue.put(AdditionalOutputs({"role": role, "content": transcript}))
 
