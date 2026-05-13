@@ -187,14 +187,17 @@ async def test_gemini_tts_handler_trims_history_on_dispatch(monkeypatch) -> None
 
 @pytest.mark.asyncio
 async def test_llama_handler_trims_history_before_request(monkeypatch) -> None:
-    """Trim happens before _call_llm builds its payload (issue #92 bullet 3)."""
+    """Trim happens before the LLM builds its payload (issue #92 bullet 3).
+
+    The primary LLM pass now goes through _stream_response_and_synthesize, so we
+    mock that method directly to observe the history length at call time.
+    """
     from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
 
     monkeypatch.setenv("REACHY_MINI_MAX_HISTORY_TURNS", "2")
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
     handler = LocalSTTChatterboxHandler(deps)
-    handler._http = MagicMock()
 
     # Seed older turns so the new user message will push us past the cap.
     for i in range(4):
@@ -203,7 +206,8 @@ async def test_llama_handler_trims_history_before_request(monkeypatch) -> None:
 
     observed_history_lengths: list[int] = []
 
-    async def fake_llm() -> tuple[str, list, dict]:
+    # The primary LLM pass uses _stream_response_and_synthesize (not _call_llm)
+    async def fake_stream_response(extra_messages=None, tts_span=None):
         observed_history_lengths.append(len(handler._conversation_history))
         return "ok", [], {"role": "assistant", "content": "ok"}
 
@@ -212,7 +216,7 @@ async def test_llama_handler_trims_history_before_request(monkeypatch) -> None:
 
         return np.zeros(2400, dtype=np.int16).tobytes()
 
-    handler._call_llm = fake_llm  # type: ignore[method-assign]
+    handler._stream_response_and_synthesize = fake_stream_response  # type: ignore[method-assign]
     handler._call_chatterbox_tts = fake_tts  # type: ignore[method-assign]
 
     await handler._dispatch_completed_transcript("new")
