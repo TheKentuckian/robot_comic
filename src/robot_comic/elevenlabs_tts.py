@@ -60,8 +60,11 @@ _TTS_RETRY_BASE_DELAY = 0.5
 _LLM_MAX_RETRIES = 4
 _LLM_RETRY_BASE_DELAY = 1.0
 _LLM_MAX_TOOL_ROUNDS = 5
-# Extra seconds added after the last audio frame to cover device-buffer latency.
-_ECHO_COOLDOWN_S: float = 0.5
+# _ECHO_COOLDOWN_S is now read from config.ECHO_COOLDOWN_MS at runtime.
+# This module-level constant is kept for backward compatibility with imports.
+_ECHO_COOLDOWN_S: float = 0.3
+# int16 PCM: 2 bytes per sample
+_BYTES_PER_SAMPLE: int = 2
 
 
 def _read_kv_file(path: Any) -> dict[str, str]:
@@ -175,7 +178,12 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         self._turn_first_audio_at: float | None = None
         # Echo guard: time.perf_counter() deadline after which TTS is done playing.
         # Checked by LocalSTTInputMixin to suppress transcripts caused by speaker echo.
+        # _response_start_ts: perf_counter() timestamp when the first audio frame of
+        # the current response was pushed into the output queue.
+        # _response_audio_bytes: total int16 PCM bytes enqueued for the current response.
         self._speaking_until: float = 0.0
+        self._response_start_ts: float = 0.0
+        self._response_audio_bytes: int = 0
         self._is_responding: bool = False
 
     def _mark_activity(self, label: str) -> None:
@@ -230,10 +238,22 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         """Yield the next audio frame or status message from the output queue."""
         item = await wait_for_item(self.output_queue)
         if isinstance(item, tuple):
-            remaining = self.output_queue.qsize()
-            frame_s = _CHUNK_SAMPLES / ELEVENLABS_OUTPUT_SAMPLE_RATE
-            self._speaking_until = time.perf_counter() + (remaining + 1) * frame_s + _ECHO_COOLDOWN_S
+            # Update the speaking deadline using total bytes enqueued so far.
+            # This is more accurate than the queue-size heuristic because it
+            # accounts for all PCM audio pushed during this response, not just
+            # how many frames happen to be sitting in the queue right now.
+            cooldown_s = config.ECHO_COOLDOWN_MS / 1000.0
+            bytes_per_second = ELEVENLABS_OUTPUT_SAMPLE_RATE * _BYTES_PER_SAMPLE
+            playback_end = self._response_start_ts + self._response_audio_bytes / bytes_per_second
+            self._speaking_until = playback_end + cooldown_s
         return item
+
+    async def _enqueue_audio_frame(self, frame: "np.ndarray[Any, Any]") -> None:
+        """Update byte-count accumulators and enqueue one audio frame (async)."""
+        if self._response_audio_bytes == 0:
+            self._response_start_ts = time.perf_counter()
+        self._response_audio_bytes += frame.nbytes
+        await self.output_queue.put((ELEVENLABS_OUTPUT_SAMPLE_RATE, frame))
 
     async def apply_personality(self, profile: str | None) -> str:
         """Switch personality profile and reset conversation history."""
@@ -304,6 +324,9 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             self._is_responding = False
 
     async def _dispatch_completed_transcript_impl(self, transcript: str) -> None:
+        # Reset byte-count echo-guard accumulators for this new response turn.
+        self._response_audio_bytes = 0
+        self._response_start_ts = 0.0
         self._conversation_history.append({"role": "user", "parts": [{"text": transcript}]})
         trim_history_in_place(self._conversation_history, role_key="role")
 
@@ -331,7 +354,7 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                 continue
             if SHORT_PAUSE_TAG in tags:
                 for frame in self._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS, ELEVENLABS_OUTPUT_SAMPLE_RATE)):
-                    await self.output_queue.put((ELEVENLABS_OUTPUT_SAMPLE_RATE, frame))
+                    await self._enqueue_audio_frame(frame)
             sentence_had_audio = await self._stream_tts_to_queue(spoken, first_audio_marker, tags)
             if sentence_had_audio:
                 any_audio = True
@@ -515,12 +538,12 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                         leftover += chunk
                         while len(leftover) >= frame_bytes:
                             frame = np.frombuffer(leftover[:frame_bytes], dtype=np.int16)
-                            await self.output_queue.put((ELEVENLABS_OUTPUT_SAMPLE_RATE, frame))
+                            await self._enqueue_audio_frame(frame)
                             leftover = leftover[frame_bytes:]
                 if leftover:
                     tail = np.frombuffer(leftover[: (len(leftover) // 2) * 2], dtype=np.int16)
                     if len(tail) > 0:
-                        await self.output_queue.put((ELEVENLABS_OUTPUT_SAMPLE_RATE, tail))
+                        await self._enqueue_audio_frame(tail)
                 return got_audio
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code == 429:

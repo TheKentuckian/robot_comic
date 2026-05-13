@@ -41,8 +41,11 @@ _CHUNK_SAMPLES = 2400  # 100 ms at 24 kHz
 _LLM_MAX_RETRIES = 3
 _LLM_RETRY_BASE_DELAY = 1.0
 _TOOL_RESULT_TIMEOUT: float = 30.0
-# Extra seconds added after the last audio frame to cover device-buffer latency.
-_ECHO_COOLDOWN_S: float = 0.5
+# _ECHO_COOLDOWN_S is now read from config.ECHO_COOLDOWN_MS at runtime.
+# This module-level constant is kept for backward compatibility with imports.
+_ECHO_COOLDOWN_S: float = 0.3
+# int16 PCM: 2 bytes per sample
+_BYTES_PER_SAMPLE: int = 2
 
 # Split at whitespace that follows a sentence-ending punctuation mark.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
@@ -102,7 +105,14 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         self._turn_ctx_token: Any = None
         # Echo guard: time.perf_counter() deadline after which TTS is done playing.
         # Checked by LocalSTTInputMixin to suppress transcripts caused by speaker echo.
+        # _response_start_ts: perf_counter() timestamp when the first audio frame of
+        # the current response was pushed into the output queue.
+        # _response_audio_bytes: total int16 PCM bytes enqueued for the current response.
+        # These let emit() compute a byte-count-accurate playback deadline instead of
+        # the less-reliable queue-size heuristic.
         self._speaking_until: float = 0.0
+        self._response_start_ts: float = 0.0
+        self._response_audio_bytes: int = 0
 
     def _mark_activity(self, label: str) -> None:
         logger.debug("Activity: %s", label)
@@ -154,10 +164,14 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
     async def emit(self) -> Any:
         item = await wait_for_item(self.output_queue)
         if isinstance(item, tuple):
-            # Update the speaking deadline: remaining queued frames + this frame + device buffer.
-            remaining = self.output_queue.qsize()
-            frame_s = _CHUNK_SAMPLES / _OUTPUT_SAMPLE_RATE  # 0.1 s per frame
-            self._speaking_until = time.perf_counter() + (remaining + 1) * frame_s + _ECHO_COOLDOWN_S
+            # Update the speaking deadline using total bytes enqueued so far.
+            # This is more accurate than the queue-size heuristic because it
+            # accounts for all PCM audio pushed during this response, not just
+            # how many frames happen to be sitting in the queue right now.
+            cooldown_s = config.ECHO_COOLDOWN_MS / 1000.0
+            bytes_per_second = _OUTPUT_SAMPLE_RATE * _BYTES_PER_SAMPLE
+            playback_end = self._response_start_ts + self._response_audio_bytes / bytes_per_second
+            self._speaking_until = playback_end + cooldown_s
         return item
 
     # ------------------------------------------------------------------ #
@@ -250,6 +264,12 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                     item = await local_q.get()
                     if item is None:
                         return
+                    # Track byte-count for the byte-accurate echo-guard deadline.
+                    if isinstance(item, tuple) and len(item) >= 2 and isinstance(item[1], np.ndarray):
+                        frame_bytes = item[1].nbytes
+                        if self._response_audio_bytes == 0:
+                            self._response_start_ts = time.perf_counter()
+                        self._response_audio_bytes += frame_bytes
                     await self.output_queue.put(item)
                 # Ensure the synth task itself is awaited so exceptions propagate
                 # and the task doesn't get garbage-collected mid-flight.
@@ -434,6 +454,9 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _run_turn(self, outer_span: Any = None) -> None:
         _tracer = telemetry.get_tracer()
+        # Reset byte-count echo-guard accumulators for this new response turn.
+        self._response_audio_bytes = 0
+        self._response_start_ts = 0.0
         # Stamp the outer mixin turn span so the monitor shows the right backend.
         if outer_span is not None:
             outer_span.set_attribute("robot.mode", self._BACKEND_LABEL)

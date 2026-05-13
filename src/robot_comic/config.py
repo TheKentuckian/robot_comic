@@ -248,6 +248,12 @@ LOCAL_STT_DEFAULT_UPDATE_INTERVAL = 0.35
 MAX_HISTORY_TURNS_ENV = "REACHY_MINI_MAX_HISTORY_TURNS"
 DEFAULT_MAX_HISTORY_TURNS = 20
 
+# Echo-guard cooldown added on top of the byte-count-derived playback deadline.
+# Lower than the old 500ms queue-size estimate because the byte-count is more
+# accurate; 300ms covers device-buffer and scheduling jitter.
+ECHO_COOLDOWN_MS_ENV = "REACHY_MINI_ECHO_COOLDOWN_MS"
+DEFAULT_ECHO_COOLDOWN_MS = 300
+
 logger = logging.getLogger(__name__)
 
 
@@ -638,6 +644,10 @@ class Config:
     # Useful for debugging or testing delivery-tag behaviour on any backend.
     FORCE_DELIVERY_TAGS = _env_flag("REACHY_MINI_FORCE_DELIVERY_TAGS", default=False)
 
+    # Echo-guard: milliseconds of cooldown added on top of the byte-count-derived
+    # TTS playback deadline. Covers device-buffer and scheduling jitter.
+    ECHO_COOLDOWN_MS = int(os.getenv(ECHO_COOLDOWN_MS_ENV, str(DEFAULT_ECHO_COOLDOWN_MS)))
+
     logger.debug(
         "Backend provider: %s, Model: %s, HF mode: %s, HF session URL set: %s, HF direct URL set: %s, HF_HOME: %s, Vision Model: %s, Local STT: %s/%s/%s response=%s cache=%s",
         BACKEND_PROVIDER,
@@ -786,7 +796,7 @@ def refresh_runtime_config_from_env() -> None:
     config.WARMUP_BLIP_ENABLED = _env_flag("REACHY_MINI_WARMUP_BLIP_ENABLED", default=False)
     config.JOKE_HISTORY_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_ENABLED", default=True)
     config.FORCE_DELIVERY_TAGS = _env_flag("REACHY_MINI_FORCE_DELIVERY_TAGS", default=False)
-    config.GUARDRAIL_ENABLED = _env_flag("REACHY_MINI_GUARDRAIL_ENABLED", default=False)
+    config.ECHO_COOLDOWN_MS = int(os.getenv(ECHO_COOLDOWN_MS_ENV, str(DEFAULT_ECHO_COOLDOWN_MS)))
 
 
 def get_backend_choice(model_name: str | None = None) -> str:
