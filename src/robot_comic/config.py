@@ -657,9 +657,10 @@ class Config:
     # Useful for debugging or testing delivery-tag behaviour on any backend.
     FORCE_DELIVERY_TAGS = _env_flag("REACHY_MINI_FORCE_DELIVERY_TAGS", default=False)
 
-    # Echo-guard: milliseconds of cooldown added on top of the byte-count-derived
-    # TTS playback deadline. Covers device-buffer and scheduling jitter.
-    ECHO_COOLDOWN_MS = int(os.getenv(ECHO_COOLDOWN_MS_ENV, str(DEFAULT_ECHO_COOLDOWN_MS)))
+    # Welcome-gate: when enabled, the handler is blocked until the user speaks
+    # the persona wake-name.  Only meaningful when BACKEND_PROVIDER uses the
+    # local STT pipeline.  Default is False (gate disabled).
+    WELCOME_GATE_ENABLED = _env_flag("REACHY_MINI_WELCOME_GATE_ENABLED", default=False)
 
     logger.debug(
         "Backend provider: %s, Model: %s, HF mode: %s, HF session URL set: %s, HF direct URL set: %s, HF_HOME: %s, Vision Model: %s, Local STT: %s/%s/%s response=%s cache=%s",
@@ -811,7 +812,7 @@ def refresh_runtime_config_from_env() -> None:
     config.WARMUP_BLIP_ENABLED = _env_flag("REACHY_MINI_WARMUP_BLIP_ENABLED", default=False)
     config.JOKE_HISTORY_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_ENABLED", default=True)
     config.FORCE_DELIVERY_TAGS = _env_flag("REACHY_MINI_FORCE_DELIVERY_TAGS", default=False)
-    config.ECHO_COOLDOWN_MS = int(os.getenv(ECHO_COOLDOWN_MS_ENV, str(DEFAULT_ECHO_COOLDOWN_MS)))
+    config.WELCOME_GATE_ENABLED = _env_flag("REACHY_MINI_WELCOME_GATE_ENABLED", default=False)
 
 
 def get_backend_choice(model_name: str | None = None) -> str:

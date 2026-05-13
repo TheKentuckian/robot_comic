@@ -32,6 +32,7 @@ from robot_comic.config import (
     get_default_voice_for_backend,
 )
 from robot_comic.prompts import get_session_voice, get_session_instructions
+from robot_comic.welcome_gate import GateState, WelcomeGate
 from robot_comic.base_realtime import to_realtime_tools_config
 from robot_comic.openai_realtime import OpenaiRealtimeHandler
 from robot_comic.tools.core_tools import ToolDependencies, get_active_tool_specs
@@ -199,6 +200,29 @@ class LocalSTTInputMixin:
             "audio_frames": 0,
         }
         self._heartbeat_future: "asyncio.Future[Any] | ConcurrentFuture[None] | None" = None
+        self._welcome_gate: WelcomeGate | None = self._build_welcome_gate()
+
+    def _build_welcome_gate(self) -> WelcomeGate | None:
+        """Create a WelcomeGate for the current profile when the feature is enabled.
+
+        Returns None when REACHY_MINI_WELCOME_GATE_ENABLED is false or no
+        profile directory can be resolved.
+        """
+        if not getattr(config, "WELCOME_GATE_ENABLED", False):
+            return None
+
+        profile = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
+        profiles_dir = getattr(config, "PROFILES_DIRECTORY", None)
+        if not profile or profiles_dir is None:
+            logger.info("welcome gate: enabled but no profile selected — gate inactive")
+            return None
+
+        from robot_comic.welcome_gate import make_gate_for_profile
+
+        profile_dir = Path(profiles_dir) / profile
+        gate = make_gate_for_profile(profile_dir)
+        logger.info("welcome gate: active for profile %r", profile)
+        return gate
 
     async def _prepare_startup_credentials(self) -> None:
         """Let the response backend prepare itself, then initialize local STT."""
@@ -385,6 +409,15 @@ class LocalSTTInputMixin:
         if time.perf_counter() < speaking_until:
             logger.info("Echo guard: discarding transcript during TTS playback: %r", transcript[:60])
             return
+
+        # Welcome-gate: if enabled and still WAITING, only check for the wake-name.
+        # Do NOT dispatch to the LLM until the gate opens.
+        gate = self._welcome_gate
+        if gate is not None and gate.state is GateState.WAITING:
+            if not gate.consider(transcript):
+                logger.debug("welcome gate: WAITING — transcript not dispatched: %r", transcript[:60])
+                return
+            # Gate just opened — fall through and dispatch this transcript normally.
 
         await self._dispatch_completed_transcript(transcript)
 
