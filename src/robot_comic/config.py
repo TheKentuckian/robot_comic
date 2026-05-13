@@ -614,6 +614,7 @@ class Config:
     REACHY_MINI_TTS_SLOW_WARN_S = float(os.getenv("REACHY_MINI_TTS_SLOW_WARN_S", "10.0"))
     LLAMA_CPP_URL = os.getenv(LLAMA_CPP_URL_ENV, LLAMA_CPP_DEFAULT_URL)
     LLAMA_HEALTH_CHECK_ENABLED = _env_flag(LLAMA_HEALTH_CHECK_ENV, default=True)
+    LLM_WARMUP_ENABLED = _env_flag("REACHY_MINI_LLM_WARMUP_ENABLED", default=True)
 
     WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
     WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None
@@ -778,6 +779,7 @@ def refresh_runtime_config_from_env() -> None:
     config.REACHY_MINI_TTS_SLOW_WARN_S = float(os.getenv("REACHY_MINI_TTS_SLOW_WARN_S", "10.0"))
     config.LLAMA_CPP_URL = os.getenv(LLAMA_CPP_URL_ENV, LLAMA_CPP_DEFAULT_URL)
     config.LLAMA_HEALTH_CHECK_ENABLED = _env_flag(LLAMA_HEALTH_CHECK_ENV, default=True)
+    config.LLM_WARMUP_ENABLED = _env_flag("REACHY_MINI_LLM_WARMUP_ENABLED", default=True)
     config.ROBOT_INSTRUMENTATION = os.getenv("ROBOT_INSTRUMENTATION", "")
     config.WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
     config.WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None
