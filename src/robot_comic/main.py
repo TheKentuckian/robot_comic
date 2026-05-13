@@ -50,6 +50,13 @@ def main() -> None:
         app.stop()
 
 
+# Exit code used to signal the systemd unit that the app exited because the
+# admin UI requested a restart. Paired with ``RestartForceExitStatus=75`` in
+# the unit file so systemd relaunches us. A normal clean exit (status 0)
+# continues to mean "stay down".
+ADMIN_RESTART_EXIT_CODE: int = 75
+
+
 def run(
     args: argparse.Namespace,
     robot: ReachyMini = None,
@@ -64,12 +71,12 @@ def run(
         HF_BACKEND,
         OPENAI_BACKEND,
         CHATTERBOX_OUTPUT,
-        GEMINI_TTS_OUTPUT,
-        LLAMA_GEMINI_TTS_OUTPUT,
         ELEVENLABS_OUTPUT,
-        LLAMA_ELEVENLABS_TTS_OUTPUT,
+        GEMINI_TTS_OUTPUT,
         LOCAL_STT_BACKEND,
+        LLAMA_GEMINI_TTS_OUTPUT,
         HF_LOCAL_CONNECTION_MODE,
+        LLAMA_ELEVENLABS_TTS_OUTPUT,
         config,
         is_gemini_model,
         get_backend_label,
@@ -82,6 +89,11 @@ def run(
     )
 
     logger = setup_logger(args.debug)
+
+    # Set by the admin restart endpoint to distinguish a "restart me" exit from a
+    # plain "stop". Checked after the graceful-shutdown path to decide between
+    # exit 0 and exit ADMIN_RESTART_EXIT_CODE.
+    restart_requested_event = threading.Event()
 
     try:
         import subprocess
@@ -293,11 +305,11 @@ def run(
         from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
         from robot_comic.elevenlabs_tts import LocalSTTElevenLabsHandler
         from robot_comic.llama_gemini_tts import LocalSTTLlamaGeminiTTSHandler
-        from robot_comic.llama_elevenlabs_tts import LocalSTTLlamaElevenLabsHandler
         from robot_comic.local_stt_realtime import (
             LocalSTTOpenAIRealtimeHandler,
             LocalSTTHuggingFaceRealtimeHandler,
         )
+        from robot_comic.llama_elevenlabs_tts import LocalSTTLlamaElevenLabsHandler
 
         local_stt_response_backend = getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
         logger.info("Using %s", get_backend_label(config.BACKEND_PROVIDER))
@@ -373,6 +385,7 @@ def run(
             settings_app=app,
             instance_path=instance_path,
             app_stop_event=app_stop_event,
+            restart_requested_event=restart_requested_event,
             pause_controller=pause_controller,
             movement_manager=movement_manager,
         )
@@ -398,6 +411,7 @@ def run(
             settings_app=settings_app,
             instance_path=instance_path,
             app_stop_event=app_stop_event,
+            restart_requested_event=restart_requested_event,
             pause_controller=pause_controller,
             movement_manager=movement_manager,
         )
@@ -484,6 +498,13 @@ def run(
         robot.client.disconnect()
         time.sleep(1)
         logger.info("Shutdown complete.")
+
+    if restart_requested_event.is_set():
+        # Signal the autostart unit to relaunch us. The unit pairs this with
+        # ``RestartForceExitStatus=75`` so admin-driven restarts come back up
+        # even though ``Restart=on-failure`` ignores clean exits.
+        logger.info("Admin restart requested — exiting with code %d to trigger relaunch", ADMIN_RESTART_EXIT_CODE)
+        sys.exit(ADMIN_RESTART_EXIT_CODE)
 
 
 class RobotComic(ReachyMiniApp):  # type: ignore[misc]

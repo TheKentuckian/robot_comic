@@ -61,6 +61,52 @@ GEMINI_INPUT_SAMPLE_RATE: Final[int] = 16000
 GEMINI_OUTPUT_SAMPLE_RATE: Final[int] = 24000
 _B64_IMAGE_RESULT_KEYS: Final[tuple[str, ...]] = ("b64_im", "b64_scene")
 
+# Per-million-token prices for `gemini-3.1-flash-live-preview` in USD.
+# Source: Google's published Gemini 3 Flash Live pricing; update here if pricing
+# changes. Used only for the locally-aggregated cost counter — Google bills off
+# their own metering, not ours.
+GEMINI_LIVE_AUDIO_INPUT_COST_PER_1M: Final[float] = 3.0
+GEMINI_LIVE_AUDIO_OUTPUT_COST_PER_1M: Final[float] = 12.0
+GEMINI_LIVE_TEXT_INPUT_COST_PER_1M: Final[float] = 0.30
+GEMINI_LIVE_TEXT_OUTPUT_COST_PER_1M: Final[float] = 2.50
+
+_START_SENSITIVITY_MAP: Final[Dict[str, "types.StartSensitivity"]] = {
+    "HIGH": types.StartSensitivity.START_SENSITIVITY_HIGH,
+    "LOW": types.StartSensitivity.START_SENSITIVITY_LOW,
+    "UNSPECIFIED": types.StartSensitivity.START_SENSITIVITY_UNSPECIFIED,
+}
+_END_SENSITIVITY_MAP: Final[Dict[str, "types.EndSensitivity"]] = {
+    "HIGH": types.EndSensitivity.END_SENSITIVITY_HIGH,
+    "LOW": types.EndSensitivity.END_SENSITIVITY_LOW,
+    "UNSPECIFIED": types.EndSensitivity.END_SENSITIVITY_UNSPECIFIED,
+}
+
+
+def _build_realtime_input_config() -> types.RealtimeInputConfig:
+    """Build a RealtimeInputConfig with our tuned activity-detection knobs.
+
+    The SDK defaults are eager: short pauses, breaths, and even the assistant's
+    own audio leaking into the mic can fire a fresh turn. We bias towards
+    LOW sensitivity and longer silence so brief user pauses don't preempt the
+    model mid-response. All four knobs are env-overridable for tuning.
+    """
+    start_sens = _START_SENSITIVITY_MAP.get(
+        config.GEMINI_LIVE_VAD_START_SENSITIVITY,
+        types.StartSensitivity.START_SENSITIVITY_LOW,
+    )
+    end_sens = _END_SENSITIVITY_MAP.get(
+        config.GEMINI_LIVE_VAD_END_SENSITIVITY,
+        types.EndSensitivity.END_SENSITIVITY_LOW,
+    )
+    return types.RealtimeInputConfig(
+        automatic_activity_detection=types.AutomaticActivityDetection(
+            start_of_speech_sensitivity=start_sens,
+            end_of_speech_sensitivity=end_sens,
+            prefix_padding_ms=config.GEMINI_LIVE_VAD_PREFIX_MS,
+            silence_duration_ms=config.GEMINI_LIVE_VAD_SILENCE_MS,
+        ),
+    )
+
 
 def _openai_tool_specs_to_gemini(specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Convert OpenAI-style tool specs to Gemini function_declarations format.
@@ -146,6 +192,29 @@ def _strip_tts_delivery_tags(instructions: str) -> str:
     result = _TTS_TAG_RE.sub("", result)
     result = re.sub(r"\n{3,}", "\n\n", result)
     return result.strip()
+
+
+def _load_profile_live_styling() -> str | None:
+    """Read profiles/<name>/gemini_live.txt if present.
+
+    Unlike Gemini TTS — which renders prepared text through a separate TTS
+    call and supports inline [delivery_tag] markers — Gemini Live produces
+    audio inside the live session. Per-profile styling here is appended to
+    the base system instructions as a delivery guideline the model can
+    apply while it speaks. Returns None if the profile or file is absent.
+    """
+    profile: str | None = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
+    if not profile:
+        return None
+    try:
+        path = config.PROFILES_DIRECTORY / profile / "gemini_live.txt"
+        if path.exists():
+            text: str = path.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+    except Exception as exc:
+        logger.warning("Could not read gemini_live.txt for profile %r: %s", profile, exc)
+    return None
 
 
 def _resolve_gemini_voice(profile_voice: str) -> str:
@@ -263,6 +332,11 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
         self._tts_start_at: float | None = None
         self._first_audio_at: float | None = None
 
+        # Aggregated cost in USD, computed from usage_metadata frames. Mirrors
+        # the BaseRealtimeHandler.cumulative_cost field so dashboards that
+        # already read that name keep working.
+        self.cumulative_cost: float = 0.0
+
     def copy(self) -> "GeminiLiveHandler":
         """Create a copy of the handler."""
         return GeminiLiveHandler(
@@ -298,6 +372,69 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
         self._tts_start_at = None
         self._first_audio_at = None
 
+    def _record_usage_metadata(self, usage: Any) -> None:
+        """Convert Gemini Live usage_metadata to cost + OTel attributes.
+
+        Gemini reports modality-broken-down token counts in
+        ``prompt_tokens_details`` and ``response_tokens_details`` (each a list
+        of ``ModalityTokenCount`` with ``modality`` and ``token_count``). We
+        price AUDIO and TEXT separately; other modalities (IMAGE/VIDEO/etc.)
+        fall back to text pricing since we have no per-modality rate for them.
+        """
+        if usage is None:
+            return
+
+        def _by_modality(details: Any) -> Dict[str, int]:
+            buckets: Dict[str, int] = {}
+            if not details:
+                return buckets
+            for entry in details:
+                modality = getattr(entry, "modality", None)
+                if modality is None:
+                    continue
+                key = getattr(modality, "value", str(modality)).upper()
+                buckets[key] = buckets.get(key, 0) + (getattr(entry, "token_count", 0) or 0)
+            return buckets
+
+        prompt_by_mod = _by_modality(getattr(usage, "prompt_tokens_details", None))
+        response_by_mod = _by_modality(getattr(usage, "response_tokens_details", None))
+
+        prompt_total = getattr(usage, "prompt_token_count", 0) or 0
+        response_total = getattr(usage, "response_token_count", 0) or 0
+
+        audio_in = prompt_by_mod.get("AUDIO", 0)
+        text_in = max(prompt_total - audio_in, 0) if not prompt_by_mod else prompt_by_mod.get("TEXT", 0)
+        audio_out = response_by_mod.get("AUDIO", 0)
+        text_out = max(response_total - audio_out, 0) if not response_by_mod else response_by_mod.get("TEXT", 0)
+
+        cost = (
+            audio_in * GEMINI_LIVE_AUDIO_INPUT_COST_PER_1M / 1e6
+            + text_in * GEMINI_LIVE_TEXT_INPUT_COST_PER_1M / 1e6
+            + audio_out * GEMINI_LIVE_AUDIO_OUTPUT_COST_PER_1M / 1e6
+            + text_out * GEMINI_LIVE_TEXT_OUTPUT_COST_PER_1M / 1e6
+        )
+        self.cumulative_cost += cost
+        logger.debug(
+            "Cost: $%.4f | Cumulative: $%.4f (in=%d audio=%d text=%d, out=%d audio=%d text=%d)",
+            cost,
+            self.cumulative_cost,
+            prompt_total,
+            audio_in,
+            text_in,
+            response_total,
+            audio_out,
+            text_out,
+        )
+
+        if self._llm_span is not None:
+            try:
+                self._llm_span.set_attribute("gen_ai.usage.input_tokens", prompt_total)
+                self._llm_span.set_attribute("gen_ai.usage.output_tokens", response_total)
+                if cost > 0:
+                    self._llm_span.set_attribute("gen_ai.usage.cost_usd", round(cost, 6))
+            except Exception:
+                pass
+
     def _set_listening_state(self, listening: bool) -> None:
         """Avoid queueing redundant listening-state updates."""
         if self._listening_state == listening:
@@ -306,7 +443,14 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
         self.deps.movement_manager.set_listening(listening)
 
     async def _flush_transcript_chunks(self, role: str, chunks: list[str]) -> None:
-        """Emit one finalized transcript message for the current turn."""
+        """Emit one finalized transcript message for the current turn.
+
+        For user transcripts this also (a) sets ``turn.excerpt`` on the active
+        turn span so the monitor's "What" column gets populated, and (b)
+        routes the transcript through the pause controller so stop/resume
+        phrases work on Gemini Live the same way they do on the realtime
+        handlers that inherit from BaseRealtimeHandler.
+        """
         if not chunks:
             return
 
@@ -314,6 +458,20 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
         chunks.clear()
         if not transcript:
             return
+
+        if role == "user":
+            if self._turn_span is not None:
+                try:
+                    self._turn_span.set_attribute("turn.excerpt", transcript[:200])
+                except Exception:
+                    pass
+
+            pause_controller = getattr(self.deps, "pause_controller", None)
+            if pause_controller is not None:
+                try:
+                    pause_controller.handle_transcript(transcript)
+                except Exception as e:
+                    logger.error("pause_controller.handle_transcript raised: %s", e)
 
         await self.output_queue.put(AdditionalOutputs({"role": role, "content": transcript}))
 
@@ -491,6 +649,14 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
     def _build_live_config(self) -> types.LiveConnectConfig:
         """Build the LiveConnectConfig for a Gemini Live session."""
         instructions = _strip_tts_delivery_tags(get_session_instructions())
+
+        # Append any profile-specific delivery guidance (Brooklyn rapid-fire
+        # for Rickles, drawl for Pryor, etc.) so Gemini Live speaks in the
+        # persona's voice without needing those cues baked into every line.
+        live_styling = _load_profile_live_styling()
+        if live_styling:
+            instructions = f"{instructions}\n\n## DELIVERY\n{live_styling}"
+
         voice = _resolve_gemini_voice(self._voice_override or get_session_voice())
 
         # Convert OpenAI-style tool specs to Gemini function declarations
@@ -518,13 +684,19 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
             tools=tools_config,  # type: ignore[arg-type]
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
+            realtime_input_config=_build_realtime_input_config(),
         )
 
         logger.info(
-            "Gemini Live config: model=%r voice=%r tools=%d",
+            "Gemini Live config: model=%r voice=%r tools=%d vad_silence=%dms vad_prefix=%dms "
+            "vad_start=%s vad_end=%s",
             config.MODEL_NAME,
             voice,
             len(function_declarations),
+            config.GEMINI_LIVE_VAD_SILENCE_MS,
+            config.GEMINI_LIVE_VAD_PREFIX_MS,
+            config.GEMINI_LIVE_VAD_START_SENSITIVITY,
+            config.GEMINI_LIVE_VAD_END_SENSITIVITY,
         )
         return live_config
 
@@ -801,6 +973,12 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
                             # Handle tool calls
                             if response.tool_call:
                                 await self._handle_tool_call(response)
+
+                            # Cost tracking — emitted by the server at varying
+                            # cadence (typically per response or per turn end).
+                            usage_metadata = getattr(response, "usage_metadata", None)
+                            if usage_metadata is not None:
+                                self._record_usage_metadata(usage_metadata)
 
                     except Exception as e:
                         if self._stop_event.is_set():
