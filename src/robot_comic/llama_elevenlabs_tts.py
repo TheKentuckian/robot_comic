@@ -12,7 +12,7 @@ import os
 import time
 import asyncio
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 import numpy as np
@@ -143,7 +143,7 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
             r = await self._http.get(f"{self._llama_cpp_url}/v1/models", timeout=3.0)
             r.raise_for_status()
             data = r.json()
-            return data["data"][0]["id"]
+            return str(data["data"][0]["id"])
         except Exception:
             return self._llama_cpp_url
 
@@ -201,7 +201,7 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
         self,
         response_text: str,
         tts_start: float | None = None,
-        target_queue: asyncio.Queue | None = None,
+        target_queue: "asyncio.Queue[Any] | None" = None,
     ) -> None:
         if not response_text:
             return
@@ -242,7 +242,7 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
         text: str,
         first_audio_marker: list[float] | None = None,
         tags: list[str] | None = None,
-        target_queue: asyncio.Queue | None = None,
+        target_queue: "asyncio.Queue[Any] | None" = None,
     ) -> bool:
         """Stream ElevenLabs TTS PCM chunks directly into ``output_queue``.
 
@@ -357,7 +357,7 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
         return False
 
 
-class LocalSTTLlamaElevenLabsHandler(LocalSTTInputMixin, LlamaElevenLabsTTSResponseHandler):  # type: ignore[misc]
+class LocalSTTLlamaElevenLabsHandler(LocalSTTInputMixin, LlamaElevenLabsTTSResponseHandler):
     """Moonshine STT input + llama-server LLM + ElevenLabs TTS voice output."""
 
     BACKEND_PROVIDER = LLAMA_ELEVENLABS_TTS_OUTPUT

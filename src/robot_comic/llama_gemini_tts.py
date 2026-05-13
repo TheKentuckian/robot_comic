@@ -12,7 +12,7 @@ import time
 import base64
 import asyncio
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from google import genai
 from fastrtc import AdditionalOutputs
@@ -106,7 +106,7 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
             r = await self._http.get(f"{self._llama_cpp_url}/v1/models", timeout=3.0)
             r.raise_for_status()
             data = r.json()
-            return data["data"][0]["id"]
+            return str(data["data"][0]["id"])
         except Exception:
             return self._llama_cpp_url
 
@@ -131,7 +131,12 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
     # TTS synthesis                                                        #
     # ------------------------------------------------------------------ #
 
-    async def _synthesize_and_enqueue(self, response_text: str, tts_start: float | None = None) -> None:
+    async def _synthesize_and_enqueue(
+        self,
+        response_text: str,
+        tts_start: float | None = None,
+        target_queue: "asyncio.Queue[Any] | None" = None,
+    ) -> None:
         if not response_text:
             return
         base_instruction = load_profile_tts_instruction()
@@ -219,7 +224,7 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
         return None
 
 
-class LocalSTTLlamaGeminiTTSHandler(LocalSTTInputMixin, LlamaGeminiTTSResponseHandler):  # type: ignore[misc]
+class LocalSTTLlamaGeminiTTSHandler(LocalSTTInputMixin, LlamaGeminiTTSResponseHandler):
     """Moonshine STT input + llama-server LLM + Gemini 3.1 Flash TTS voice output."""
 
     BACKEND_PROVIDER = LLAMA_GEMINI_TTS_OUTPUT
