@@ -260,6 +260,7 @@ async def test_dispatch_surfaces_rate_limit_specific_message_to_ui() -> None:
 async def test_gemini_live_reconnect_loop_uses_retry_after_on_429() -> None:
     """When the Live session raises a 429, the reconnect loop honours Retry-After."""
     import logging
+
     from robot_comic.gemini_live import GeminiLiveHandler
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())

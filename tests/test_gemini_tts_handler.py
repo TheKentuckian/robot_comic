@@ -1,4 +1,3 @@
-import asyncio
 import base64
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -120,8 +119,8 @@ async def test_call_tts_with_retry_returns_none_after_all_failures() -> None:
 @pytest.mark.asyncio
 async def test_voice_override() -> None:
     """get_current_voice returns the override when set, otherwise the default."""
-    from robot_comic.gemini_tts import GeminiTTSResponseHandler
     from robot_comic.config import GEMINI_TTS_DEFAULT_VOICE
+    from robot_comic.gemini_tts import GeminiTTSResponseHandler
 
     handler = GeminiTTSResponseHandler(_make_deps())
     assert handler.get_current_voice() == GEMINI_TTS_DEFAULT_VOICE
@@ -195,7 +194,6 @@ async def test_tts_call_includes_speed_delivery_cue() -> None:
         captured_configs.append(config)
         captured_contents.append(contents)
         fake_data = b"\x00" * 4800
-        import base64
 
         encoded = base64.b64encode(fake_data).decode()
         part = MagicMock()

@@ -31,8 +31,8 @@ from robot_comic.gemini_tts import (
     _silence_pcm,
     extract_delivery_tags,
 )
-from robot_comic.elevenlabs_tts import load_profile_elevenlabs_config as _shared_load_profile_elevenlabs_config
 from robot_comic.llama_base import _CHUNK_SAMPLES, _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
+from robot_comic.elevenlabs_tts import load_profile_elevenlabs_config as _shared_load_profile_elevenlabs_config
 from robot_comic.tools.core_tools import ToolDependencies
 from robot_comic.elevenlabs_voices import get_elevenlabs_voices
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
@@ -222,7 +222,9 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
             if SHORT_PAUSE_TAG in tags:
                 for frame in self._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS, _OUTPUT_SAMPLE_RATE)):
                     await out_queue.put((_OUTPUT_SAMPLE_RATE, frame))
-            sentence_had_audio = await self._stream_tts_to_queue(spoken, first_audio_marker, tags, target_queue=out_queue)
+            sentence_had_audio = await self._stream_tts_to_queue(
+                spoken, first_audio_marker, tags, target_queue=out_queue
+            )
             if sentence_had_audio:
                 any_audio = True
 

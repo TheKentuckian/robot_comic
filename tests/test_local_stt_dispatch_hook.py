@@ -1,4 +1,3 @@
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -6,7 +5,6 @@ import pytest
 
 from robot_comic.tools.core_tools import ToolDependencies
 from robot_comic.local_stt_realtime import (
-    LocalSTTOpenAIRealtimeHandler,
     LocalSTTRealtimeHandler,
 )
 

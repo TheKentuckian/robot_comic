@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Scan an audio file for the best N-second windows for voice clone reference.
+"""Scan an audio file for the best N-second windows for voice clone reference.
 Composite score: low amplitude spread (consistent) + high mean (energized delivery).
 
 Examples
@@ -11,31 +10,57 @@ python scan_segments.py cavett1972.wav --window 10 --step 10
 # New: scan 30s windows (ElevenLabs PVC minimum), non-overlapping, extract top 6
 python scan_segments.py cavett1972.wav --window 30 --step 15 --top 6 \\
     --non-overlap --extract --out-dir .
+
 """
-import argparse
+
 import os
 import re
+import argparse
 import subprocess
-import sys
 
-FFMPEG  = r"C:\ProgramData\chocolatey\bin\ffmpeg.exe"
+
+FFMPEG = r"C:\ProgramData\chocolatey\bin\ffmpeg.exe"
 FFPROBE = r"C:\ProgramData\chocolatey\bin\ffprobe.exe"
 
 
 def get_duration(path: str) -> float:
     r = subprocess.run(
-        [FFPROBE, "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", path],
-        capture_output=True, text=True,
+        [
+            FFPROBE,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            path,
+        ],
+        capture_output=True,
+        text=True,
     )
     return float(r.stdout.strip())
 
 
 def measure_segment(path: str, start: float, length: float):
     r = subprocess.run(
-        [FFMPEG, "-v", "info", "-ss", str(start), "-t", str(length),
-         "-i", path, "-af", "volumedetect", "-f", "null", os.devnull],
-        capture_output=True, text=True,
+        [
+            FFMPEG,
+            "-v",
+            "info",
+            "-ss",
+            str(start),
+            "-t",
+            str(length),
+            "-i",
+            path,
+            "-af",
+            "volumedetect",
+            "-f",
+            "null",
+            os.devnull,
+        ],
+        capture_output=True,
+        text=True,
     )
     out = r.stdout + r.stderr
     mean = re.search(r"mean_volume:\s*([-\d.]+)", out)
@@ -48,17 +73,30 @@ def measure_segment(path: str, start: float, length: float):
 def extract_segment(src: str, start: float, length: float, dst: str) -> None:
     # 22050 mono 16-bit matches the existing candidate_*.wav format used elsewhere.
     subprocess.run(
-        [FFMPEG, "-y", "-v", "error",
-         "-ss", str(start), "-t", str(length),
-         "-i", src,
-         "-ac", "1", "-ar", "22050", "-c:a", "pcm_s16le",
-         dst],
+        [
+            FFMPEG,
+            "-y",
+            "-v",
+            "error",
+            "-ss",
+            str(start),
+            "-t",
+            str(length),
+            "-i",
+            src,
+            "-ac",
+            "1",
+            "-ar",
+            "22050",
+            "-c:a",
+            "pcm_s16le",
+            dst,
+        ],
         check=True,
     )
 
 
-def scan(path, window=30, step=15, top=12, max_secs=None,
-         non_overlap=False, extract=False, out_dir=None, label=None):
+def scan(path, window=30, step=15, top=12, max_secs=None, non_overlap=False, extract=False, out_dir=None, label=None):
     total = int(get_duration(path))
     scan_to = min(total - window, max_secs) if max_secs else total - window
     base = os.path.splitext(os.path.basename(path))[0]
@@ -129,7 +167,9 @@ def scan(path, window=30, step=15, top=12, max_secs=None,
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("path", help="Source audio file")
-    ap.add_argument("--window", type=int, default=30, help="Window length in seconds (default: 30; ElevenLabs PVC min)")
+    ap.add_argument(
+        "--window", type=int, default=30, help="Window length in seconds (default: 30; ElevenLabs PVC min)"
+    )
     ap.add_argument("--step", type=int, default=15, help="Step between window starts in seconds (default: 15)")
     ap.add_argument("--top", type=int, default=12, help="How many top picks to keep (default: 12)")
     ap.add_argument("--max-secs", type=int, default=None, help="Only scan the first N seconds")
@@ -139,9 +179,17 @@ def main():
     ap.add_argument("--label", default=None, help="Filename label for extracted clips (default: source basename)")
     args = ap.parse_args()
 
-    scan(args.path, window=args.window, step=args.step, top=args.top,
-         max_secs=args.max_secs, non_overlap=args.non_overlap,
-         extract=args.extract, out_dir=args.out_dir, label=args.label)
+    scan(
+        args.path,
+        window=args.window,
+        step=args.step,
+        top=args.top,
+        max_secs=args.max_secs,
+        non_overlap=args.non_overlap,
+        extract=args.extract,
+        out_dir=args.out_dir,
+        label=args.label,
+    )
 
 
 if __name__ == "__main__":

@@ -1,11 +1,9 @@
 """Tests for MovementManager startup motor activation."""
 
-import threading
 import time
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
 
 
 def _make_manager():
@@ -37,9 +35,7 @@ def test_enable_motors_called_before_first_set_target() -> None:
         manager._thread.join(timeout=2.0)
 
     assert "enable_motors" in call_order, "enable_motors was never called"
-    assert call_order[0] == "enable_motors", (
-        f"enable_motors must be first; got order: {call_order[:5]}"
-    )
+    assert call_order[0] == "enable_motors", f"enable_motors must be first; got order: {call_order[:5]}"
 
 
 def test_enable_motors_called_exactly_once() -> None:
