@@ -5,6 +5,7 @@ import asyncio
 import logging
 from typing import Any, Tuple
 from pathlib import Path
+from concurrent.futures import Future as ConcurrentFuture
 
 import numpy as np
 from fastrtc import AdditionalOutputs, audio_to_float32
@@ -20,8 +21,8 @@ from openai.types.realtime import (
 )
 from openai.types.realtime.realtime_audio_formats_param import AudioPCM
 
-from robot_comic.pause import TranscriptDisposition
 from robot_comic import telemetry
+from robot_comic.pause import TranscriptDisposition
 from robot_comic.config import (
     HF_BACKEND,
     OPENAI_BACKEND,
@@ -63,22 +64,30 @@ class _MoonshineListener:  # base class is attached dynamically in _build_local_
 
     def on_line_started(self, event: Any) -> None:
         text = self._text_from_event(event)
-        self.handler._heartbeat.update({"state": "speech_started", "last_event": "started", "last_text": text, "last_event_at": time.monotonic()})
+        self.handler._heartbeat.update(
+            {"state": "speech_started", "last_event": "started", "last_text": text, "last_event_at": time.monotonic()}
+        )
         self.handler._schedule_local_stt_event("started", text)
 
     def on_line_updated(self, event: Any) -> None:
         text = self._text_from_event(event)
-        self.handler._heartbeat.update({"state": "partial", "last_event": "partial", "last_text": text, "last_event_at": time.monotonic()})
+        self.handler._heartbeat.update(
+            {"state": "partial", "last_event": "partial", "last_text": text, "last_event_at": time.monotonic()}
+        )
         self.handler._schedule_local_stt_event("partial", text)
 
     def on_line_text_changed(self, event: Any) -> None:
         text = self._text_from_event(event)
-        self.handler._heartbeat.update({"state": "partial", "last_event": "partial", "last_text": text, "last_event_at": time.monotonic()})
+        self.handler._heartbeat.update(
+            {"state": "partial", "last_event": "partial", "last_text": text, "last_event_at": time.monotonic()}
+        )
         self.handler._schedule_local_stt_event("partial", text)
 
     def on_line_completed(self, event: Any) -> None:
         text = self._text_from_event(event)
-        self.handler._heartbeat.update({"state": "completed", "last_event": "completed", "last_text": text, "last_event_at": time.monotonic()})
+        self.handler._heartbeat.update(
+            {"state": "completed", "last_event": "completed", "last_text": text, "last_event_at": time.monotonic()}
+        )
         self.handler._schedule_local_stt_event("completed", text)
 
     def on_error(self, event: Any) -> None:
@@ -102,7 +111,15 @@ class LocalSTTInputMixin:
         startup_voice: str | None = None,
     ) -> None:
         """Initialize local STT state and the response backend."""
-        super().__init__(deps, sim_mode, instance_path, startup_voice)  # type: ignore[misc]
+        super().__init__(deps, sim_mode, instance_path, startup_voice)  # type: ignore[call-arg]
+        # Declare timing / span attrs so mypy sees consistent types on the mixin.
+        # Concrete base classes (BaseLlamaResponseHandler, BaseRealtimeHandler)
+        # initialise these in their own __init__ via super().__init__() above.
+        self._turn_user_done_at: float | None
+        self._turn_response_created_at: float | None
+        self._turn_first_audio_at: float | None
+        self._turn_id: str | None
+        self._turn_start_at: float | None
         self.local_stt_sample_rate = LOCAL_STT_SAMPLE_RATE
         self._local_stt_stream: Any = None
         self._local_stt_transcriber: Any = None
@@ -117,16 +134,7 @@ class LocalSTTInputMixin:
             "last_event_at": time.monotonic(),
             "audio_frames": 0,
         }
-        self._heartbeat_future: "asyncio.Future | None" = None
-
-    def copy(self) -> "LocalSTTInputMixin":
-        """Create a copy of the handler."""
-        return type(self)(  # type: ignore[call-arg, return-value]
-            self.deps,
-            self.sim_mode,
-            self.instance_path,
-            startup_voice=self._voice_override,
-        )
+        self._heartbeat_future: "asyncio.Future[Any] | ConcurrentFuture[None] | None" = None
 
     async def _prepare_startup_credentials(self) -> None:
         """Let the response backend prepare itself, then initialize local STT."""
@@ -199,6 +207,7 @@ class LocalSTTInputMixin:
     async def _handle_local_stt_event(self, kind: str, text: str) -> None:
         """Handle local STT lifecycle events inside the asyncio loop."""
         import uuid as _uuid
+
         transcript = (text or "").strip()
         if kind == "started":
             self._mark_activity("local_stt_speech_started")  # type: ignore[attr-defined]
@@ -207,20 +216,20 @@ class LocalSTTInputMixin:
             self._turn_first_audio_at = None
             # Open root turn span and STT infer child span
             if hasattr(self, "_close_turn_span"):
-                self._close_turn_span("interrupted")  # type: ignore[attr-defined]
+                self._close_turn_span("interrupted")
             _now = time.perf_counter()
             _tracer = telemetry.get_tracer()
             _turn_id = str(_uuid.uuid4())
             if hasattr(self, "_turn_id"):
-                self._turn_id = _turn_id  # type: ignore[attr-defined]
+                self._turn_id = _turn_id
             if hasattr(self, "_turn_start_at"):
-                self._turn_start_at = _now  # type: ignore[attr-defined]
+                self._turn_start_at = _now
             if hasattr(self, "_session_id"):
-                _session_id = self._session_id  # type: ignore[attr-defined]
+                _session_id = self._session_id
             else:
                 _session_id = ""
             if hasattr(self, "_current_response_has_tool_call"):
-                self._current_response_has_tool_call = False  # type: ignore[attr-defined]
+                self._current_response_has_tool_call = False
             _turn_span = _tracer.start_span(
                 "turn",
                 attributes={
@@ -230,10 +239,10 @@ class LocalSTTInputMixin:
                 },
             )
             if hasattr(self, "_turn_span"):
-                self._turn_span = _turn_span  # type: ignore[attr-defined]
+                self._turn_span = _turn_span
             _ctx_token = otel_context.attach(trace.set_span_in_context(_turn_span))
             if hasattr(self, "_turn_ctx_token"):
-                self._turn_ctx_token = _ctx_token  # type: ignore[attr-defined]
+                self._turn_ctx_token = _ctx_token
             _prior_stt = getattr(self, "_stt_infer_span", None)
             if _prior_stt is not None:
                 _prior_stt.end()

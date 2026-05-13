@@ -47,7 +47,8 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
     _TTS_SYSTEM = "chatterbox"
 
     def copy(self) -> "ChatterboxTTSResponseHandler":
-        return ChatterboxTTSResponseHandler(
+        """Create a new instance of this handler with the same configuration."""
+        return type(self)(
             self.deps,
             self.sim_mode,
             self.instance_path,
@@ -83,7 +84,7 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
         if self._voice_override:
             return self._voice_override
         params = self._load_profile_params()
-        return params.get("voice") or getattr(config, "CHATTERBOX_VOICE", CHATTERBOX_DEFAULT_VOICE)
+        return str(params.get("voice") or getattr(config, "CHATTERBOX_VOICE", CHATTERBOX_DEFAULT_VOICE))
 
     @property
     def _exaggeration(self) -> float:
@@ -126,6 +127,24 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
             self._cfg_weight,
             self._temperature,
         )
+        await self._warmup_tts()
+
+    async def _warmup_tts(self) -> None:
+        """Send a silent warmup request to force the voice model into memory.
+
+        Chatterbox loads the voice model lazily on the first real TTS call,
+        which causes a 20-40 s pause on CPU. Doing it here at startup makes
+        the cold-start visible in logs and keeps the first user turn snappy.
+        """
+        logger.info("chatterbox: warming up voice model …")
+        _t0 = time.perf_counter()
+        try:
+            await self._call_chatterbox_tts(".")
+        except Exception as exc:
+            logger.warning("chatterbox: warmup failed (continuing): %s", exc)
+            return
+        _dt = time.perf_counter() - _t0
+        logger.info("chatterbox: warmup complete in %.1f s", _dt)
 
     # ------------------------------------------------------------------ #
     # Voice management                                                     #
@@ -143,9 +162,11 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
             return [self._chatterbox_voice]
 
     def get_current_voice(self) -> str:
+        """Return the Chatterbox voice reference file currently in use."""
         return self._chatterbox_voice
 
     async def change_voice(self, voice: str) -> str:
+        """Switch to a different Chatterbox voice reference file."""
         self._voice_override = voice
         return f"Voice changed to {voice}."
 
@@ -216,11 +237,21 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
         else:
             payload["reference_audio_filename"] = ref_file
 
+        _call_start = time.perf_counter()
         for attempt in range(_TTS_MAX_RETRIES):
             try:
                 r = await self._http.post(f"{self._chatterbox_url}/tts", json=payload)
                 r.raise_for_status()
-                return self._wav_to_pcm(r.content, gain=self._gain)
+                result = self._wav_to_pcm(r.content, gain=self._gain)
+                _elapsed = time.perf_counter() - _call_start
+                _slow_thresh = float(getattr(config, "REACHY_MINI_TTS_SLOW_WARN_S", 10.0))
+                if _elapsed > _slow_thresh:
+                    logger.warning(
+                        "chatterbox: TTS call took %.1f s (threshold %.0f s) — voice model may have been evicted",
+                        _elapsed,
+                        _slow_thresh,
+                    )
+                return result
             except Exception as exc:
                 logger.warning(
                     "TTS attempt %d/%d failed: %s: %s", attempt + 1, _TTS_MAX_RETRIES, type(exc).__name__, exc
