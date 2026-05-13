@@ -58,18 +58,28 @@ def play_warmup_wav(path: str | Path | None = None) -> None:
 
     Silent no-op if the file does not exist or no player is on PATH. Never
     raises; warmup is a best-effort UX nicety and must not block startup.
+
+    Emits a ``warmup wav dispatched`` startup checkpoint (via
+    ``startup_timer.log_checkpoint``) only when a subprocess is actually
+    spawned, so the ``+Xs warmup wav dispatched → first TTS audio frame``
+    delta is meaningful. Skipped paths emit ``warmup wav skipped`` at INFO
+    so the journal always records which path was taken.
     """
     global _PLAYER_WARNED
 
+    from robot_comic.startup_timer import log_checkpoint
+
     wav_path = Path(path) if path else default_warmup_wav_path()
     if not wav_path.is_file():
-        logger.debug("Warmup WAV not found at %s; skipping", wav_path)
+        logger.info("Warmup WAV not found at %s; skipping", wav_path)
+        log_checkpoint("warmup wav skipped", logger)
         return
 
     if _PLAYER_CMD is None:
         if not _PLAYER_WARNED:
             logger.warning("No audio player available (looked for aplay/paplay/afplay); skipping warmup WAV")
             _PLAYER_WARNED = True
+        log_checkpoint("warmup wav skipped", logger)
         return
 
     cmd = [*_PLAYER_CMD, str(wav_path)]
@@ -81,5 +91,7 @@ def play_warmup_wav(path: str | Path | None = None) -> None:
             close_fds=True,
         )
         logger.info("Warmup WAV dispatched: %s", wav_path.name)
+        log_checkpoint("warmup wav dispatched", logger)
     except Exception as exc:
         logger.warning("Failed to spawn warmup player %s: %s", cmd[0], exc)
+        log_checkpoint("warmup wav skipped", logger)
