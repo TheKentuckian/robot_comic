@@ -178,14 +178,22 @@ async def test_short_pause_tag_inserts_silence_before_sentence() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tts_call_includes_speed_system_instruction() -> None:
-    """_call_tts_with_retry must pass a fast-delivery system_instruction to TTS."""
+async def test_tts_call_includes_speed_delivery_cue() -> None:
+    """_call_tts_with_retry conveys fast-delivery styling to TTS.
+
+    The default model (`gemini-3.1-flash-tts-preview`) rejects
+    `system_instruction`, so the instruction is prepended to the spoken
+    contents as a parenthetical cue instead. Validate either path so this
+    test stays useful if GEMINI_TTS_MODEL changes.
+    """
     handler = _make_handler()
 
     captured_configs = []
+    captured_contents = []
 
     async def fake_generate(model, contents, config):
         captured_configs.append(config)
+        captured_contents.append(contents)
         fake_data = b"\x00" * 4800
         import base64
 
@@ -207,6 +215,10 @@ async def test_tts_call_includes_speed_system_instruction() -> None:
     assert result is not None
     assert len(captured_configs) == 1
     cfg = captured_configs[0]
-    assert cfg.system_instruction is not None
-    instruction_text = cfg.system_instruction.lower()
+    contents = captured_contents[0]
+    if cfg.system_instruction is not None:
+        instruction_text = cfg.system_instruction.lower()
+    else:
+        # Preview-model path: cue is prepended to contents.
+        instruction_text = contents.lower()
     assert "fast" in instruction_text or "brooklyn" in instruction_text or "pace" in instruction_text

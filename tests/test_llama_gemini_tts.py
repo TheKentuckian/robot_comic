@@ -182,8 +182,15 @@ async def test_call_gemini_tts_uses_default_system_instruction_when_unset() -> N
 
     assert pcm is not None
     assert len(captured_configs) == 1
+    # Default model (`gemini-3.1-flash-tts-preview`) drops system_instruction;
+    # the cue is prepended to contents instead. Accept either path.
     instr = captured_configs[0].system_instruction
-    assert isinstance(instr, str) and instr  # non-empty
+    if instr is None:
+        from robot_comic.gemini_tts import GEMINI_TTS_MODEL, _TTS_NO_SYSTEM_INSTRUCTION_MODELS
+
+        assert GEMINI_TTS_MODEL in _TTS_NO_SYSTEM_INSTRUCTION_MODELS
+    else:
+        assert isinstance(instr, str) and instr  # non-empty
 
 
 @pytest.mark.asyncio
@@ -191,9 +198,11 @@ async def test_call_gemini_tts_honors_explicit_system_instruction() -> None:
     """When the caller passes system_instruction, it is what reaches the SDK call."""
     handler = _make_handler()
     captured_configs: list[object] = []
+    captured_contents: list[object] = []
 
     async def fake_generate(model, contents, config):
         captured_configs.append(config)
+        captured_contents.append(contents)
         part = MagicMock()
         part.inline_data.data = _encoded_pcm()
         candidate = MagicMock()
@@ -208,7 +217,12 @@ async def test_call_gemini_tts_honors_explicit_system_instruction() -> None:
 
     await handler._call_gemini_tts("Hello", system_instruction="Whispered, conspiratorial.")
 
-    assert captured_configs[0].system_instruction == "Whispered, conspiratorial."
+    # Default model drops system_instruction; the explicit cue is prepended to contents.
+    instr = captured_configs[0].system_instruction
+    if instr is None:
+        assert any("Whispered, conspiratorial." in str(c) for c in captured_contents)
+    else:
+        assert instr == "Whispered, conspiratorial."
 
 
 @pytest.mark.asyncio
