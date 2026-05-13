@@ -624,3 +624,50 @@ button:disabled {
   button { width: 100%; justify-content: center; }
   .actions { flex-direction: column; align-items: flex-start; }
 }
+
+/* ── Battery indicator ───────────────────────────────────────────── */
+
+.hero-top-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.battery {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  letter-spacing: 0.2px;
+  font-variant-numeric: tabular-nums;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--muted);
+}
+
+.battery--full {
+  color: var(--ok);
+  border-color: rgba(76, 224, 179, 0.3);
+  background: rgba(76, 224, 179, 0.08);
+}
+
+.battery--med {
+  color: var(--warn);
+  border-color: rgba(255, 181, 71, 0.3);
+  background: rgba(255, 181, 71, 0.08);
+}
+
+.battery--low {
+  color: var(--error);
+  border-color: rgba(255, 92, 112, 0.3);
+  background: rgba(255, 92, 112, 0.08);
+  animation: battery-pulse 2s ease-in-out infinite;
+}
+
+@keyframes battery-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}

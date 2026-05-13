@@ -19,6 +19,8 @@ import subprocess
 from typing import Any, Iterator, Optional
 from datetime import datetime
 from collections import defaultdict
+from urllib.error import URLError
+from urllib.request import urlopen
 
 
 try:
@@ -390,6 +392,35 @@ def main() -> None:
     _svc_active: list[bool] = [True]  # mutable box so refresh thread can update it
     _svc_last_check: list[float] = [0.0]
 
+    # Battery status — polled every ~30 s from the admin API.
+    _battery: list[Optional[dict[str, Any]]] = [None]
+    _battery_last_check: list[float] = [0.0]
+    _battery_base_url: str = "http://localhost:8000"
+
+    def _battery_footer() -> Text:
+        """Render a compact battery status line for the panel subtitle."""
+        batt = _battery[0]
+        if batt is None:
+            return Text("")
+        source = batt.get("source", "unknown")
+        if source == "sim":
+            return Text("  battery: sim", style="dim")
+        if source == "unknown":
+            return Text("")
+        percent = batt.get("percent")
+        charging = batt.get("charging")
+        if percent is None:
+            return Text("  battery: --", style="dim")
+        if percent < 20:
+            style = "bold red"
+        elif percent < 50:
+            style = "yellow"
+        else:
+            style = "green"
+        charge_mark = " ⚡" if charging else ""
+        t = Text(f"  battery: {percent}%{charge_mark}", style=style)
+        return t
+
     def _render() -> Panel:
         pending = buffer.latest_pending
 
@@ -415,7 +446,11 @@ def main() -> None:
 
         n = len(turns)
         title_parts = "[bold]robot-comic-monitor[/bold]" + title_suffix
-        subtitle = f"[dim]{n} turn{'s' if n != 1 else ''} recorded[/dim]"
+        batt_text = _battery_footer()
+        subtitle_text = Text(f"{n} turn{'s' if n != 1 else ''} recorded", style="dim")
+        if batt_text.plain:
+            subtitle_text.append_text(batt_text)
+        subtitle = subtitle_text
         return Panel(
             body,
             title=title_parts,
@@ -427,12 +462,22 @@ def main() -> None:
 
     def _auto_refresh() -> None:
         while not stop_event.is_set():
+            now = time.time()
             # Re-check service status every ~3 s.
             if watch_unit is not None:
-                now = time.time()
                 if now - _svc_last_check[0] >= 3.0:
                     _svc_active[0] = _service_active(watch_unit)
                     _svc_last_check[0] = now
+            # Poll battery status every ~30 s.
+            if now - _battery_last_check[0] >= 30.0:
+                try:
+                    url = f"{_battery_base_url}/api/battery"
+                    with urlopen(url, timeout=2.0) as resp:  # noqa: S310
+                        raw = resp.read().decode()
+                    _battery[0] = json.loads(raw)
+                except (URLError, OSError, ValueError):
+                    pass  # no admin server running — silently skip
+                _battery_last_check[0] = now
             live.update(_render())
             stop_event.wait(0.15)  # ~6 fps for smooth spinner
 

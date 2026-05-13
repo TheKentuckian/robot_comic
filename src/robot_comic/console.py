@@ -15,7 +15,7 @@ import sys
 import time
 import asyncio
 import logging
-from typing import Any, List, Optional
+from typing import Any, List, Optional, cast
 from pathlib import Path
 
 from fastrtc import AdditionalOutputs, audio_to_float32
@@ -121,6 +121,58 @@ def _estimate_pending_playback_seconds(robot: ReachyMini) -> float:
         return 0.0
 
     return max(0.0, pending_ns / 1e9)
+
+
+_BATTERY_CACHE_TTL_S = 5.0
+_battery_cache: dict[str, Any] = {}
+_battery_warned_once = False
+
+
+def _read_battery(robot: Optional[ReachyMini]) -> dict[str, Any]:
+    """Read battery info from the robot SDK, with a 5-second cache.
+
+    Returns a dict with at minimum a ``source`` key:
+    - ``"sim"``    — no real robot present (sim / headless-without-robot mode)
+    - ``"unknown"``— robot present but SDK exposes no battery API
+    - ``"robot"``  — real reading (not yet reachable with current SDK v1.7.1)
+    """
+    global _battery_warned_once
+
+    now = time.monotonic()
+    cached = _battery_cache.get("entry")
+    if cached is not None and (now - cached["ts"]) < _BATTERY_CACHE_TTL_S:
+        return cast(dict[str, Any], cached["value"])
+
+    if robot is None:
+        result: dict[str, Any] = {"source": "sim", "percent": None}
+    else:
+        # The Reachy Mini SDK v1.7.1 does not expose a public battery API.
+        # Check defensively in case a future SDK version adds it.
+        battery_attr = getattr(robot, "battery", None)
+        if battery_attr is not None:
+            try:
+                percent = getattr(battery_attr, "percent", None)
+                voltage = getattr(battery_attr, "voltage", None)
+                charging = getattr(battery_attr, "charging", None)
+                result = {
+                    "source": "robot",
+                    "percent": int(percent) if percent is not None else None,
+                    "voltage": float(voltage) if voltage is not None else None,
+                    "charging": bool(charging) if charging is not None else None,
+                }
+            except Exception as exc:
+                if not _battery_warned_once:
+                    logger.debug("Battery read failed: %s", exc)
+                    _battery_warned_once = True
+                result = {"source": "unknown", "percent": None}
+        else:
+            if not _battery_warned_once:
+                logger.debug("Reachy Mini SDK does not expose a battery attribute (SDK v1.7.1)")
+                _battery_warned_once = True
+            result = {"source": "unknown", "percent": None}
+
+    _battery_cache["entry"] = {"ts": now, "value": result}
+    return result
 
 
 class LocalStream:
@@ -639,6 +691,11 @@ class LocalStream:
             except Exception:
                 ready = False
             return JSONResponse({"ready": ready})
+
+        # GET /api/battery -> Reachy battery status (cached 5 s)
+        @self._settings_app.get("/api/battery")
+        def _battery() -> JSONResponse:
+            return JSONResponse(_read_battery(self._robot))
 
         # POST /openai_api_key -> set/persist key
         @self._settings_app.post("/openai_api_key")
