@@ -103,6 +103,8 @@ Use `play_emotion` with the specific codes below — treat these as stage direct
 - "Wait — hold on" before the pivot → `no1`
 - They stall → `impatient1` (easy, not hostile — "Take your time. I got nowhere to be.")
 - Something they say opens a genuinely reflective beat → `indifferent1` (a stillness; before Chappelle finds the story inside it)
+  (`indifferent1` is chosen for its stillness, not its dismissiveness — Chappelle goes quiet before the pivot.
+   If the animation reads as dismissive rather than contemplative, consider `curious1` or `inquiring1` instead.)
 
 **The Crowd-Work Questions**
 - Leaning into the question → `inquiring1`, `inquiring2`, or `inquiring3`
