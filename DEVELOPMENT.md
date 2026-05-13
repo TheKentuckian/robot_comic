@@ -89,9 +89,20 @@ This keeps iteration cycles tight and catches platform-specific or dependency is
 ## Running on the robot
 
 The robot autostart flow:
-1. `reachy-app-autostart.py` waits for the daemon (`/openapi.json` probe)
-2. Enables motors and queues the wake-up animation
-3. Execs `/venvs/apps_venv/bin/python -u -m robot_comic.main`
+1. `wait-for-reachy-daemon.sh` polls `http://127.0.0.1:8000/api/motors/get_mode`
+   every 200 ms until the daemon responds (up to 10 s).  Exits 1 on timeout so
+   systemd can retry rather than proceed with motors disabled.
+   Previously: `ExecStartPre=/bin/sleep 30` (wasted ~25 s on every boot).
+2. Enables motors via `curl … motors/set_mode/enabled`
+3. Queues the wake-up animation via `curl … move/play/wake_up`
+4. Execs `/venvs/apps_venv/bin/python -u -m robot_comic.main`
+
+The systemd unit and poll script live in this repo:
+- `scripts/wait-for-reachy-daemon.sh` — copy to `/usr/local/bin/` (chmod +x)
+- `deploy/systemd/reachy-app-autostart.service` — copy to `/etc/systemd/system/`
+
+See the header comment in `deploy/systemd/reachy-app-autostart.service` for
+one-liner install instructions.
 
 Daemon logs go to `/tmp/daemon.jsonl` (tmpfs — cleared on reboot).
 App logs go to journald: `journalctl -u reachy-app-autostart -f`.

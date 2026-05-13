@@ -1,0 +1,51 @@
+# systemd unit for the robot_comic autostart service on Reachy Mini Wireless.
+#
+# Install instructions (run on the robot as root):
+#
+#   # 1. Copy the poll script
+#   install -m 755 scripts/wait-for-reachy-daemon.sh \
+#       /usr/local/bin/wait-for-reachy-daemon.sh
+#
+#   # 2. Install (or replace) the service unit
+#   install -m 644 deploy/systemd/reachy-app-autostart.service \
+#       /etc/systemd/system/reachy-app-autostart.service
+#
+#   systemctl daemon-reload
+#   systemctl enable --now reachy-app-autostart
+#
+# The ExecStartPre line that previously read:
+#   ExecStartPre=/bin/sleep 30
+# has been replaced with an active poll that exits as soon as the daemon
+# responds, saving ~25 s on a typical boot.
+
+[Unit]
+Description=Reachy Mini — Robot Comic autostart
+After=network-online.target reachy-daemon.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pollen
+WorkingDirectory=/home/pollen/apps/robot_comic
+
+# Active poll: waits up to 10 s for the daemon's motors endpoint.
+# Replaces the old: ExecStartPre=/bin/sleep 30
+ExecStartPre=/usr/local/bin/wait-for-reachy-daemon.sh
+
+# Enable motors and queue the wake-up animation
+ExecStartPre=/usr/bin/curl -fsS \
+    -X POST http://127.0.0.1:8000/api/motors/set_mode/enabled
+ExecStartPre=/usr/bin/curl -fsS \
+    -X POST http://127.0.0.1:8000/move/play/wake_up
+
+ExecStart=/venvs/apps_venv/bin/python -u -m robot_comic.main
+
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=reachy-app-autostart
+
+[Install]
+WantedBy=multi-user.target
