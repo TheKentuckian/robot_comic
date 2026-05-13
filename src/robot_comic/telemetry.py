@@ -2,8 +2,12 @@
 
 Gated behind ROBOT_INSTRUMENTATION env var:
   unset / empty  — no-op (zero overhead)
-  trace          — Console exporter only (local dev / debugging)
-  remote         — OTLP + Console exporters (SigNoz or compatible collector)
+  trace          — Console span exporter only (local dev / debugging)
+  remote         — OTLP + Console span exporters (SigNoz or compatible collector)
+
+Metric console output (ROBOT_METRICS_CONSOLE):
+  unset / empty  — metrics are NOT written to console (prevents journald spam)
+  1 / true / yes — enable ConsoleMetricExporter for developer debug sessions
 
 All public names are safe to call regardless of whether instrumentation is
 enabled — callers never need to check ENABLED themselves.
@@ -39,12 +43,24 @@ _TURN_DURATION_BUCKETS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 5.0, 1
 _DEFAULT_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
 
 
-_SPAN_ATTRS_TO_KEEP = frozenset({
-    "turn.id", "session.id", "turn.outcome", "turn.excerpt", "robot.mode",
-    "gen_ai.system", "gen_ai.operation.name", "gen_ai.request.model",
-    "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens",
-    "tool.name", "tool.id", "vad.duration_ms", "stt.type",
-})
+_SPAN_ATTRS_TO_KEEP = frozenset(
+    {
+        "turn.id",
+        "session.id",
+        "turn.outcome",
+        "turn.excerpt",
+        "robot.mode",
+        "gen_ai.system",
+        "gen_ai.operation.name",
+        "gen_ai.request.model",
+        "gen_ai.usage.input_tokens",
+        "gen_ai.usage.output_tokens",
+        "tool.name",
+        "tool.id",
+        "vad.duration_ms",
+        "stt.type",
+    }
+)
 
 
 class CompactLineExporter(SpanExporter):
@@ -98,7 +114,12 @@ def _init_otel() -> None:
     trace.set_tracer_provider(tracer_provider)
 
     # --- Metrics ---
-    readers = [PeriodicExportingMetricReader(ConsoleMetricExporter(), export_interval_millis=60_000)]
+    # ConsoleMetricExporter floods journald with multi-hundred-line JSON every 60 s.
+    # Gate it behind ROBOT_METRICS_CONSOLE so it is opt-in for developer debug only.
+    _metrics_console = os.getenv("ROBOT_METRICS_CONSOLE", "").strip().lower() in {"1", "true", "yes"}
+    readers: list = []
+    if _metrics_console:
+        readers.append(PeriodicExportingMetricReader(ConsoleMetricExporter(), export_interval_millis=60_000))
 
     if _REMOTE:
         try:
@@ -130,6 +151,7 @@ def init() -> None:
 # ---------------------------------------------------------------------------
 # Tracer / meter accessors
 # ---------------------------------------------------------------------------
+
 
 def get_tracer() -> trace.Tracer:
     """Return the robot_comic tracer (no-op when not initialised)."""
@@ -218,6 +240,7 @@ def _init_instruments() -> None:
 # Helpers for recording metrics safely (no-op when instrument is None)
 # ---------------------------------------------------------------------------
 
+
 def record_turn(duration_s: float, attrs: dict[str, Any]) -> None:
     """Record robot.turn.duration histogram."""
     if turn_duration is not None:
@@ -270,4 +293,3 @@ def inc_errors(attrs: dict[str, Any]) -> None:
     """Increment robot.errors counter."""
     if errors is not None:
         errors.add(1, attributes=attrs)
-

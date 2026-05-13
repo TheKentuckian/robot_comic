@@ -49,6 +49,13 @@ class CameraWorker:
 
         self.previous_head_tracking_state = self.is_head_tracking_enabled
 
+        # Rate-limiting state for the except handler: track last logged message,
+        # when it was last logged, and how many times it was suppressed.
+        self._last_error_msg: str | None = None
+        self._last_error_time: float = 0.0
+        self._suppressed_error_count: int = 0
+        self._error_suppress_window: float = 60.0  # seconds
+
     def get_latest_frame(self) -> NDArray[np.uint8] | None:
         """Get the latest frame (thread-safe)."""
         with self.frame_lock:
@@ -202,7 +209,28 @@ class CameraWorker:
                 time.sleep(0.04)
 
             except Exception as e:
-                logger.error(f"Camera worker error: {e}")
+                now = time.monotonic()
+                msg = str(e)
+                same_error = msg == self._last_error_msg
+                window_elapsed = (now - self._last_error_time) >= self._error_suppress_window
+
+                if not same_error or window_elapsed:
+                    if same_error and self._suppressed_error_count > 0:
+                        # Emit suppression summary before the fresh log
+                        logger.error(
+                            "Camera worker error suppressed %d times in last %.0fs: %s",
+                            self._suppressed_error_count,
+                            self._error_suppress_window,
+                            self._last_error_msg,
+                        )
+                    # Log full traceback on the first occurrence (or after window)
+                    logger.exception("Camera worker error: %s", msg)
+                    self._last_error_msg = msg
+                    self._last_error_time = now
+                    self._suppressed_error_count = 0
+                else:
+                    self._suppressed_error_count += 1
+
                 time.sleep(0.1)
 
         logger.debug("Camera worker thread exited")
