@@ -1,7 +1,9 @@
 """Greet tool — face presence scan, head sweep, and returning-visitor identity matching."""
 
 from __future__ import annotations
+import os
 import json
+import time
 import asyncio
 import difflib
 import logging
@@ -19,6 +21,11 @@ logger = logging.getLogger(__name__)
 SESSION_WINDOW_DAYS = 30
 MATCH_THRESHOLD = 0.75
 SWEEP_POSITIONS = ["left", "up", "right", "front"]
+
+# How long (seconds) to wait for the face tracker to latch before giving up and
+# sweeping.  Overrideable via REACHY_MINI_GREET_SCAN_WAIT_S.
+_DEFAULT_SCAN_WAIT_S = 1.5
+_SCAN_POLL_INTERVAL_S = 0.1
 
 try:
     import mediapipe as mp
@@ -171,12 +178,19 @@ class Greet(Tool):
         if not MP_AVAILABLE:
             return {"face_detected": True, "note": "MediaPipe unavailable, assuming face present"}
 
-        # Try up to 3 times on the initial front frame before sweeping (camera may need to settle)
-        for _ in range(3):
+        # Poll for up to REACHY_MINI_GREET_SCAN_WAIT_S seconds before sweeping.
+        # On fresh startup the camera / tracker needs a moment to latch onto a
+        # face even when one is already in frame; a single sample (or 3 rapid
+        # retries) is not enough to bridge that initialisation gap.
+        scan_wait_s = float(os.environ.get("REACHY_MINI_GREET_SCAN_WAIT_S", _DEFAULT_SCAN_WAIT_S))
+        deadline = time.monotonic() + scan_wait_s
+        while True:
             frame = deps.camera_worker.get_latest_frame()
             if frame is not None and _detect_face(frame):
                 return {"face_detected": True}
-            await asyncio.sleep(0.3)
+            if time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(_SCAN_POLL_INTERVAL_S)
 
         for direction in SWEEP_POSITIONS:
             move_result = await MoveHead()(deps, direction=direction)
