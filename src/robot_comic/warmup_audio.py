@@ -23,9 +23,11 @@ logger = logging.getLogger(__name__)
 def _detect_player() -> list[str] | None:
     """Resolve the player command + flags, or None if unavailable.
 
-    Prefers ALSA's ``aplay``, falls back to PulseAudio's ``paplay``. On macOS,
-    ``afplay`` is used if available. Windows has no zero-dep CLI player, so
-    this returns None there.
+    Prefers PipeWire's ``pw-play`` then PulseAudio's ``paplay`` (both share
+    the audio device with the reachy_mini daemon), falling back to ALSA's
+    ``aplay`` (exclusive — silently fails when the daemon owns the device).
+    On macOS, ``afplay`` is used if available. Windows has no zero-dep CLI
+    player, so this returns None there.
     """
     if sys.platform == "win32":
         return None
@@ -34,12 +36,15 @@ def _detect_player() -> list[str] | None:
         if afplay:
             return [afplay]
         return None
-    aplay = shutil.which("aplay")
-    if aplay:
-        return [aplay, "-q"]
+    pw_play = shutil.which("pw-play")
+    if pw_play:
+        return [pw_play]
     paplay = shutil.which("paplay")
     if paplay:
         return [paplay]
+    aplay = shutil.which("aplay")
+    if aplay:
+        return [aplay, "-q"]
     return None
 
 
