@@ -4,6 +4,8 @@ const HF_BACKEND = "huggingface";
 const LOCAL_STT_BACKEND = "local_stt";
 const GEMINI_TTS_OUTPUT = "gemini_tts";
 const CHATTERBOX_OUTPUT = "chatterbox";
+const ELEVENLABS_OUTPUT = "elevenlabs";
+const LLAMA_ELEVENLABS_TTS_OUTPUT = "llama_elevenlabs_tts";
 const DEFAULT_BACKEND = HF_BACKEND;
 const HF_DEFAULT_HOST = "localhost";
 const HF_DEFAULT_PORT = 8765;
@@ -143,6 +145,14 @@ function journeyMeta(backend, outputBackend = OPENAI_BACKEND) {
       meta.brainLabel = "Ollama LLM (local)";
       meta.outputLabel = "Chatterbox TTS";
       meta.outputCopy = "Text goes to the local Ollama model, then to Chatterbox voice-clone TTS.";
+    } else if (outputBackend === ELEVENLABS_OUTPUT) {
+      meta.brainLabel = "Gemini Flash response backend";
+      meta.outputLabel = "ElevenLabs TTS";
+      meta.outputCopy = "Text goes to Gemini Flash, then to the selected ElevenLabs voice.";
+    } else if (outputBackend === LLAMA_ELEVENLABS_TTS_OUTPUT) {
+      meta.brainLabel = "llama.cpp (local LLM)";
+      meta.outputLabel = "ElevenLabs TTS";
+      meta.outputCopy = "Text goes to the local llama.cpp server, then to the selected ElevenLabs voice.";
     } else {
       meta.brainLabel = "OpenAI response backend";
       meta.outputLabel = "OpenAI voice";
@@ -243,6 +253,15 @@ async function saveBackendConfig(backend, { key = "", hfMode = "", hfHost = "", 
       const voiceEl = document.getElementById("chatterbox-voice");
       if (urlEl?.value.trim()) body.chatterbox_url = urlEl.value.trim();
       if (voiceEl?.value.trim()) body.chatterbox_voice = voiceEl.value.trim();
+    }
+    if (
+      responseEl?.value === ELEVENLABS_OUTPUT
+      || responseEl?.value === LLAMA_ELEVENLABS_TTS_OUTPUT
+    ) {
+      const keyEl = document.getElementById("elevenlabs-key");
+      const voiceEl = document.getElementById("elevenlabs-voice");
+      if (keyEl?.value.trim()) body.elevenlabs_api_key = keyEl.value.trim();
+      if (voiceEl?.value.trim()) body.elevenlabs_voice = voiceEl.value.trim();
     }
   }
   const resp = await fetch("/backend_config", {
@@ -610,7 +629,64 @@ async function init() {
     const chatterboxVoice = document.getElementById("chatterbox-voice");
     if (chatterboxUrl) chatterboxUrl.value = status.chatterbox_url || "http://astralplane.lan:8004";
     if (chatterboxVoice) chatterboxVoice.value = status.chatterbox_voice || "don_rickles";
+    elevenlabsSavedVoice = status.elevenlabs_voice || "";
     setSelectedLocalSTTOutput(localSttResponse.value || OPENAI_BACKEND);
+  }
+
+  let elevenlabsVoicesLoaded = false;
+  let elevenlabsSavedVoice = "";
+  async function populateElevenLabsVoices() {
+    const select = document.getElementById("elevenlabs-voice");
+    if (!select) return;
+    if (elevenlabsVoicesLoaded) {
+      if (elevenlabsSavedVoice) {
+        const match = Array.from(select.options).find((o) => o.value === elevenlabsSavedVoice);
+        if (match) select.value = elevenlabsSavedVoice;
+      }
+      return;
+    }
+    elevenlabsVoicesLoaded = true;
+    select.innerHTML = "";
+    const loading = document.createElement("option");
+    loading.value = "";
+    loading.textContent = "(loading voices…)";
+    select.appendChild(loading);
+    try {
+      const url = new URL("/elevenlabs/voices", window.location.origin);
+      url.searchParams.set("_", Date.now().toString());
+      const resp = await fetchWithTimeout(url, {}, 5000);
+      if (!resp.ok) throw new Error("voices_failed");
+      const data = await resp.json();
+      const voices = Array.isArray(data?.voices) ? data.voices : [];
+      select.innerHTML = "";
+      if (!voices.length) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "(no voices available)";
+        select.appendChild(opt);
+        return;
+      }
+      for (const v of voices) {
+        const opt = document.createElement("option");
+        const name = (v && typeof v.name === "string") ? v.name : "";
+        if (!name) continue;
+        opt.value = name;
+        opt.textContent = name;
+        select.appendChild(opt);
+      }
+      if (elevenlabsSavedVoice) {
+        const match = Array.from(select.options).find((o) => o.value === elevenlabsSavedVoice);
+        if (match) select.value = elevenlabsSavedVoice;
+      }
+    } catch (e) {
+      select.innerHTML = "";
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "(unable to load voices)";
+      select.appendChild(opt);
+      // Allow retry on next selection click.
+      elevenlabsVoicesLoaded = false;
+    }
   }
 
   function renderCrowdHistory(status) {
@@ -641,7 +717,11 @@ async function init() {
         ? GEMINI_TTS_OUTPUT
         : outputBackend === CHATTERBOX_OUTPUT
           ? CHATTERBOX_OUTPUT
-          : OPENAI_BACKEND;
+          : outputBackend === ELEVENLABS_OUTPUT
+            ? ELEVENLABS_OUTPUT
+            : outputBackend === LLAMA_ELEVENLABS_TTS_OUTPUT
+              ? LLAMA_ELEVENLABS_TTS_OUTPUT
+              : OPENAI_BACKEND;
     localSttResponse.value = normalized;
     localSttOutputInputs.forEach((radio) => {
       radio.checked = radio.value === normalized;
@@ -651,6 +731,13 @@ async function init() {
     });
     const chatterboxFields = document.getElementById("chatterbox-fields");
     if (chatterboxFields) chatterboxFields.style.display = normalized === CHATTERBOX_OUTPUT ? "" : "none";
+    const elevenlabsFields = document.getElementById("elevenlabs-fields");
+    const usesElevenLabs = normalized === ELEVENLABS_OUTPUT || normalized === LLAMA_ELEVENLABS_TTS_OUTPUT;
+    if (elevenlabsFields) elevenlabsFields.style.display = usesElevenLabs ? "" : "none";
+    if (usesElevenLabs) {
+      // Fetch voices lazily; safe to call repeatedly.
+      populateElevenLabsVoices();
+    }
   }
 
   function renderJourneyMap() {
@@ -673,16 +760,22 @@ async function init() {
     const localSttUsesHF = selectedBackend === LOCAL_STT_BACKEND && localSttResponse.value === HF_BACKEND;
     const localSttUsesGeminiTTS = selectedBackend === LOCAL_STT_BACKEND && localSttResponse.value === GEMINI_TTS_OUTPUT;
     const localSttUsesChatterbox = selectedBackend === LOCAL_STT_BACKEND && localSttResponse.value === CHATTERBOX_OUTPUT;
-    const localSttUsesOpenAI = selectedBackend === LOCAL_STT_BACKEND && !localSttUsesHF && !localSttUsesGeminiTTS && !localSttUsesChatterbox;
+    const localSttUsesElevenLabs = selectedBackend === LOCAL_STT_BACKEND && (
+      localSttResponse.value === ELEVENLABS_OUTPUT
+      || localSttResponse.value === LLAMA_ELEVENLABS_TTS_OUTPUT
+    );
+    const localSttUsesOpenAI = selectedBackend === LOCAL_STT_BACKEND && !localSttUsesHF && !localSttUsesGeminiTTS && !localSttUsesChatterbox && !localSttUsesElevenLabs;
     const canProceedWithSelectedBackend = localSttUsesHF
       ? backendCanProceed(status, HF_BACKEND)
       : localSttUsesGeminiTTS
         ? backendCanProceed(status, GEMINI_BACKEND)
         : localSttUsesChatterbox
           ? !!(status.can_proceed_with_chatterbox ?? true)
-          : localSttUsesOpenAI
-            ? backendCanProceed(status, OPENAI_BACKEND)
-            : backendCanProceed(status, selectedBackend);
+          : localSttUsesElevenLabs
+            ? !!status.has_elevenlabs_key
+            : localSttUsesOpenAI
+              ? backendCanProceed(status, OPENAI_BACKEND)
+              : backendCanProceed(status, selectedBackend);
     const usesApiKeyForm = selectedBackend === OPENAI_BACKEND || selectedBackend === GEMINI_BACKEND || localSttUsesOpenAI || localSttUsesGeminiTTS;
     const usesHFForm = selectedBackend === HF_BACKEND || localSttUsesHF;
     const usesLocalSTTForm = selectedBackend === LOCAL_STT_BACKEND;
@@ -1114,6 +1207,37 @@ async function init() {
         window.location.reload();
       } catch (e) {
         setStatusMessage(statusEl, "Failed to save Chatterbox config. Please try again.", "error");
+      }
+      return;
+    }
+
+    // ElevenLabs reads its API key + voice from dedicated fields, so don't fall
+    // through to the main `#api-key` validation path.
+    if (
+      selectedBackend === LOCAL_STT_BACKEND
+      && (localSttResponse.value === ELEVENLABS_OUTPUT || localSttResponse.value === LLAMA_ELEVENLABS_TTS_OUTPUT)
+    ) {
+      const elevenlabsKeyEl = document.getElementById("elevenlabs-key");
+      const hasSavedKey = !!st.has_elevenlabs_key;
+      const enteredKey = (elevenlabsKeyEl?.value || "").trim();
+      if (!hasSavedKey && !enteredKey) {
+        setStatusMessage(statusEl, "Enter your ELEVENLABS_API_KEY.", "warn");
+        elevenlabsKeyEl?.classList.add("error");
+        return;
+      }
+      elevenlabsKeyEl?.classList.remove("error");
+      setStatusMessage(statusEl, "Saving ElevenLabs config...");
+      try {
+        await saveBackendConfig(selectedBackend, {});
+        setStatusMessage(statusEl, "Saved. Reloading…", "ok");
+        window.location.reload();
+      } catch (e) {
+        if (e.message === "empty_key") {
+          setStatusMessage(statusEl, "Enter your ELEVENLABS_API_KEY.", "warn");
+          elevenlabsKeyEl?.classList.add("error");
+        } else {
+          setStatusMessage(statusEl, "Failed to save ElevenLabs config. Please try again.", "error");
+        }
       }
       return;
     }

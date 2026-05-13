@@ -356,6 +356,14 @@ class LocalStream:
         """Persist GEMINI_API_KEY to environment and instance `.env`."""
         self._persist_env_value("GEMINI_API_KEY", key)
 
+    def _persist_elevenlabs_api_key(self, key: str) -> None:
+        """Persist ELEVENLABS_API_KEY to environment and instance `.env`."""
+        self._persist_env_value("ELEVENLABS_API_KEY", key)
+
+    def _persist_elevenlabs_voice(self, voice: str) -> None:
+        """Persist ELEVENLABS_VOICE override to environment and instance `.env`."""
+        self._persist_env_value("ELEVENLABS_VOICE", voice)
+
     def _persist_local_stt_settings(
         self,
         *,
@@ -521,6 +529,8 @@ class LocalStream:
             local_stt_update_interval: Optional[float] = None
             chatterbox_url: Optional[str] = None
             chatterbox_voice: Optional[str] = None
+            elevenlabs_api_key: Optional[str] = None
+            elevenlabs_voice: Optional[str] = None
 
         def _status_payload() -> dict[str, object]:
             backend_provider = get_backend_choice()
@@ -566,6 +576,8 @@ class LocalStream:
                 "local_stt_model_choices": list(LOCAL_STT_MODEL_CHOICES),
                 "chatterbox_url": getattr(config, "CHATTERBOX_URL", CHATTERBOX_DEFAULT_URL),
                 "chatterbox_voice": getattr(config, "CHATTERBOX_VOICE", CHATTERBOX_DEFAULT_VOICE),
+                "has_elevenlabs_key": self._has_key(config.ELEVENLABS_API_KEY),
+                "elevenlabs_voice": getattr(config, "ELEVENLABS_VOICE", "") or os.environ.get("ELEVENLABS_VOICE", ""),
                 "can_proceed": can_proceed,
                 "can_proceed_with_openai": can_proceed_with_openai,
                 "can_proceed_with_gemini": can_proceed_with_gemini,
@@ -598,6 +610,25 @@ class LocalStream:
             except Exception as e:
                 logger.warning("Failed to clear crowd history: %s", e)
                 return JSONResponse({"ok": False, "error": "clear_failed"}, status_code=500)
+
+        # GET /elevenlabs/voices -> fetch the live ElevenLabs voice catalog for the
+        # admin UI dropdown. Requires ELEVENLABS_API_KEY; falls back to a 500 with
+        # the error string when the API call fails so the UI can show a placeholder.
+        @self._settings_app.get("/elevenlabs/voices")
+        async def _elevenlabs_voices() -> JSONResponse:
+            try:
+                from robot_comic.elevenlabs_voices import fetch_elevenlabs_voices
+
+                voices = await fetch_elevenlabs_voices()
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "voices": [{"name": n, "voice_id": v} for n, v in voices.items()],
+                    }
+                )
+            except Exception as e:
+                logger.warning("Failed to fetch ElevenLabs voices: %s", e)
+                return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
         # GET /ready -> whether backend finished loading tools
         @self._settings_app.get("/ready")
@@ -651,6 +682,16 @@ class LocalStream:
                 return JSONResponse({"ok": False, "error": "empty_key"}, status_code=400)
             # Chatterbox needs no API key — always allowed
 
+            elevenlabs_key_val = (payload.elevenlabs_api_key or "").strip()
+            elevenlabs_voice_val = (payload.elevenlabs_voice or "").strip()
+            if (
+                backend == LOCAL_STT_BACKEND
+                and local_stt_response_backend in (ELEVENLABS_OUTPUT, LLAMA_ELEVENLABS_TTS_OUTPUT)
+                and not elevenlabs_key_val
+                and not self._has_key(config.ELEVENLABS_API_KEY)
+            ):
+                return JSONResponse({"ok": False, "error": "empty_key"}, status_code=400)
+
             if backend == OPENAI_BACKEND and api_key:
                 self._persist_api_key(api_key)
             if backend == LOCAL_STT_BACKEND and local_stt_response_backend == OPENAI_BACKEND and api_key:
@@ -659,6 +700,14 @@ class LocalStream:
                 self._persist_gemini_api_key(api_key)
             if backend == LOCAL_STT_BACKEND and local_stt_response_backend == GEMINI_TTS_OUTPUT and api_key:
                 self._persist_gemini_api_key(api_key)
+            if backend == LOCAL_STT_BACKEND and local_stt_response_backend in (
+                ELEVENLABS_OUTPUT,
+                LLAMA_ELEVENLABS_TTS_OUTPUT,
+            ):
+                if elevenlabs_key_val:
+                    self._persist_elevenlabs_api_key(elevenlabs_key_val)
+                if elevenlabs_voice_val:
+                    self._persist_elevenlabs_voice(elevenlabs_voice_val)
             if backend == LOCAL_STT_BACKEND:
                 cache_dir = (
                     payload.local_stt_cache_dir

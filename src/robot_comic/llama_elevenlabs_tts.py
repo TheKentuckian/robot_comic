@@ -8,6 +8,7 @@ Select via:
     LOCAL_STT_RESPONSE_BACKEND=llama_elevenlabs_tts
 """
 
+import os
 import time
 import asyncio
 import logging
@@ -32,9 +33,9 @@ from robot_comic.gemini_tts import (
 )
 from robot_comic.llama_base import _CHUNK_SAMPLES, _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
 from robot_comic.tools.core_tools import ToolDependencies
+from robot_comic.elevenlabs_voices import get_elevenlabs_voices
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.chatterbox_tag_translator import strip_gemini_tags
-from robot_comic.elevenlabs_voices import get_elevenlabs_voices
 
 
 logger = logging.getLogger(__name__)
@@ -164,6 +165,11 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
     def get_current_voice(self) -> str:
         if self._voice_override:
             return self._voice_override
+        # Admin-UI override via ELEVENLABS_VOICE env wins over the profile config so
+        # users can pick a voice from the settings page without editing elevenlabs.txt.
+        env_voice = (os.environ.get("ELEVENLABS_VOICE") or "").strip()
+        if env_voice:
+            return env_voice
         config_params = load_profile_elevenlabs_config()
         voice = config_params.get("voice") or ELEVENLABS_DEFAULT_VOICE
         # Custom voice_id (e.g. PVC clone) takes precedence; the "voice" name is
@@ -265,7 +271,9 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
         cost = (char_count / 1_000_000) * self.ELEVENLABS_COST_PER_1M_CHARS
         self.cumulative_cost += cost
         if cost > 0:
-            logger.debug("ElevenLabs TTS cost: $%.4f (%d chars) | Cumulative: $%.4f", cost, char_count, self.cumulative_cost)
+            logger.debug(
+                "ElevenLabs TTS cost: $%.4f (%d chars) | Cumulative: $%.4f", cost, char_count, self.cumulative_cost
+            )
 
         config_params = load_profile_elevenlabs_config()
         base_stability = float(config_params.get("stability", "0.5"))
