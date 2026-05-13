@@ -415,7 +415,7 @@ def main() -> None:
             stop_event.wait(0.15)   # ~6 fps for smooth spinner
 
     try:
-        with Live(_render(), console=console, refresh_per_second=4, screen=False) as live:
+        with Live(_render(), console=console, refresh_per_second=4, screen=True) as live:
             refresh_thread = threading.Thread(target=_auto_refresh, daemon=True)
             refresh_thread.start()
 
@@ -426,7 +426,6 @@ def main() -> None:
                 turn = buffer.ingest(span)
                 if turn is not None:
                     turns.append(turn)
-                live.update(_render())
 
     except KeyboardInterrupt:
         pass

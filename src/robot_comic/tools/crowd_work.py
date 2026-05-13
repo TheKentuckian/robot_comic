@@ -14,7 +14,7 @@ from robot_comic.tools.core_tools import Tool, ToolDependencies
 logger = logging.getLogger(__name__)
 
 SESSION_DIRNAME = ".comedy_sessions"
-SESSION_WINDOW_HOURS = 24
+SESSION_WINDOW_HOURS = 4
 
 
 def resolve_session_dir() -> Path:
