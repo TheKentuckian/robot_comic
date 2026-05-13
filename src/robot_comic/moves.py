@@ -250,12 +250,10 @@ class MovementManager:
         self,
         current_robot: ReachyMini,
         camera_worker: "Any" = None,
-        startup_hold_s: float = 5.0,
     ):
         """Initialize movement manager."""
         self.current_robot = current_robot
         self.camera_worker = camera_worker
-        self._startup_hold_s = startup_hold_s
 
         # Single timing source for durations
         self._now = time.monotonic
@@ -288,6 +286,7 @@ class MovementManager:
         # Read idle animation flag once at startup (restart required to change)
         try:
             from robot_comic.config import config as _cfg
+
             self.idle_animation_enabled: bool = getattr(_cfg, "IDLE_ANIMATION_ENABLED", False)
         except Exception:
             self.idle_animation_enabled = False
@@ -303,6 +302,7 @@ class MovementManager:
         # Move playback speed multiplier
         try:
             from robot_comic.config import config as _cfg
+
             self.speed_factor: float = _cfg.MOVEMENT_SPEED_FACTOR
         except Exception:
             self.speed_factor: float = 0.6
@@ -879,16 +879,12 @@ class MovementManager:
         except Exception as e:
             logger.warning("Could not enable motors at startup: %s", e)
 
-        # The autostart launcher plays a wake_up animation on the daemon immediately
-        # before exec()-ing into this process. If we start issuing set_target() calls
-        # while the animation is still running, the two compete and cause shuddering.
-        # Holding for startup_hold_s lets the animation finish before we take over.
-        _hold_end = self._now() + self._startup_hold_s
-        while self._now() < _hold_end and not self._stop_event.is_set():
-            time.sleep(0.05)
-        if self._stop_event.is_set():
-            return
-        logger.debug("Startup hold complete; beginning control loop")
+        # The original startup hold (added in commit 11b9fa0) guarded against
+        # set_target() competing with the wake_up animation from the autostart
+        # launcher. That race was eliminated in commit 9679827 which pinned the
+        # motor controller's stored target to the physical sleep position on
+        # shutdown, so the hold is no longer necessary. Full Python init on the
+        # Pi takes ~30 s anyway, so wake_up finishes long before we reach here.
 
         loop_count = 0
         prev_loop_start = self._now()

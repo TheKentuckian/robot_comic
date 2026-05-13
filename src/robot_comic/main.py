@@ -203,7 +203,9 @@ def run(
             from robot_comic.warmup_audio import play_warmup_wav
 
             play_warmup_wav(config.WARMUP_WAV_PATH)
-            log_checkpoint("warmup wav dispatched", logger)
+            # Checkpoint is emitted inside play_warmup_wav so it fires only on
+            # successful Popen (dispatched) or graceful skip (skipped), making
+            # the +Xs delta to first TTS audio frame meaningful.
         except Exception as e:
             logger.warning("Warmup WAV playback failed: %s", e)
 
