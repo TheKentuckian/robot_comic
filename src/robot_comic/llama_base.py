@@ -729,8 +729,12 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                                         "type": "finish_reason",
                                         "finish_reason": finish_reason,
                                     }
-                            except json.JSONDecodeError:
-                                logger.warning("Failed to decode SSE line: %r", line)
+                            except (json.JSONDecodeError, KeyError, IndexError) as exc:
+                                logger.warning(
+                                    "Failed to parse SSE chunk (%s): %r",
+                                    type(exc).__name__,
+                                    line,
+                                )
                 return
             except Exception as exc:
                 if attempt == _LLM_MAX_RETRIES - 1:
@@ -774,6 +778,10 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                     }
                 if delta.get("id"):
                     tool_calls_by_idx[idx]["id"] = delta["id"]
+                elif not tool_calls_by_idx[idx]["id"]:
+                    # SSE chunk omitted the id field; auto-generate a short fingerprint
+                    # so consumers always see a non-empty id after accumulation.
+                    tool_calls_by_idx[idx]["id"] = str(uuid.uuid4())[:8]
                 if delta.get("tc_type"):
                     tool_calls_by_idx[idx]["type"] = delta["tc_type"]
                 if delta.get("name"):
