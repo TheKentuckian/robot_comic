@@ -335,7 +335,7 @@ async def test_dispatch_strips_tags_before_streaming(monkeypatch: pytest.MonkeyP
 
     captured: list[str] = []
 
-    async def fake_stream(self, text: str, first_audio_marker=None):  # type: ignore[no-untyped-def]
+    async def fake_stream(self, text: str, first_audio_marker=None, tags=None, target_queue=None):  # type: ignore[no-untyped-def]
         captured.append(text)
         return True
 
@@ -359,7 +359,7 @@ async def test_dispatch_short_pause_inserts_silence_before_stream(monkeypatch: p
 
     stream_call_qsize: list[int] = []
 
-    async def fake_stream(self, text: str, first_audio_marker=None):  # type: ignore[no-untyped-def]
+    async def fake_stream(self, text: str, first_audio_marker=None, tags=None, target_queue=None):  # type: ignore[no-untyped-def]
         # Capture queue depth at the moment TTS is invoked — silence should already be queued.
         stream_call_qsize.append(self.output_queue.qsize())
         return True
@@ -381,7 +381,7 @@ async def test_dispatch_all_tts_failures_pushes_error(monkeypatch: pytest.Monkey
     async def fake_llm(self):  # type: ignore[no-untyped-def]
         return "One. Two."
 
-    async def failing_stream(self, text: str, first_audio_marker=None):  # type: ignore[no-untyped-def]
+    async def failing_stream(self, text: str, first_audio_marker=None, tags=None, target_queue=None):  # type: ignore[no-untyped-def]
         return False
 
     monkeypatch.setattr(mod.ElevenLabsTTSResponseHandler, "_run_llm_with_tools", fake_llm)
@@ -406,7 +406,7 @@ async def test_dispatch_rate_limited_message_when_all_429(monkeypatch: pytest.Mo
     async def fake_llm(self):  # type: ignore[no-untyped-def]
         return "One."
 
-    async def rl_stream(self, text: str, first_audio_marker=None):  # type: ignore[no-untyped-def]
+    async def rl_stream(self, text: str, first_audio_marker=None, tags=None, target_queue=None):  # type: ignore[no-untyped-def]
         self._last_tts_rate_limited = True
         return False
 
@@ -550,7 +550,7 @@ async def test_dispatch_applies_tags_before_streaming(monkeypatch: pytest.Monkey
 
     captured_calls: list[tuple[str, list[str]]] = []
 
-    async def fake_stream(self, text: str, first_audio_marker=None, tags=None):  # type: ignore[no-untyped-def]
+    async def fake_stream(self, text: str, first_audio_marker=None, tags=None, target_queue=None):  # type: ignore[no-untyped-def]
         captured_calls.append((text, tags or []))
         return True
 

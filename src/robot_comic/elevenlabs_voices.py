@@ -6,7 +6,6 @@ API is unreachable.
 """
 
 import logging
-from typing import Optional
 
 import httpx
 
@@ -16,20 +15,22 @@ from robot_comic.config import config
 logger = logging.getLogger(__name__)
 
 # Hardcoded fallback: Prebuilt ElevenLabs voices from Turbo v2.5 standard set
-_FALLBACK_VOICE_NAMES = [
-    "Adam",
-    "Bella",
-    "Antoni",
-    "Domi",
-    "Elli",
-    "Gigi",
-    "Freya",
-    "Harry",
-    "Liam",
-    "Rachel",
-    "River",
-    "Sam",
-]
+# mapped to their canonical voice IDs. Used when the /v1/voices API is
+# unreachable; mapping a name to itself would 400/404 against /text-to-speech/<id>.
+_FALLBACK_VOICES: dict[str, str] = {
+    "Rachel": "21m00Tcm4ijWNoXd58YU",
+    "Adam": "pNInz6obpgDQGcFmaJgB",
+    "Antoni": "ErXwobaYiN019PkySvjV",
+    "Bella": "EXAVITQu4vr4xnSDxMaL",
+    "Domi": "AZnzlk1XvdvUeBnXmlld",
+    "Elli": "MF3mGyEYCl7XYWbV9V6O",
+    "Gigi": "jBpfuIE2acCO8z3wKNLl",
+    "Freya": "jsCqWAovK2LkecY7zXl4",
+    "Harry": "SOYHLrjzK2X1ezoPC6cr",
+    "Liam": "TX3LPaxmHKxFdv7VOQHJ",
+    "River": "SAz9YHcvj6GT2YYXdXww",
+    "Sam": "yoZ06aMxZJJ28mfd3POQ",
+}
 
 # Cache: filled by fetch_elevenlabs_voices() at startup
 _voice_cache: dict[str, str] | None = None
@@ -53,7 +54,7 @@ async def fetch_elevenlabs_voices() -> dict[str, str]:
     api_key = config.ELEVENLABS_API_KEY
     if not api_key:
         logger.warning("ELEVENLABS_API_KEY not configured; using fallback voice catalog")
-        _voice_cache = {name: name for name in _FALLBACK_VOICE_NAMES}
+        _voice_cache = dict(_FALLBACK_VOICES)
         return _voice_cache
 
     try:
@@ -81,12 +82,12 @@ async def fetch_elevenlabs_voices() -> dict[str, str]:
                 return _voice_cache
             else:
                 logger.warning("ElevenLabs API returned empty voice list; using fallback")
-                _voice_cache = {name: name for name in _FALLBACK_VOICE_NAMES}
+                _voice_cache = dict(_FALLBACK_VOICES)
                 return _voice_cache
 
     except Exception as exc:
         logger.warning("Failed to fetch ElevenLabs voices: %s; using fallback", exc)
-        _voice_cache = {name: name for name in _FALLBACK_VOICE_NAMES}
+        _voice_cache = dict(_FALLBACK_VOICES)
         return _voice_cache
 
 
@@ -97,4 +98,4 @@ def get_elevenlabs_voices() -> dict[str, str]:
     """
     if _voice_cache is not None:
         return _voice_cache
-    return {name: name for name in _FALLBACK_VOICE_NAMES}
+    return dict(_FALLBACK_VOICES)
