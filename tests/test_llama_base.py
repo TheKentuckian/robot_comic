@@ -724,7 +724,7 @@ async def test_stream_llm_deltas_accumulates_tool_calls() -> None:
             [
                 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"s"}}]},"finish_reason":null}]}',
                 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"tyle\\":\\"wave"}}]},"finish_reason":null}]}',
-                'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"}"}]},"finish_reason":"stop"}]}',
+                'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"}"}}]},"finish_reason":"stop"}]}',
                 "data: [DONE]",
             ]
         )
