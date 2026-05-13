@@ -250,8 +250,14 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                 if idx not in tool_calls_by_idx:
                     tool_calls_by_idx[idx] = {
                         "index": idx,
+                        "id": "",
+                        "type": "function",
                         "function": {"name": "", "arguments": ""},
                     }
+                if delta.get("id"):
+                    tool_calls_by_idx[idx]["id"] = delta["id"]
+                if delta.get("tc_type"):
+                    tool_calls_by_idx[idx]["type"] = delta["tc_type"]
                 if delta.get("name"):
                     tool_calls_by_idx[idx]["function"]["name"] = delta["name"]
                 if delta.get("arguments") is not None:
@@ -607,23 +613,29 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                                     }
 
                                 # Emit tool call deltas. OpenAI-compatible streams
-                                # typically send the function name in one chunk and
-                                # argument fragments in subsequent chunks; carry both.
+                                # typically send the function name + id + type in
+                                # one chunk and argument fragments in subsequent
+                                # chunks; carry all four. llama-server's chat
+                                # template requires id + type in the follow-up
+                                # request and 500s without them.
                                 if "tool_calls" in delta:
                                     for tool_call in delta["tool_calls"]:
                                         if "index" in tool_call:
                                             idx = tool_call["index"]
-                                            if "function" in tool_call:
-                                                fn = tool_call["function"]
-                                                name = fn.get("name")
-                                                arguments = fn.get("arguments")
-                                                if name is not None or arguments is not None:
-                                                    yield {
-                                                        "type": "tool_call_delta",
-                                                        "index": idx,
-                                                        "name": name,
-                                                        "arguments": arguments,
-                                                    }
+                                            tc_id = tool_call.get("id")
+                                            tc_type = tool_call.get("type")
+                                            fn = tool_call.get("function") or {}
+                                            name = fn.get("name")
+                                            arguments = fn.get("arguments")
+                                            if any(v is not None for v in (tc_id, tc_type, name, arguments)):
+                                                yield {
+                                                    "type": "tool_call_delta",
+                                                    "index": idx,
+                                                    "id": tc_id,
+                                                    "tc_type": tc_type,
+                                                    "name": name,
+                                                    "arguments": arguments,
+                                                }
 
                                 # Emit finish when we have finish_reason
                                 if finish_reason is not None:
@@ -670,8 +682,14 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                 if idx not in tool_calls_by_idx:
                     tool_calls_by_idx[idx] = {
                         "index": idx,
+                        "id": "",
+                        "type": "function",
                         "function": {"name": "", "arguments": ""},
                     }
+                if delta.get("id"):
+                    tool_calls_by_idx[idx]["id"] = delta["id"]
+                if delta.get("tc_type"):
+                    tool_calls_by_idx[idx]["type"] = delta["tc_type"]
                 if delta.get("name"):
                     tool_calls_by_idx[idx]["function"]["name"] = delta["name"]
                 if delta.get("arguments") is not None:
