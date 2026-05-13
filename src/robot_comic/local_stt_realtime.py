@@ -103,6 +103,11 @@ class _MoonshineListener:  # base class is attached dynamically in _build_local_
 class LocalSTTInputMixin:
     """Mixin that replaces upstream mic-audio transport with local Moonshine STT."""
 
+    # Declared here so mypy sees them on the mixin; the concrete base class
+    # provides the actual values via super().__init__().
+    deps: ToolDependencies
+    output_queue: asyncio.Queue[Any]
+
     def __init__(
         self,
         deps: ToolDependencies,
@@ -127,7 +132,7 @@ class LocalSTTInputMixin:
         self._local_loop: asyncio.AbstractEventLoop | None = None
         self._last_completed_transcript: str = ""
         self._last_completed_at: float = 0.0
-        self._heartbeat: dict = {
+        self._heartbeat: dict[str, Any] = {
             "state": "idle",
             "last_event": None,
             "last_text": "",
