@@ -125,6 +125,28 @@ def _expand_prompt_includes(content: str) -> str:
     return "\n".join(expanded_lines)
 
 
+def _append_joke_history(instructions: str) -> str:
+    """Append the joke history "don't repeat" section if the feature is enabled.
+
+    Returns *instructions* unchanged when the feature is disabled or history is empty.
+    """
+    enabled: bool = getattr(config, "JOKE_HISTORY_ENABLED", True)
+    if not enabled:
+        return instructions
+
+    try:
+        from robot_comic.joke_history import JokeHistory, default_history_path
+
+        history = JokeHistory(default_history_path())
+        block = history.format_for_prompt()
+        if block:
+            return instructions.rstrip() + "\n\n" + block
+    except Exception as exc:
+        logger.debug("Could not load joke history for prompt injection: %s", exc)
+
+    return instructions
+
+
 def get_session_instructions() -> str:
     """Get session instructions, loading from REACHY_MINI_CUSTOM_PROFILE if set."""
     profile = config.REACHY_MINI_CUSTOM_PROFILE
@@ -150,7 +172,9 @@ def get_session_instructions() -> str:
                 expanded_instructions = _expand_prompt_includes(instructions)
                 # Strip GEMINI TTS DELIVERY TAGS section for backends that do
                 # not consume it (avoids wasted tokens + accidental tag leakage).
-                return _filter_delivery_tags(expanded_instructions)
+                filtered = _filter_delivery_tags(expanded_instructions)
+                # Append joke history "don't repeat" block when enabled.
+                return _append_joke_history(filtered)
             logger.error(f"Profile '{profile}' has empty {INSTRUCTIONS_FILENAME}")
             sys.exit(1)
         logger.error(f"Profile {profile} has no {INSTRUCTIONS_FILENAME}")

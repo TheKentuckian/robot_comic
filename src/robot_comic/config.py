@@ -601,6 +601,10 @@ class Config:
     WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
     WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None
 
+    # Persist recent punchlines across sessions and inject a "don't repeat"
+    # section into the system prompt.  Set to 0/false to disable.
+    JOKE_HISTORY_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_ENABLED", default=True)
+
     # When set to 1/true, forces the GEMINI TTS DELIVERY TAGS section to be
     # included in the assembled system prompt regardless of the active backend.
     # Useful for debugging or testing delivery-tag behaviour on any backend.
@@ -744,6 +748,7 @@ def refresh_runtime_config_from_env() -> None:
     config.ROBOT_INSTRUMENTATION = os.getenv("ROBOT_INSTRUMENTATION", "")
     config.WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
     config.WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None
+    config.JOKE_HISTORY_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_ENABLED", default=True)
     config.FORCE_DELIVERY_TAGS = _env_flag("REACHY_MINI_FORCE_DELIVERY_TAGS", default=False)
 
 
