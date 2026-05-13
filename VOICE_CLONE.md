@@ -248,7 +248,8 @@ Leaves ~1.5 GB headroom. Both processes can be co-resident.
   ffmpeg -i raw_rickles.wav -ss 00:01:23 -t 8 -ar 22050 -ac 1 rickles_ref.wav
   ```
 - [ ] Confirm: mono, 22050 Hz, no clipping, no background noise
-- [ ] Store at: `D:\Projects\robot_comic\profiles\don_rickles\voice_ref.wav`
+- [ ] Store at: `profiles/don_rickles/voice_ref.wav` (local only — `profiles/*/voice_ref.wav`
+      is gitignored; archival source audio must not be committed to this public fork)
 
 ### Task 11: Test Zero-Shot Clone via Chatterbox Web UI
 
