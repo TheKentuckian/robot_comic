@@ -11,7 +11,6 @@ import pytest
 from fastrtc import AdditionalOutputs
 
 import robot_comic.gemini_live as gemini_mod
-import robot_comic.tools.core_tools as ct_mod
 from robot_comic.gemini_live import GeminiLiveHandler, _strip_tts_delivery_tags
 from robot_comic.tools.core_tools import ToolDependencies
 from robot_comic.tools.tool_constants import ToolState
@@ -354,15 +353,22 @@ def test_gemini_excludes_head_tracking_when_no_head_tracker(monkeypatch) -> None
     monkeypatch.setattr(gemini_mod, "get_session_instructions", lambda: "test")
     monkeypatch.setattr(gemini_mod, "get_session_voice", lambda: "Kore")
 
-    # mock ALL_TOOL_SPECS to include at least head_tracking and one other tool, to verify that only head_tracking is excluded, not all tools
-    monkeypatch.setattr(
-        ct_mod,
-        "ALL_TOOL_SPECS",
-        [
-            {"type": "function", "name": "head_tracking", "description": "head_tracking", "parameters": {}},
-            {"type": "function", "name": "fake_tool", "description": "fake_tool", "parameters": {}},
-        ],
-    )
+    # Monkeypatch get_active_tool_specs on the gemini_mod namespace (where it is
+    # bound at import time) so _build_live_config sees the controlled spec list.
+    # Patching ct_mod.ALL_TOOL_SPECS instead would not work reliably because
+    # get_active_tool_specs calls _initialize_tools() which rebinds ALL_TOOL_SPECS
+    # from the real registry, stomping the monkeypatch before it can be read.
+    _FAKE_SPECS = [
+        {"type": "function", "name": "head_tracking", "description": "head_tracking", "parameters": {}},
+        {"type": "function", "name": "fake_tool", "description": "fake_tool", "parameters": {}},
+    ]
+
+    def _fake_get_active_tool_specs(deps: ToolDependencies) -> list:
+        if not (deps.camera_worker and deps.camera_worker.head_tracker):
+            return [s for s in _FAKE_SPECS if s["name"] != "head_tracking"]
+        return list(_FAKE_SPECS)
+
+    monkeypatch.setattr(gemini_mod, "get_active_tool_specs", _fake_get_active_tool_specs)
 
     # case 1: no camera at all, --no-camera flag passed
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock(), camera_worker=None)
