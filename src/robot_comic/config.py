@@ -613,6 +613,14 @@ class Config:
     WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
     WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None
 
+    # Kiosk-mode startup screen: play a welcome prompt + persona listing before
+    # the first persona is selected.  Off by default to preserve existing flows.
+    STARTUP_SCREEN_ENABLED = _env_flag("REACHY_MINI_STARTUP_SCREEN", default=False)
+    # Optional comma-separated list of profile names used to curate persona
+    # listing order.  Unrecognised names are silently skipped; remaining profiles
+    # are appended alphabetically.  Empty / unset → fully alphabetical.
+    STARTUP_SCREEN_PERSONA_ORDER = os.getenv("REACHY_MINI_STARTUP_SCREEN_PERSONA_ORDER") or ""
+
     # Persist recent punchlines across sessions and inject a "don't repeat"
     # section into the system prompt.  Set to 0/false to disable.
     JOKE_HISTORY_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_ENABLED", default=True)
@@ -764,6 +772,8 @@ def refresh_runtime_config_from_env() -> None:
     config.ROBOT_INSTRUMENTATION = os.getenv("ROBOT_INSTRUMENTATION", "")
     config.WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
     config.WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None
+    config.STARTUP_SCREEN_ENABLED = _env_flag("REACHY_MINI_STARTUP_SCREEN", default=False)
+    config.STARTUP_SCREEN_PERSONA_ORDER = os.getenv("REACHY_MINI_STARTUP_SCREEN_PERSONA_ORDER") or ""
     config.JOKE_HISTORY_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_ENABLED", default=True)
     config.FORCE_DELIVERY_TAGS = _env_flag("REACHY_MINI_FORCE_DELIVERY_TAGS", default=False)
 

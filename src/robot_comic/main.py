@@ -354,6 +354,22 @@ def run(
 
     log_checkpoint("handler ready", logger)
 
+    # Kiosk-mode startup screen: opt-in welcome prompt + dynamic persona listing.
+    # Runs before the per-persona greeting so the two never overlap.
+    if not args.sim and config.STARTUP_SCREEN_ENABLED:
+        try:
+            from robot_comic.startup_screen import run_startup_screen
+
+            asyncio.get_event_loop().run_until_complete(
+                run_startup_screen(
+                    chatterbox_url=config.CHATTERBOX_URL,
+                    profiles_dir=config.PROFILES_DIRECTORY,
+                    persona_order=config.STARTUP_SCREEN_PERSONA_ORDER,
+                )
+            )
+        except Exception as _ss_exc:
+            logger.warning("startup_screen: failed (continuing): %s", _ss_exc)
+
     stream_manager: Any = None
 
     if args.sim:
