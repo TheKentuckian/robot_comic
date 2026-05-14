@@ -95,7 +95,9 @@ class _PosixBackend(_InputBackend):
 
             self._fd = sys.stdin.fileno()
             self._old_settings: Optional[list[Any]] = termios.tcgetattr(self._fd)
-            tty.cbreak(self._fd)
+            # `setcbreak` is the documented name; `cbreak` is an undocumented
+            # alias mypy's stubs don't expose. Same behaviour.
+            tty.setcbreak(self._fd)
         except Exception:
             # stdin is not a tty (e.g. redirected in tests) — fall back to a
             # no-op backend so callers don't crash.
