@@ -20,7 +20,7 @@
 #        profiles/*/welcome_name.wav
 #      Any OTHER audio file under profiles/ is blocked here.
 #    - Under assets/welcome/, only these four filenames are safe:
-#        welcome.wav  list_intro.wav  not_understood.wav  switching.wav
+#        welcome.wav  welcome_intro.wav  welcome_picker.wav  list_intro.wav  not_understood.wav  switching.wav
 #      Anything else under assets/welcome/ is blocked.
 #
 # 3. ElevenLabs voice_id leak prevention:
@@ -101,7 +101,7 @@ STAGED_FILES=$(git diff --cached --name-only --diff-filter=AM 2>/dev/null) || tr
 AUDIO_EXT_RE='\.(wav|mp3|flac|ogg)$'
 
 # Known-safe filenames under assets/welcome/
-SAFE_WELCOME_NAMES=( "welcome.wav" "list_intro.wav" "not_understood.wav" "switching.wav" )
+SAFE_WELCOME_NAMES=( "welcome.wav" "welcome_intro.wav" "welcome_picker.wav" "list_intro.wav" "not_understood.wav" "switching.wav" )
 
 is_safe_welcome() {
   local f="$1"   # e.g. assets/welcome/welcome.wav
