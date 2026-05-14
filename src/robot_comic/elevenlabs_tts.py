@@ -45,7 +45,7 @@ from robot_comic.gemini_retry import (
 )
 from robot_comic.history_trim import trim_history_in_place
 from robot_comic.tools.core_tools import ToolDependencies, dispatch_tool_call, get_active_tool_specs
-from robot_comic.elevenlabs_voices import get_elevenlabs_voices
+from robot_comic.elevenlabs_voices import resolve_voice_id_by_name
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.conversation_handler import ConversationHandler
 from robot_comic.chatterbox_tag_translator import strip_gemini_tags
@@ -312,31 +312,29 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             return env_voice
         config_params = load_profile_elevenlabs_config()
         voice = config_params.get("voice") or ELEVENLABS_DEFAULT_VOICE
-        # Custom voice_id (e.g. a PVC clone) is permitted and takes precedence over
-        # the named-voice list. The cloned voice has its own ID; the "voice" name
-        # is informational only.
-        if config_params.get("voice_id"):
-            return voice
-        if voice not in ELEVENLABS_AVAILABLE_VOICES:
-            logger.warning(
-                "Voice %r is not a valid ElevenLabs voice; falling back to %s", voice, ELEVENLABS_DEFAULT_VOICE
-            )
-            return ELEVENLABS_DEFAULT_VOICE
+        # We no longer gate on `voice in ELEVENLABS_AVAILABLE_VOICES` here — the
+        # API returns prebuilt voices with decorated names (e.g. "Brian - Deep,
+        # Resonant and Comforting") so an exact-name gate would force every
+        # profile to use the verbose form. Smart resolution (exact → prefix →
+        # case-insensitive → fallback → first premade) happens in
+        # `_resolve_voice_id` via `resolve_voice_id_by_name`.
         return voice
 
     def _resolve_voice_id(self) -> str | None:
         """Resolve the ElevenLabs voice ID.
 
         Profile config `voice_id=<id>` takes precedence (e.g. PVC clones).
-        Otherwise map the named voice via the dynamic voice catalog.
+        Otherwise map the named voice via the dynamic voice catalog using
+        word-boundary prefix matching so configured short names like
+        ``voice=Brian`` resolve to API-decorated names like
+        ``"Brian - Deep, Resonant and Comforting"``.
         """
         config_params = load_profile_elevenlabs_config()
         custom_id = config_params.get("voice_id")
         if custom_id:
             return custom_id
         voice_name = self.get_current_voice()
-        voice_catalog = get_elevenlabs_voices()
-        return voice_catalog.get(voice_name)
+        return resolve_voice_id_by_name(voice_name, fallback_name=ELEVENLABS_DEFAULT_VOICE)
 
     async def change_voice(self, voice: str) -> str:
         self._voice_override = voice
