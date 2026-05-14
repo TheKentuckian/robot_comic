@@ -28,8 +28,10 @@ from robot_comic.config import (
     config,
 )
 from robot_comic.prompts import get_session_instructions
+from robot_comic.audio_gain import normalize_gain
 from robot_comic.llama_base import _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
 from robot_comic.wake_on_lan import send_magic_packet
+from robot_comic.tools.core_tools import get_active_tool_specs
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.chatterbox_voice_clone import load_voice_clone_ref
 from robot_comic.chatterbox_tag_translator import translate
