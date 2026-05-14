@@ -224,3 +224,22 @@ If you ever re-examine the PVC code path for any reason:
 - **IVC voice quality scales with clip diversity.** Ten varied 30-second clips
   (different energy levels, sentence lengths, pauses) outperform thirty uniform
   clips from the same passage.
+
+---
+
+## Per-persona source recommendations
+
+Detailed source notes — recommended YouTube/Netflix specials, yt-dlp download
+commands, `scan_segments.py` invocations, and quality caveats — live alongside
+each profile:
+
+| Persona | Source notes |
+|---|---|
+| Don Rickles | (reference persona — no source notes file; see the `voice_prep/` scripts for the extraction workflow used) |
+| Richard Pryor | [`profiles/richard_pryor/voice_prep/SOURCE_NOTES.md`](../profiles/richard_pryor/voice_prep/SOURCE_NOTES.md) |
+| Dave Chappelle | [`profiles/dave_chappelle/voice_prep/SOURCE_NOTES.md`](../profiles/dave_chappelle/voice_prep/SOURCE_NOTES.md) |
+
+These files are **research-only**. No audio is committed to the repo. The
+ElevenLabs ToS prohibition on cloning living or deceased public figures
+without written permission applies; see the "Don't use PVC in this project"
+section above for the full policy context.
