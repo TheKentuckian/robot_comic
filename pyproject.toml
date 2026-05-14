@@ -197,3 +197,9 @@ ignore_missing_imports = true
 strict = true
 show_error_codes = true
 warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+markers = [
+  "integration: end-to-end smoke tests; skipped by default. Run with `pytest -m integration`.",
+]
+addopts = "-m 'not integration'"
