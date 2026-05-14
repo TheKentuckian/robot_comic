@@ -1,11 +1,21 @@
 """Gesture tool — lets the LLM trigger pre-canned movement sequences.
 
 Personas opt in by listing ``gesture`` in their ``tools.txt``.
+
+The tool accepts either:
+- ``name=<canonical>`` — play a gesture directly by its canonical name
+  (shrug, nod_yes, nod_no, point_left, point_right, scan, lean_in).
+- ``beat=<abstract>`` — resolve via the active persona's ``gestures.txt``
+  mapping (disapproval, agreement, punchline_setup, etc.) and then play
+  the resulting canonical gesture.
+
+Providing both ``name`` and ``beat`` is valid; ``name`` takes precedence.
 """
 
 from __future__ import annotations
 import logging
 from typing import Any, Dict
+from pathlib import Path
 
 from robot_comic.tools.core_tools import Tool, ToolDependencies
 
@@ -21,20 +31,36 @@ def _get_registry() -> Any:
     return registry
 
 
+def _get_active_profile_dir() -> Path | None:
+    """Return the active persona's profile directory, or None if unavailable."""
+    try:
+        from robot_comic.config import config  # noqa: PLC0415
+
+        profile = config.REACHY_MINI_CUSTOM_PROFILE or "default"
+        return config.PROFILES_DIRECTORY / profile
+    except Exception:
+        return None
+
+
 class Gesture(Tool):
     """Play a named gesture (pre-canned movement sequence).
 
-    Available gestures: shrug, nod_yes, nod_no, point_left, point_right,
-    scan, lean_in.
+    Accepts a canonical ``name`` (shrug, nod_yes, nod_no, point_left,
+    point_right, scan, lean_in) **or** an abstract ``beat`` name that
+    is resolved to a canonical gesture via the active persona's
+    ``gestures.txt`` mapping.
     """
 
     name = "gesture"
     description = (
-        "Play a pre-canned physical gesture. Use to add expressive body "
-        "language that matches your delivery: shrug when uncertain, nod_yes "
-        "to agree, nod_no to disagree, point_left / point_right to direct "
-        "attention, scan to survey the audience, lean_in when sharing a "
-        "punchline or aside."
+        "Play a pre-canned physical gesture. Use either a canonical gesture "
+        "name (name=) or an abstract beat name (beat=) that maps to the "
+        "persona's preferred gesture for that dramatic moment. "
+        "Canonical names: shrug, nod_yes, nod_no, point_left, point_right, "
+        "scan, lean_in. "
+        "Abstract beats: disapproval, agreement, reflection, character_switch, "
+        "punchline_setup, punchline_drop, dismissal, acknowledgement, surprise, "
+        "defeat, swagger, vulnerability."
     )
     parameters_schema = {
         "type": "object",
@@ -51,7 +77,7 @@ class Gesture(Tool):
                     "lean_in",
                 ],
                 "description": (
-                    "Gesture to perform. "
+                    "Canonical gesture to perform. "
                     "shrug — uncertain / comic timing; "
                     "nod_yes — affirmative; "
                     "nod_no — negative / dismissive; "
@@ -60,24 +86,110 @@ class Gesture(Tool):
                     "lean_in — conspiratorial aside or punchline build-up."
                 ),
             },
+            "beat": {
+                "type": "string",
+                "enum": [
+                    "disapproval",
+                    "agreement",
+                    "reflection",
+                    "character_switch",
+                    "punchline_setup",
+                    "punchline_drop",
+                    "dismissal",
+                    "acknowledgement",
+                    "surprise",
+                    "defeat",
+                    "swagger",
+                    "vulnerability",
+                ],
+                "description": (
+                    "Abstract beat name resolved to a canonical gesture via "
+                    "the active persona's gestures.txt. Prefer beat= over "
+                    "name= when you are expressing a dramatic moment rather "
+                    "than a specific physical shape: "
+                    "disapproval — rejecting a premise; "
+                    "agreement — validating; "
+                    "reflection — thinking pause; "
+                    "character_switch — transitioning to a character voice; "
+                    "punchline_setup — build-up before the joke lands; "
+                    "punchline_drop — physical resolution after the punchline; "
+                    "dismissal — sending someone off; "
+                    "acknowledgement — greeting recognition; "
+                    "surprise — caught off guard; "
+                    "defeat — resigned collapse; "
+                    "swagger — confident wind-up; "
+                    "vulnerability — tender honest moment."
+                ),
+            },
         },
-        "required": ["name"],
+        # Either name or beat is required; both can be supplied (name wins).
+        "anyOf": [{"required": ["name"]}, {"required": ["beat"]}],
     }
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
-        """Play the requested gesture."""
-        gesture_name = kwargs.get("name")
-        if not isinstance(gesture_name, str) or not gesture_name:
-            return {"error": "gesture name must be a non-empty string"}
+        """Play the requested gesture, resolving beats if necessary."""
+        gesture_name: str | None = kwargs.get("name")
+        beat: str | None = kwargs.get("beat")
 
-        logger.info("Tool call: gesture name=%s", gesture_name)
+        # Resolve beat → canonical name when name is not provided directly.
+        if not gesture_name and beat:
+            gesture_name = self._resolve_beat(beat)
+            if gesture_name is None:
+                # Resolution failed — error was already logged; return gracefully.
+                return {
+                    "error": (
+                        f"Beat {beat!r} is not mapped for the active persona. "
+                        "Use name= with a canonical gesture name instead."
+                    )
+                }
+
+        if not isinstance(gesture_name, str) or not gesture_name:
+            return {"error": "provide either name=<canonical> or beat=<abstract>"}
+
+        logger.info("Tool call: gesture name=%s (beat=%s)", gesture_name, beat)
 
         try:
             reg = _get_registry()
             reg.play(gesture_name, deps.movement_manager)
-            return {"status": "queued", "gesture": gesture_name}
+            result: Dict[str, Any] = {"status": "queued", "gesture": gesture_name}
+            if beat:
+                result["beat"] = beat
+            return result
         except KeyError as exc:
             return {"error": str(exc)}
         except Exception as exc:
             logger.error("gesture tool failed: %s", exc)
             return {"error": f"gesture failed: {type(exc).__name__}: {exc}"}
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_beat(self, beat: str) -> str | None:
+        """Resolve an abstract beat name to a canonical gesture name.
+
+        Returns the gesture name on success, or None on failure (error
+        is logged; callers should return an error dict to the LLM).
+        """
+        try:
+            from robot_comic.gestures.registry import load_persona_beats  # noqa: PLC0415
+
+            profile_dir = _get_active_profile_dir()
+            if profile_dir is None:
+                logger.warning("gesture tool: cannot determine active profile dir for beat resolution")
+                return None
+
+            persona_beats = load_persona_beats(profile_dir)
+            if not persona_beats:
+                logger.debug("gesture tool: no beats file for profile %s", profile_dir.name)
+                return None
+
+            reg = _get_registry()
+            result: str = reg.resolve_for_persona(beat, persona_beats)
+            return result
+        except KeyError as exc:
+            logger.warning("gesture tool: beat resolution failed: %s", exc)
+            return None
+        except Exception as exc:
+            logger.error("gesture tool: unexpected error resolving beat %r: %s", beat, exc)
+            return None
