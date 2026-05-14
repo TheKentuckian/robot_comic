@@ -668,6 +668,16 @@ class Config:
     # local STT pipeline.  Default is False (gate disabled).
     WELCOME_GATE_ENABLED = _env_flag("REACHY_MINI_WELCOME_GATE_ENABLED", default=False)
 
+    # Echo-guard cooldown after assistant audio ends. Bumped via env var when
+    # speakers/mics have unusual latency. Used by emit() in both llama_base
+    # and elevenlabs_tts response handlers.
+    ECHO_COOLDOWN_MS = int(os.getenv(ECHO_COOLDOWN_MS_ENV, str(DEFAULT_ECHO_COOLDOWN_MS)))
+
+    # Kiosk-mode startup screen: when enabled, plays a short generic-voice
+    # intro + persona listing before the per-persona greeting begins.
+    STARTUP_SCREEN_ENABLED = _env_flag("REACHY_MINI_STARTUP_SCREEN", default=False)
+    STARTUP_SCREEN_PERSONA_ORDER = os.getenv("REACHY_MINI_STARTUP_SCREEN_PERSONA_ORDER", "")
+
     logger.debug(
         "Backend provider: %s, Model: %s, HF mode: %s, HF session URL set: %s, HF direct URL set: %s, HF_HOME: %s, Vision Model: %s, Local STT: %s/%s/%s response=%s cache=%s",
         BACKEND_PROVIDER,
@@ -819,6 +829,9 @@ def refresh_runtime_config_from_env() -> None:
     config.JOKE_HISTORY_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_ENABLED", default=True)
     config.FORCE_DELIVERY_TAGS = _env_flag("REACHY_MINI_FORCE_DELIVERY_TAGS", default=False)
     config.WELCOME_GATE_ENABLED = _env_flag("REACHY_MINI_WELCOME_GATE_ENABLED", default=False)
+    config.ECHO_COOLDOWN_MS = int(os.getenv(ECHO_COOLDOWN_MS_ENV, str(DEFAULT_ECHO_COOLDOWN_MS)))
+    config.STARTUP_SCREEN_ENABLED = _env_flag("REACHY_MINI_STARTUP_SCREEN", default=False)
+    config.STARTUP_SCREEN_PERSONA_ORDER = os.getenv("REACHY_MINI_STARTUP_SCREEN_PERSONA_ORDER", "")
 
 
 def get_backend_choice(model_name: str | None = None) -> str:
