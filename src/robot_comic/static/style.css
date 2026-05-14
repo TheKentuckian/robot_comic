@@ -461,6 +461,78 @@ button:disabled {
   gap: 10px;
 }
 
+/* 3-column pipeline axis grid (STT / LLM / TTS) */
+.pipeline-axis-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 1rem;
+  margin-block: 1rem;
+}
+
+.pipeline-axis {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+  min-width: 0;
+}
+
+.pipeline-axis legend {
+  font-weight: 600;
+  padding: 0 0.5rem;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.pipeline-cell {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-radius: 8px;
+  cursor: pointer;
+  margin: 0;
+  transition: background 0.1s ease;
+}
+
+.pipeline-cell:hover:not(.disabled) {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.pipeline-cell.is-selected {
+  background: rgba(94, 240, 193, 0.08);
+}
+
+.pipeline-cell.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pipeline-cell input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.pipeline-cell input[disabled] {
+  cursor: not-allowed;
+}
+
+.pipeline-cell span {
+  display: grid;
+  gap: 3px;
+}
+
+.pipeline-cell strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.pipeline-cell small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .output-choice {
   display: flex;
   gap: 10px;
@@ -618,6 +690,7 @@ button:disabled {
   }
   .backend-choice-grid { grid-template-columns: 1fr; }
   .output-choice-grid { grid-template-columns: 1fr; }
+  .pipeline-axis-grid { grid-template-columns: 1fr; }
   .hf-config-grid { grid-template-columns: 1fr; }
   .row { grid-template-columns: 1fr; }
   #personality-panel .row:first-of-type { grid-template-columns: 1fr; }

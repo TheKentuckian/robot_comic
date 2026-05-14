@@ -9,6 +9,44 @@ const LLAMA_ELEVENLABS_TTS_OUTPUT = "llama_elevenlabs_tts";
 const DEFAULT_BACKEND = HF_BACKEND;
 const HF_DEFAULT_HOST = "localhost";
 const HF_DEFAULT_PORT = 8765;
+
+// LLM axis values for the 3-column pipeline picker
+const LLM_BACKEND_LLAMA = "llama";
+const LLM_BACKEND_GEMINI = "gemini";
+
+/**
+ * Maps (llm_axis|output_axis) to the legacy single-string backend value used
+ * by /backend_config (local_stt_response_backend) and the LLM backend env var.
+ *
+ * Bundled handlers (openai / huggingface) ignore the LLM column — they are
+ * self-contained. Undefined entries are unsupported combinations.
+ */
+const PIPELINE_TO_BACKEND = {
+  [`${LLM_BACKEND_LLAMA}|${CHATTERBOX_OUTPUT}`]:  { output: CHATTERBOX_OUTPUT,        llm_backend: LLM_BACKEND_LLAMA },
+  [`${LLM_BACKEND_LLAMA}|${ELEVENLABS_OUTPUT}`]:  { output: LLAMA_ELEVENLABS_TTS_OUTPUT, llm_backend: LLM_BACKEND_LLAMA },
+  [`${LLM_BACKEND_LLAMA}|${GEMINI_TTS_OUTPUT}`]:  { output: GEMINI_TTS_OUTPUT,         llm_backend: LLM_BACKEND_LLAMA },
+  [`${LLM_BACKEND_LLAMA}|${OPENAI_BACKEND}`]:     { output: OPENAI_BACKEND,            llm_backend: LLM_BACKEND_LLAMA },
+  [`${LLM_BACKEND_LLAMA}|${HF_BACKEND}`]:         { output: HF_BACKEND,                llm_backend: LLM_BACKEND_LLAMA },
+  [`${LLM_BACKEND_GEMINI}|${CHATTERBOX_OUTPUT}`]: { output: CHATTERBOX_OUTPUT,         llm_backend: LLM_BACKEND_GEMINI },
+  [`${LLM_BACKEND_GEMINI}|${ELEVENLABS_OUTPUT}`]: { output: ELEVENLABS_OUTPUT,         llm_backend: LLM_BACKEND_GEMINI },
+  // gemini_tts + gemini LLM is redundant (uses Gemini for both — handled as llama path)
+  // openai/hf realtime do not support a separate LLM backend
+};
+
+/**
+ * Output values that are only supported with llama.cpp (not Gemini text).
+ * These cells are disabled when Gemini text LLM is selected.
+ */
+const GEMINI_LLM_UNSUPPORTED_OUTPUTS = new Set([GEMINI_TTS_OUTPUT, OPENAI_BACKEND, HF_BACKEND]);
+
+/**
+ * Bundled output backends: selecting them auto-selects the matching LLM slot
+ * (and vice versa) — the LLM and TTS are inseparable for these handlers.
+ */
+const BUNDLED_OUTPUT_TO_LLM = {
+  [OPENAI_BACKEND]: OPENAI_BACKEND,
+  [HF_BACKEND]: HF_BACKEND,
+};
 const BACKEND_META = {
   [OPENAI_BACKEND]: {
     label: "OpenAI Realtime",
@@ -240,11 +278,13 @@ async function saveBackendConfig(backend, { key = "", hfMode = "", hfHost = "", 
     const languageEl = document.getElementById("local-stt-language");
     const cacheEl = document.getElementById("local-stt-cache");
     const responseEl = document.getElementById("local-stt-response");
+    const llmBackendEl = document.getElementById("local-stt-llm-backend");
     const modelEl = document.getElementById("local-stt-model");
     const updateEl = document.getElementById("local-stt-update");
     body.local_stt_language = (languageEl?.value || "en").trim();
     body.local_stt_cache_dir = (cacheEl?.value || "./cache/moonshine_voice").trim();
     body.local_stt_response_backend = responseEl?.value || OPENAI_BACKEND;
+    body.llm_backend = (llmBackendEl?.value || LLM_BACKEND_LLAMA).trim();
     body.local_stt_model = modelEl?.value || "tiny_streaming";
     const updateInterval = Number.parseFloat((updateEl?.value || "0.35").trim());
     if (Number.isFinite(updateInterval)) body.local_stt_update_interval = updateInterval;
@@ -630,6 +670,10 @@ async function init() {
     if (chatterboxUrl) chatterboxUrl.value = status.chatterbox_url || "http://astralplane.lan:8004";
     if (chatterboxVoice) chatterboxVoice.value = status.chatterbox_voice || "don_rickles";
     elevenlabsSavedVoice = status.elevenlabs_voice || "";
+    // Restore LLM backend axis from server status (added by #245)
+    const llmBackendEl = document.getElementById("local-stt-llm-backend");
+    const restoredLlm = status.llm_backend || LLM_BACKEND_LLAMA;
+    if (llmBackendEl) llmBackendEl.value = restoredLlm;
     setSelectedLocalSTTOutput(localSttResponse.value || OPENAI_BACKEND);
   }
 
@@ -710,34 +754,121 @@ async function init() {
     });
   }
 
-  function setSelectedLocalSTTOutput(outputBackend) {
-    const normalized = outputBackend === HF_BACKEND
-      ? HF_BACKEND
-      : outputBackend === GEMINI_TTS_OUTPUT
-        ? GEMINI_TTS_OUTPUT
-        : outputBackend === CHATTERBOX_OUTPUT
-          ? CHATTERBOX_OUTPUT
-          : outputBackend === ELEVENLABS_OUTPUT
-            ? ELEVENLABS_OUTPUT
-            : outputBackend === LLAMA_ELEVENLABS_TTS_OUTPUT
-              ? LLAMA_ELEVENLABS_TTS_OUTPUT
-              : OPENAI_BACKEND;
-    localSttResponse.value = normalized;
+  /**
+   * Map a legacy response-backend string to the (llm, output) pair used by
+   * the 3-column picker. The hidden select and llm-backend input stay as the
+   * source of truth for the server save path.
+   */
+  function legacyBackendToAxes(backend) {
+    switch (backend) {
+      case LLAMA_ELEVENLABS_TTS_OUTPUT:
+        return { llm: LLM_BACKEND_LLAMA, output: ELEVENLABS_OUTPUT };
+      case GEMINI_TTS_OUTPUT:
+        // gemini_tts: historically uses Gemini for LLM too — keep llama slot
+        // consistent since we write llm_backend=llama on save for this path.
+        return { llm: LLM_BACKEND_LLAMA, output: GEMINI_TTS_OUTPUT };
+      case CHATTERBOX_OUTPUT:
+        return { llm: LLM_BACKEND_LLAMA, output: CHATTERBOX_OUTPUT };
+      case ELEVENLABS_OUTPUT:
+        return { llm: LLM_BACKEND_GEMINI, output: ELEVENLABS_OUTPUT };
+      case HF_BACKEND:
+        return { llm: HF_BACKEND, output: HF_BACKEND };
+      case OPENAI_BACKEND:
+      default:
+        return { llm: OPENAI_BACKEND, output: OPENAI_BACKEND };
+    }
+  }
+
+  /**
+   * Synchronise the 3-column pipeline UI state given the current output radio
+   * value and the llm-backend hidden input.  Also updates the legacy hidden
+   * select and the secondary credential panels.
+   *
+   * @param {string} outputVal  - value of the output (TTS) column radio
+   * @param {string} llmVal     - value of the LLM column radio
+   */
+  /**
+   * Resolve the legacy single-string backend value from (llm, output) axes.
+   * This is what gets stored in the hidden select and sent to /backend_config.
+   */
+  function resolveLegacyBackend(llmVal, outputVal) {
+    const key = `${llmVal}|${outputVal}`;
+    const entry = PIPELINE_TO_BACKEND[key];
+    if (entry) return entry.output;
+    // Bundled: openai/hf output strings are already the legacy values
+    return outputVal;
+  }
+
+  function syncPipelineColumns(outputVal, llmVal) {
+    // 1. Resolve legacy string and update hidden inputs (server save path)
+    const legacyBackend = resolveLegacyBackend(llmVal, outputVal);
+    localSttResponse.value = legacyBackend;
+    const llmBackendInput = document.getElementById("local-stt-llm-backend");
+    if (llmBackendInput) llmBackendInput.value = llmVal;
+
+    // 2. Update output column radio checks and cell highlight
     localSttOutputInputs.forEach((radio) => {
-      radio.checked = radio.value === normalized;
+      radio.checked = radio.value === outputVal;
     });
+    const outputCells = Array.from(document.querySelectorAll("[data-output-cell]"));
+    outputCells.forEach((cell) => {
+      cell.classList.toggle("is-selected", cell.dataset.outputCell === outputVal);
+    });
+    // Legacy output-card highlight (back-compat with any code reading data-output-card)
     localSttOutputCards.forEach((card) => {
-      card.classList.toggle("is-selected", card.dataset.outputCard === normalized);
+      card.classList.toggle("is-selected", card.dataset.outputCard === outputVal);
     });
+
+    // 3. Update LLM column radio checks and cell highlight
+    const llmRadios = Array.from(document.querySelectorAll('input[name="pipeline-llm"]'));
+    llmRadios.forEach((radio) => {
+      radio.checked = radio.value === llmVal;
+    });
+    const llmCells = Array.from(document.querySelectorAll("[data-llm-cell]"));
+    llmCells.forEach((cell) => {
+      cell.classList.toggle("is-selected", cell.dataset.llmCell === llmVal);
+    });
+
+    // 4. Disable unsupported combos based on LLM selection
+    const isBundledLlm = (llmVal === OPENAI_BACKEND || llmVal === HF_BACKEND);
+    outputCells.forEach((cell) => {
+      const outKey = cell.dataset.outputCell;
+      if (isBundledLlm) {
+        // Bundled: only the matching output is enabled
+        const supported = outKey === llmVal;
+        cell.classList.toggle("disabled", !supported);
+        const radio = cell.querySelector("input[type=radio]");
+        if (radio) radio.disabled = !supported;
+      } else {
+        // llama / gemini: check support table
+        const key = `${llmVal}|${outKey}`;
+        const supported = key in PIPELINE_TO_BACKEND;
+        cell.classList.toggle("disabled", !supported);
+        const radio = cell.querySelector("input[type=radio]");
+        if (radio) radio.disabled = !supported;
+      }
+    });
+
+    // 5. Secondary fields (chatterbox, elevenlabs)
+    // Use the resolved legacy backend since that's what determines UI extras
     const chatterboxFields = document.getElementById("chatterbox-fields");
-    if (chatterboxFields) chatterboxFields.style.display = normalized === CHATTERBOX_OUTPUT ? "" : "none";
+    if (chatterboxFields) chatterboxFields.style.display = legacyBackend === CHATTERBOX_OUTPUT ? "" : "none";
     const elevenlabsFields = document.getElementById("elevenlabs-fields");
-    const usesElevenLabs = normalized === ELEVENLABS_OUTPUT || normalized === LLAMA_ELEVENLABS_TTS_OUTPUT;
+    const usesElevenLabs = legacyBackend === ELEVENLABS_OUTPUT || legacyBackend === LLAMA_ELEVENLABS_TTS_OUTPUT;
     if (elevenlabsFields) elevenlabsFields.style.display = usesElevenLabs ? "" : "none";
     if (usesElevenLabs) {
-      // Fetch voices lazily; safe to call repeatedly.
       populateElevenLabsVoices();
     }
+  }
+
+  function setSelectedLocalSTTOutput(outputBackend) {
+    // Map legacy backend string → axis values, then drive the 3-column UI.
+    const axes = legacyBackendToAxes(outputBackend);
+    // Resolve the actual output radio value (some legacy strings need mapping)
+    const outputRadioVal = (
+      outputBackend === LLAMA_ELEVENLABS_TTS_OUTPUT ? ELEVENLABS_OUTPUT : outputBackend
+    );
+    syncPipelineColumns(outputRadioVal, axes.llm);
   }
 
   function renderJourneyMap() {
@@ -1088,10 +1219,42 @@ async function init() {
     setSelectedLocalSTTOutput(localSttResponse.value);
     renderCredentialPanels(st);
   });
+
+  // Output (TTS) column radio listeners
   localSttOutputInputs.forEach((radio) => {
     radio.addEventListener("change", () => {
       if (radio.disabled) return;
-      setSelectedLocalSTTOutput(radio.value);
+      // Resolve current LLM value from the LLM column
+      const llmBackendEl = document.getElementById("local-stt-llm-backend");
+      const currentLlm = llmBackendEl?.value || LLM_BACKEND_LLAMA;
+      // For bundled outputs, auto-select the matching LLM slot
+      const bundledLlm = BUNDLED_OUTPUT_TO_LLM[radio.value];
+      const llmVal = bundledLlm || currentLlm;
+      syncPipelineColumns(radio.value, llmVal);
+      setStatusMessage(statusEl, "");
+      renderCredentialPanels(st);
+    });
+  });
+
+  // LLM column radio listeners
+  Array.from(document.querySelectorAll('input[name="pipeline-llm"]')).forEach((radio) => {
+    radio.addEventListener("change", () => {
+      if (radio.disabled) return;
+      // Resolve current output value from the output column
+      const currentOutput = localSttResponse.value || OPENAI_BACKEND;
+      // Map legacy string to output radio value if needed
+      const outputRadioVal = currentOutput === LLAMA_ELEVENLABS_TTS_OUTPUT
+        ? ELEVENLABS_OUTPUT
+        : currentOutput;
+      // For bundled LLM slots, auto-select the matching output
+      if (radio.value === OPENAI_BACKEND || radio.value === HF_BACKEND) {
+        syncPipelineColumns(radio.value, radio.value);
+      } else {
+        // If the current output is unsupported by the new LLM, fall back to chatterbox
+        const key = `${radio.value}|${outputRadioVal}`;
+        const supportedOutput = (key in PIPELINE_TO_BACKEND) ? outputRadioVal : CHATTERBOX_OUTPUT;
+        syncPipelineColumns(supportedOutput, radio.value);
+      }
       setStatusMessage(statusEl, "");
       renderCredentialPanels(st);
     });
