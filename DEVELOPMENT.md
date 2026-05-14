@@ -106,3 +106,16 @@ one-liner install instructions.
 
 Daemon logs go to `/tmp/daemon.jsonl` (tmpfs — cleared on reboot).
 App logs go to journald: `journalctl -u reachy-app-autostart -f`.
+
+### Log retention
+
+On first setup, run:
+
+```bash
+sudo ./scripts/install-pi-journald.sh
+```
+
+This caps journald at 500 MB and 2-week retention so the SD card doesn't fill
+up.  It also creates `/var/log/journal/` so logs survive reboots (without that
+directory, journald writes to the RAM-backed `/run/log/journal` and all history
+is lost on every reboot).
