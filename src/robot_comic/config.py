@@ -210,6 +210,20 @@ LLAMA_GEMINI_TTS_OUTPUT = "llama_gemini_tts"
 LLAMA_ELEVENLABS_TTS_OUTPUT = "llama_elevenlabs_tts"
 
 # ---------------------------------------------------------------------------
+# LLM backend selection (orthogonal to the audio input/output axis).
+# ---------------------------------------------------------------------------
+
+# Env-var that selects which text-LLM powers the local-STT pipelines.
+LLM_BACKEND_ENV = "REACHY_MINI_LLM_BACKEND"
+# Allowed values for LLM_BACKEND
+LLM_BACKEND_LLAMA = "llama"
+LLM_BACKEND_GEMINI = "gemini"
+
+# Env-var for the Gemini model to use when LLM_BACKEND=gemini.
+GEMINI_LLM_MODEL_ENV = "REACHY_MINI_GEMINI_LLM_MODEL"
+_GEMINI_LLM_MODEL_DEFAULT = "gemini-2.5-flash"
+
+# ---------------------------------------------------------------------------
 # Modular audio pipeline: separate input (STT) and output (TTS) backend IDs.
 # These are the canonical string values for AUDIO_INPUT_BACKEND and
 # AUDIO_OUTPUT_BACKEND — either derived from BACKEND_PROVIDER (backwards-compat
@@ -839,6 +853,8 @@ class Config:
     LLAMA_CPP_URL = os.getenv(LLAMA_CPP_URL_ENV, LLAMA_CPP_DEFAULT_URL)
     LLAMA_HEALTH_CHECK_ENABLED = _env_flag(LLAMA_HEALTH_CHECK_ENV, default=True)
     LLM_WARMUP_ENABLED = _env_flag("REACHY_MINI_LLM_WARMUP_ENABLED", default=True)
+    LLM_BACKEND = (os.getenv(LLM_BACKEND_ENV) or LLM_BACKEND_LLAMA).strip().lower()
+    GEMINI_LLM_MODEL = os.getenv(GEMINI_LLM_MODEL_ENV, _GEMINI_LLM_MODEL_DEFAULT)
 
     # Wake-on-LAN: send a magic packet when llama-server is unreachable.
     # WOL_MAC is unset by default; set it to enable the fallback.
@@ -1055,6 +1071,8 @@ def refresh_runtime_config_from_env() -> None:
     config.REACHY_MINI_TTS_SLOW_WARN_S = float(os.getenv("REACHY_MINI_TTS_SLOW_WARN_S", "10.0"))
     config.LLAMA_CPP_URL = os.getenv(LLAMA_CPP_URL_ENV, LLAMA_CPP_DEFAULT_URL)
     config.LLAMA_HEALTH_CHECK_ENABLED = _env_flag(LLAMA_HEALTH_CHECK_ENV, default=True)
+    config.LLM_BACKEND = (os.getenv(LLM_BACKEND_ENV) or LLM_BACKEND_LLAMA).strip().lower()
+    config.GEMINI_LLM_MODEL = os.getenv(GEMINI_LLM_MODEL_ENV, _GEMINI_LLM_MODEL_DEFAULT)
     config.WOL_MAC = os.getenv(WOL_MAC_ENV) or None
     config.WOL_BROADCAST = os.getenv(WOL_BROADCAST_ENV, WOL_DEFAULT_BROADCAST)
     config.WOL_RETRY_AFTER_S = float(os.getenv(WOL_RETRY_AFTER_ENV, str(WOL_DEFAULT_RETRY_AFTER_S)))
