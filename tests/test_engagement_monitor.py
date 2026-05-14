@@ -60,9 +60,7 @@ class TestDiscomfortScoring:
 
     def test_positive_engagement_scores_zero(self) -> None:
         monitor = EngagementMonitor(profile="bill_hicks")
-        score, _ = monitor.analyze(
-            "That's a fascinating point. I never thought about it that way before."
-        )
+        score, _ = monitor.analyze("That's a fascinating point. I never thought about it that way before.")
         assert score == 0.0
 
     def test_short_response_scores_below_half(self) -> None:
