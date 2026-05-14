@@ -30,6 +30,7 @@ import io
 import os
 import sys
 import math
+import time
 import wave
 import shutil
 import struct
@@ -268,7 +269,23 @@ def play_warmup_wav(path: str | Path | None = None) -> None:
     """
     global _PLAYER_WARNED
 
+    from robot_comic import telemetry as _telemetry
     from robot_comic.startup_timer import log_checkpoint
+
+    _wav_started_at = time.monotonic()
+
+    def _emit_supporting(dur_s: float) -> None:
+        """Surface ``welcome.wav.played`` on the monitor boot-timeline (#301).
+
+        The aplay/winsound dispatch is fire-and-forget so we can only measure
+        the wall-clock spent inside this function (subprocess spawn cost). It
+        still gives the operator a single anchor for "the warmup WAV path
+        executed at this time".
+        """
+        try:
+            _telemetry.emit_supporting_event("welcome.wav.played", dur_ms=dur_s * 1000)
+        except Exception:
+            pass
 
     # --- optional fast-blip path -------------------------------------------
     blip_enabled = os.getenv("REACHY_MINI_WARMUP_BLIP_ENABLED", "").strip().lower() in {
@@ -293,6 +310,7 @@ def play_warmup_wav(path: str | Path | None = None) -> None:
         if dispatched:
             logger.info("Warmup WAV dispatched (winsound): %s", wav_path.name)
             log_checkpoint("warmup wav dispatched", logger)
+            _emit_supporting(time.monotonic() - _wav_started_at)
         else:
             log_checkpoint("warmup wav skipped", logger)
         return
@@ -315,6 +333,7 @@ def play_warmup_wav(path: str | Path | None = None) -> None:
         )
         logger.info("Warmup WAV dispatched: %s", wav_path.name)
         log_checkpoint("warmup wav dispatched", logger)
+        _emit_supporting(time.monotonic() - _wav_started_at)
     except Exception as exc:
         logger.warning("Failed to spawn warmup player %s: %s", cmd[0], exc)
         log_checkpoint("warmup wav skipped", logger)

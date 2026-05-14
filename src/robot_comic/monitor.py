@@ -137,6 +137,33 @@ class TurnRecord:
         return len(self._kids("tool.execute"))
 
 
+class SupportingEvent:
+    """A synthetic boot-timeline event surfaced as its own monitor row (#301).
+
+    These spans carry ``event.kind=supporting`` and are *not* children of a
+    ``turn`` span. They occupy the same chronological lane as full turns but
+    render with only ``[ts] [kind] [dur_ms]`` populated.
+    """
+
+    def __init__(self, span: dict[str, Any]) -> None:
+        """Build from a closed supporting-event span dict (as decoded from RCSPAN)."""
+        self.name = str(span.get("name", "event"))
+        self.ts_ms: int = int(span.get("ts", 0))
+        self.ts = datetime.fromtimestamp(self.ts_ms / 1000)
+        # Prefer the externally measured ``event.dur_ms`` (e.g. seconds since
+        # process start) over the span's own wall-clock duration, which is
+        # effectively zero for synthetic point events.
+        attrs = span.get("attrs", {}) or {}
+        explicit = attrs.get("event.dur_ms")
+        if explicit is None:
+            self.dur_ms: float = float(span.get("dur_ms", 0.0))
+        else:
+            try:
+                self.dur_ms = float(explicit)
+            except (TypeError, ValueError):
+                self.dur_ms = float(span.get("dur_ms", 0.0))
+
+
 class PendingTurn:
     """Tracks a turn that has started (stt.infer seen) but not yet completed."""
 
@@ -169,11 +196,23 @@ class SpanBuffer:
         """Initialise the pending-span store."""
         self._pending: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._inflight: dict[str, PendingTurn] = {}
+        # Supporting boot-timeline events (#301) — accumulated in arrival order
+        # and rendered on the same chronological lane as full turns.
+        self.supporting_events: list[SupportingEvent] = []
 
     def ingest(self, span: dict[str, Any]) -> Optional[TurnRecord]:
         """Return a completed TurnRecord when the root turn span arrives, else None."""
         trace_id = span["trace"]
         name = span["name"]
+
+        # Supporting events (#301) are top-level (parent is None) but distinguish
+        # themselves via the ``event.kind=supporting`` attribute. They never
+        # accumulate as children of a turn and are returned via
+        # ``supporting_events`` rather than this method's return value.
+        attrs = span.get("attrs", {}) or {}
+        if attrs.get("event.kind") == "supporting":
+            self.supporting_events.append(SupportingEvent(span))
+            return None
 
         if name == "turn" and span["parent"] is None:
             children = self._pending.pop(trace_id, [])
@@ -250,8 +289,51 @@ def _fmt_spin(ms: Optional[float], active: bool, stage: str) -> Text:
     return Text("  —  ", style="dim")
 
 
-def _build_table(turns: list[TurnRecord], pending: Optional[PendingTurn] = None) -> Table:
-    """Render the most recent turns as a Rich table (newest row first)."""
+def _fmt_supporting_dur(ms: float) -> Text:
+    """Format the duration cell for a supporting-event row in dim cyan."""
+    if ms <= 0:
+        return Text("    —  ", style="dim cyan")
+    if ms < 10_000:
+        label = f"{ms:.0f}ms"
+    else:
+        label = f"{ms / 1000:.1f}s"
+    return Text(label.rjust(7), style="dim cyan")
+
+
+def _add_supporting_row(t: Table, ev: SupportingEvent) -> None:
+    """Append a supporting-event row to *t*.
+
+    Only ``Time``, ``What``, and ``Total`` are populated; the other columns
+    stay blank so the row reads as a boot-timeline marker rather than a turn.
+    The whole row is styled ``dim cyan`` to set it visually apart from real
+    conversational turns.
+    """
+    label = Text(ev.name, style="dim cyan")
+    blank = Text("", style="dim cyan")
+    t.add_row(
+        Text(ev.ts.strftime("%H:%M:%S"), style="dim cyan"),
+        label,
+        blank,
+        blank,
+        blank,
+        _fmt_supporting_dur(ev.dur_ms),
+        blank,
+        Text("▪", style="dim cyan"),
+    )
+
+
+def _build_table(
+    turns: list[TurnRecord],
+    pending: Optional[PendingTurn] = None,
+    supporting_events: Optional[list[SupportingEvent]] = None,
+) -> Table:
+    """Render the most recent turns as a Rich table (newest row first).
+
+    When *supporting_events* is provided, those rows are interleaved with
+    *turns* by their ``ts`` so the boot timeline (app.startup, welcome.wav,
+    handler.start_up.complete, first_greeting.tts_first_audio …) lines up
+    chronologically with subsequent conversational turns (#301).
+    """
     t = Table(
         box=box.SIMPLE_HEAD,
         show_edge=False,
@@ -298,7 +380,24 @@ def _build_table(turns: list[TurnRecord], pending: Optional[PendingTurn] = None)
             Text(sp, style="yellow"),
         )
 
-    for turn in reversed(turns[-_MAX_TURNS:]):
+    # Interleave turns and supporting events by timestamp. Each entry is a
+    # (ts_ms, kind, payload) tuple so a stable sort preserves arrival order
+    # when timestamps collide.
+    merged: list[tuple[int, str, Any]] = []
+    for turn in turns:
+        merged.append((int(turn.root["ts"]), "turn", turn))
+    for ev in supporting_events or []:
+        merged.append((ev.ts_ms, "event", ev))
+    # Sort ascending then take the last _MAX_TURNS so the most recent rows win
+    # when the buffer overflows, and finally render newest-first.
+    merged.sort(key=lambda x: x[0])
+    merged = merged[-_MAX_TURNS:]
+
+    for _ts, kind, payload in reversed(merged):
+        if kind == "event":
+            _add_supporting_row(t, payload)
+            continue
+        turn = payload
         ok_icon = Text("✓", style="green") if turn.outcome == "success" else Text("✗", style="red")
         tools_cell = Text(str(turn.tool_count), style="cyan") if turn.tool_count else Text("")
         excerpt = turn.excerpt or turn.mode
@@ -580,13 +679,14 @@ def main() -> None:
             title_suffix = f"  [dim]{source_label}[/dim]"
 
         body: Text | Table
-        if not turns and pending is None:
+        supporting = buffer.supporting_events
+        if not turns and pending is None and not supporting:
             if watch_unit is not None and not _svc_active[0]:
                 body = Text("Service is stopped — start it to see turns.", style="dim italic")
             else:
                 body = Text("Waiting for turns… (is ROBOT_INSTRUMENTATION=trace set?)", style="dim italic")
         else:
-            body = _build_table(turns, pending)
+            body = _build_table(turns, pending, supporting)
 
         n = len(turns)
         title_parts = "[bold]robot-comic-monitor[/bold]" + title_suffix
