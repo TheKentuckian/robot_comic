@@ -46,12 +46,12 @@ from __future__ import annotations
 import os
 import math
 import logging
-from typing import Set
+from typing import TYPE_CHECKING, Set
 
-import numpy as np
-from numpy.typing import NDArray
-from scipy.spatial.transform import Rotation
 
+if TYPE_CHECKING:
+    import numpy as np
+    from numpy.typing import NDArray
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +137,8 @@ def clamp_head_pose(
         Clamped 4×4 pose matrix of the same dtype as the input.
 
     """
+    from scipy.spatial.transform import Rotation
+
     try:
         r = Rotation.from_matrix(pose[:3, :3])
         # Extrinsic XYZ = intrinsic roll, pitch, yaw (matches create_head_pose convention)
@@ -190,6 +192,9 @@ def cap_head_velocity(
     """
     if dt <= 0.0:
         return target_pose
+
+    import numpy as np
+    from scipy.spatial.transform import Rotation
 
     max_step = max_vel_rad_s * dt
 

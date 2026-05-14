@@ -1,12 +1,15 @@
 """Head-tracking backends and process helpers."""
 
-from typing import Protocol, TypeAlias, SupportsFloat
-
-import numpy as np
-from numpy.typing import NDArray
+from __future__ import annotations
+from typing import TYPE_CHECKING, Protocol, TypeAlias, SupportsFloat
 
 
-HeadTrackerResult: TypeAlias = tuple[NDArray[np.float32] | None, SupportsFloat | None]
+if TYPE_CHECKING:
+    import numpy as np
+    from numpy.typing import NDArray
+
+
+HeadTrackerResult: TypeAlias = "tuple[NDArray[np.float32] | None, SupportsFloat | None]"
 
 
 class HeadTracker(Protocol):
