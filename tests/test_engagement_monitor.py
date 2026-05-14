@@ -160,9 +160,7 @@ class TestProfileAwareness:
     @pytest.mark.parametrize("profile", ["bill_hicks", "andrew_dice_clay", "richard_pryor"])
     def test_persona_specific_soften_note_used(self, profile: str) -> None:
         note = get_soften_note(profile)
-        assert note == SOFTEN_NOTES[profile], (
-            f"Expected persona-specific note for {profile!r}"
-        )
+        assert note == SOFTEN_NOTES[profile], f"Expected persona-specific note for {profile!r}"
 
     def test_other_profile_disabled_by_default(self) -> None:
         monitor = EngagementMonitor(profile="don_rickles")
@@ -287,9 +285,7 @@ class TestLLMScoring:
         assert score == pytest.approx(0.85)
 
     @pytest.mark.asyncio
-    async def test_score_via_llm_parse_error_falls_back_to_heuristic(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_score_via_llm_parse_error_falls_back_to_heuristic(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """score_via_llm falls back to heuristic on JSON parse error."""
         monitor = EngagementMonitor(profile="bill_hicks")
 
@@ -305,9 +301,7 @@ class TestLLMScoring:
         assert score == pytest.approx(1.0)
 
     @pytest.mark.asyncio
-    async def test_score_via_llm_network_error_falls_back_to_heuristic(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_score_via_llm_network_error_falls_back_to_heuristic(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """score_via_llm falls back to heuristic on network error."""
         monitor = EngagementMonitor(profile="bill_hicks")
 
@@ -317,9 +311,7 @@ class TestLLMScoring:
         score = await monitor.score_via_llm("stop", http_client)
         assert score == pytest.approx(1.0)
 
-    def test_analyze_with_llm_score_uses_llm_when_enabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_analyze_with_llm_score_uses_llm_when_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """analyze() uses the provided llm_score when LLM scoring is enabled."""
         monkeypatch.setenv("REACHY_MINI_GUARDRAIL_LLM_SCORING", "1")
         monitor = EngagementMonitor(profile="bill_hicks")
@@ -329,9 +321,7 @@ class TestLLMScoring:
         assert score == pytest.approx(0.9)
         assert monitor.consecutive_discomfort == 1
 
-    def test_analyze_without_llm_score_uses_heuristic_even_when_enabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_analyze_without_llm_score_uses_heuristic_even_when_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """analyze() falls back to heuristic when llm_score is None."""
         monkeypatch.setenv("REACHY_MINI_GUARDRAIL_LLM_SCORING", "1")
         monitor = EngagementMonitor(profile="bill_hicks")
@@ -340,9 +330,7 @@ class TestLLMScoring:
         score, _ = monitor.analyze("stop", llm_score=None)
         assert score == pytest.approx(1.0)
 
-    def test_analyze_ignores_llm_score_when_feature_disabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_analyze_ignores_llm_score_when_feature_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When LLM scoring is disabled, the provided llm_score is ignored."""
         monkeypatch.setenv("REACHY_MINI_GUARDRAIL_LLM_SCORING", "0")
         monitor = EngagementMonitor(profile="bill_hicks")
@@ -364,9 +352,7 @@ class TestLLMScoring:
 class TestCalibrationLogging:
     """Verify that analyze() emits the structured calibration DEBUG line."""
 
-    def test_calibration_line_emitted_on_analyze(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_calibration_line_emitted_on_analyze(self, caplog: pytest.LogCaptureFixture) -> None:
         monitor = EngagementMonitor(profile="bill_hicks")
         with caplog.at_level(logging.DEBUG, logger="robot_comic.guardrail"):
             monitor.analyze("stop")
@@ -402,9 +388,7 @@ class TestCalibrationLogging:
         msg = calibration_lines[0].message
         assert "llm_score=0.75" in msg
 
-    def test_calibration_line_emitted_for_disabled_monitor(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_calibration_line_emitted_for_disabled_monitor(self, caplog: pytest.LogCaptureFixture) -> None:
         monitor = EngagementMonitor(profile="don_rickles")
         with caplog.at_level(logging.DEBUG, logger="robot_comic.guardrail"):
             monitor.analyze("stop")

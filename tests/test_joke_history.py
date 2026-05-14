@@ -225,11 +225,20 @@ def test_format_for_prompt_nonempty_contains_bullets(tmp_path: Path) -> None:
 
 
 def test_format_for_prompt_respects_n(tmp_path: Path) -> None:
-    history = JokeHistory(tmp_path / "history.json")
-    for i in range(10):
-        history.add(f"joke {i}")
+    # Build entries with controlled timestamps so that jokes 7, 8, 9 are
+    # definitively the most-recent (highest weight) and will be selected by
+    # format_for_prompt's weight-descending sort.  Jokes 0-6 are spaced 1 hour
+    # apart going back in time, giving them strictly lower weight.
+    path = tmp_path / "history.json"
+    now = datetime.now(timezone.utc)
+    entries = [
+        {"ts": (now - timedelta(hours=10 - i)).isoformat(), "punchline": f"joke {i}", "topic": "", "persona": ""}
+        for i in range(10)
+    ]
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    history = JokeHistory(path)
     result = history.format_for_prompt(n=3)
-    # Only the last 3 should appear
+    # Only the last 3 (most-recent by timestamp = highest weight) should appear
     assert "joke 7" in result
     assert "joke 8" in result
     assert "joke 9" in result

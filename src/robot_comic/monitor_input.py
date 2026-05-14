@@ -28,7 +28,7 @@ letters so callers can match ``'s'`` regardless of Caps Lock).
 from __future__ import annotations
 import os
 import sys
-from typing import Optional
+from typing import Any, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -94,8 +94,8 @@ class _PosixBackend(_InputBackend):
             import termios
 
             self._fd = sys.stdin.fileno()
-            self._old_settings = termios.tcgetattr(self._fd)  # type: ignore[attr-defined]
-            tty.cbreak(self._fd)  # type: ignore[attr-defined]
+            self._old_settings: Optional[list[Any]] = termios.tcgetattr(self._fd)
+            tty.cbreak(self._fd)
         except Exception:
             # stdin is not a tty (e.g. redirected in tests) — fall back to a
             # no-op backend so callers don't crash.
@@ -122,7 +122,7 @@ class _PosixBackend(_InputBackend):
             try:
                 import termios
 
-                termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old_settings)  # type: ignore[attr-defined]
+                termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old_settings)
             except Exception:
                 pass
 
@@ -137,14 +137,14 @@ class _WindowsBackend(_InputBackend):
 
         deadline = time.perf_counter() + timeout
         while True:
-            if msvcrt.kbhit():
-                ch = msvcrt.getch()
+            if msvcrt.kbhit():  # type: ignore[attr-defined]
+                ch = msvcrt.getch()  # type: ignore[attr-defined]
                 # Arrow keys / function keys produce a two-byte sequence starting
                 # with 0x00 or 0xE0 — consume and discard the second byte.
                 if ch in (b"\x00", b"\xe0"):
-                    msvcrt.getch()
+                    msvcrt.getch()  # type: ignore[attr-defined]
                     return None
-                return ch
+                return bytes(ch)
             remaining = deadline - time.perf_counter()
             if remaining <= 0:
                 return None

@@ -89,9 +89,7 @@ def get_soften_note(persona: str | None) -> str:
 # - richard_pryor: vulnerability-heavy; lower-confidence inclusion but
 #   documented: Pryor's edge is more vulnerability than aggression, so the
 #   threshold may need future tuning against calibration data.
-GUARDRAIL_PROFILES: frozenset[str] = frozenset(
-    {"bill_hicks", "andrew_dice_clay", "richard_pryor"}
-)
+GUARDRAIL_PROFILES: frozenset[str] = frozenset({"bill_hicks", "andrew_dice_clay", "richard_pryor"})
 
 # Number of consecutive discomfort turns required before ``should_soften``
 # fires.  Override via ``REACHY_MINI_GUARDRAIL_THRESHOLD``.
@@ -216,7 +214,7 @@ def _get_threshold() -> int:
 # ---------------------------------------------------------------------------
 
 _LLM_SCORE_PROMPT = (
-    'Score the user\'s discomfort with the conversation from 0.0 (engaged/enjoying) to '
+    "Score the user's discomfort with the conversation from 0.0 (engaged/enjoying) to "
     '1.0 (uncomfortable/wants to stop). Return JSON: {"score": <float>, "reason": <short string>}. '
     "User text: "
 )
@@ -359,9 +357,7 @@ class EngagementMonitor:
         heuristic_score = _score_discomfort(user_text)
 
         use_llm = _llm_scoring_enabled() and llm_score is not None
-        effective_score: float = (
-            llm_score if (use_llm and llm_score is not None) else heuristic_score
-        )
+        effective_score: float = llm_score if (use_llm and llm_score is not None) else heuristic_score
         log_llm = f"{llm_score:.2f}" if llm_score is not None else "null"
 
         self._last_score = effective_score
