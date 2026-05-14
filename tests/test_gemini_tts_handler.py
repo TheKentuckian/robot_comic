@@ -130,6 +130,35 @@ async def test_voice_override() -> None:
 
 
 @pytest.mark.asyncio
+async def test_synthetic_status_marker_kept_out_of_history() -> None:
+    """Issue #306: if response_text is a status marker, it must not pollute history."""
+    handler = _make_handler()
+
+    async def fake_llm() -> str:
+        return "[Skipped TTS: empty LLM response]"
+
+    async def fake_tts(text: str, system_instruction: str | None = None) -> bytes:
+        return b"\x00\x01" * 2400
+
+    handler._run_llm_with_tools = fake_llm  # type: ignore[method-assign]
+    handler._call_tts_with_retry = fake_tts  # type: ignore[method-assign]
+
+    await handler._dispatch_completed_transcript("hello")
+
+    # Monitor still saw the marker on the output queue.
+    seen: list[str] = []
+    while not handler.output_queue.empty():
+        item = handler.output_queue.get_nowait()
+        if isinstance(item, AdditionalOutputs):
+            seen.append(str(item.args))
+    assert any("[Skipped TTS:" in m for m in seen)
+
+    # But _conversation_history has no model-role marker.
+    model_turns = [t for t in handler._conversation_history if t.get("role") == "model"]
+    assert model_turns == []
+
+
+@pytest.mark.asyncio
 async def test_apply_personality_clears_history() -> None:
     """apply_personality resets conversation history."""
     from robot_comic.gemini_tts import GeminiTTSResponseHandler

@@ -50,7 +50,7 @@ from robot_comic.gemini_retry import (
     describe_quota_failure,
     extract_retry_after_seconds,
 )
-from robot_comic.history_trim import trim_history_in_place
+from robot_comic.history_trim import trim_history_in_place, is_synthetic_status_marker
 from robot_comic.tools.core_tools import ToolDependencies, dispatch_tool_call, get_active_tool_specs
 from robot_comic.elevenlabs_voices import resolve_voice_id_by_name
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
@@ -478,7 +478,11 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                 )
                 _outcome = "empty_response_filler"
 
-            self._conversation_history.append({"role": "model", "parts": [{"text": response_text}]})
+            # Guard against synthetic status markers (e.g. "[Skipped TTS: ...]")
+            # leaking into LLM history. The monitor still sees them via the
+            # output queue; the next Gemini call must not. See issue #306.
+            if not is_synthetic_status_marker(response_text):
+                self._conversation_history.append({"role": "model", "parts": [{"text": response_text}]})
             await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": response_text}))
 
             sentences = split_sentences(response_text) or [response_text]
