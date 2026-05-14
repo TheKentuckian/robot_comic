@@ -60,6 +60,15 @@ _TTS_RETRY_BASE_DELAY = 0.5
 _LLM_MAX_RETRIES = 4
 _LLM_RETRY_BASE_DELAY = 1.0
 _LLM_MAX_TOOL_ROUNDS = 5
+
+
+class _LLMToolCallLimitExceeded(Exception):
+    """Raised when _run_llm_with_tools exhausts the per-turn tool-call budget.
+
+    Caught by _dispatch_completed_transcript_impl so the limit message stays out
+    of TTS — the caller logs a quiet assistant note instead of speaking a status
+    string aloud.
+    """
 # _ECHO_COOLDOWN_S is now read from config.ECHO_COOLDOWN_MS at runtime.
 # This module-level constant is kept for backward compatibility with imports.
 _ECHO_COOLDOWN_S: float = 0.3
@@ -340,6 +349,14 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
         try:
             response_text = await self._run_llm_with_tools()
+        except _LLMToolCallLimitExceeded as exc:
+            logger.warning("%s", exc)
+            await self.output_queue.put(
+                AdditionalOutputs(
+                    {"role": "assistant", "content": "[Skipped TTS: tool-call limit reached]"}
+                )
+            )
+            return
         except Exception as exc:
             logger.warning("LLM call failed: %s", exc)
             return
@@ -460,7 +477,9 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
             history.append(types.Content(role="user", parts=response_parts))
 
-        return "[Response generation reached tool call limit]"
+        raise _LLMToolCallLimitExceeded(
+            f"Gemini tool-call loop exceeded {_LLM_MAX_TOOL_ROUNDS} rounds without producing a final response"
+        )
 
     async def _stream_tts_to_queue(
         self,
