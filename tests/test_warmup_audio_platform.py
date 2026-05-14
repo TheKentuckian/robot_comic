@@ -102,23 +102,37 @@ class TestDetectPlayer:
             result = _detect_player()
             assert result == ["/usr/bin/aplay", "-q"]
 
-    def test_linux_aplay_appends_alsa_device_override_when_env_set(self) -> None:
+    def test_maybe_apply_alsa_device_appends_dash_d_when_env_set(self) -> None:
         """On-robot deployments set REACHY_MINI_ALSA_DEVICE so aplay routes
         through the dmix sink the daemon shares; the env knob has to make it
-        onto the command line."""
+        onto the command line. Applied at play time, not detect time, so
+        dotenv loads that happen after this module's import are honoured.
+        """
+        from robot_comic.warmup_audio import _maybe_apply_alsa_device
 
-        def _which(cmd: str) -> str | None:
-            return f"/usr/bin/{cmd}" if cmd == "aplay" else None
+        base_cmd = ["/usr/bin/aplay", "-q"]
+        with patch.dict("os.environ", {"REACHY_MINI_ALSA_DEVICE": "plug:reachymini_audio_sink"}):
+            result = _maybe_apply_alsa_device(base_cmd)
+        assert result == ["/usr/bin/aplay", "-q", "-D", "plug:reachymini_audio_sink"]
 
-        with (
-            patch.object(sys, "platform", "linux"),
-            patch("shutil.which", side_effect=_which),
-            patch.dict("os.environ", {"REACHY_MINI_ALSA_DEVICE": "plug:reachymini_audio_sink"}),
-        ):
-            from robot_comic.warmup_audio import _detect_player
+    def test_maybe_apply_alsa_device_noop_when_env_unset(self) -> None:
+        """No env var → command unchanged. Keeps dev / CI hosts on default device."""
+        from robot_comic.warmup_audio import _maybe_apply_alsa_device
 
-            result = _detect_player()
-            assert result == ["/usr/bin/aplay", "-q", "-D", "plug:reachymini_audio_sink"]
+        base_cmd = ["/usr/bin/aplay", "-q"]
+        with patch.dict("os.environ", {}, clear=False) as env:
+            env.pop("REACHY_MINI_ALSA_DEVICE", None)
+            result = _maybe_apply_alsa_device(base_cmd)
+        assert result == ["/usr/bin/aplay", "-q"]
+
+    def test_maybe_apply_alsa_device_skips_non_aplay_players(self) -> None:
+        """pw-play / paplay take a different device-selection flag (or none);
+        only aplay gets the -D override."""
+        from robot_comic.warmup_audio import _maybe_apply_alsa_device
+
+        with patch.dict("os.environ", {"REACHY_MINI_ALSA_DEVICE": "plug:reachymini_audio_sink"}):
+            assert _maybe_apply_alsa_device(["/usr/bin/pw-play"]) == ["/usr/bin/pw-play"]
+            assert _maybe_apply_alsa_device(["/usr/bin/paplay"]) == ["/usr/bin/paplay"]
 
     def test_linux_no_player_returns_none(self) -> None:
         with patch.object(sys, "platform", "linux"), patch("shutil.which", return_value=None):

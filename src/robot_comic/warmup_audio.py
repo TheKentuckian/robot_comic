@@ -71,21 +71,30 @@ def _detect_player() -> list[str] | None:
         return [paplay]
     aplay = shutil.which("aplay")
     if aplay:
-        cmd = [aplay, "-q"]
-        # When the reachy_mini daemon holds the USB speaker (`/dev/snd/pcmC0D0p`)
-        # exclusively via mmap, the default ALSA hw device is busy and `aplay`
-        # fails silently with "Device or resource busy". Reachy Mini ships an
-        # `~/.asoundrc` that defines a `dmix`-backed `reachymini_audio_sink`
-        # which allows concurrent openers; on-robot deployments should set
-        # `REACHY_MINI_ALSA_DEVICE=plug:reachymini_audio_sink` to route through
-        # it (the `plug:` prefix handles format/rate conversion automatically).
-        # On hosts without that PCM defined (CI / dev laptops), leave the env
-        # var unset and aplay uses the default device.
-        device = os.environ.get("REACHY_MINI_ALSA_DEVICE", "").strip()
-        if device:
-            cmd.extend(["-D", device])
-        return cmd
+        return [aplay, "-q"]
     return None
+
+
+def _maybe_apply_alsa_device(cmd: list[str]) -> list[str]:
+    """Append `-D <REACHY_MINI_ALSA_DEVICE>` to an aplay command if the env
+    knob is set. Lazy / per-call because `.env` is loaded by the app AFTER
+    this module is first imported, so module-import-time env reads miss it.
+
+    Background: when the reachy_mini daemon holds the USB speaker
+    (`/dev/snd/pcmC0D0p`) exclusively via mmap, the default ALSA hw device
+    is busy and `aplay` fails silently. Reachy Mini ships an `~/.asoundrc`
+    that defines a `dmix`-backed `reachymini_audio_sink` which allows
+    concurrent openers; on-robot deployments set
+    `REACHY_MINI_ALSA_DEVICE=plug:reachymini_audio_sink` to route through it.
+    On hosts without that PCM defined (CI / dev laptops), leave the env
+    var unset and aplay uses the default device.
+    """
+    if not cmd or "aplay" not in cmd[0]:
+        return cmd
+    device = os.environ.get("REACHY_MINI_ALSA_DEVICE", "").strip()
+    if not device:
+        return cmd
+    return [*cmd, "-D", device]
 
 
 _PLAYER_CMD: list[str] | None = _detect_player()
@@ -223,7 +232,7 @@ def play_warmup_blip() -> bool:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             tmp.write(wav_bytes)
             tmp_path = Path(tmp.name)
-        cmd = [*_PLAYER_CMD, str(tmp_path)]
+        cmd = [*_maybe_apply_alsa_device(_PLAYER_CMD), str(tmp_path)]
         subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
@@ -297,7 +306,7 @@ def play_warmup_wav(path: str | Path | None = None) -> None:
             log_checkpoint("warmup wav skipped", logger)
         return
 
-    # POSIX: spawn subprocess player
+    # POSIX: spawn subprocess player.
     if _PLAYER_CMD is None:
         if not _PLAYER_WARNED:
             logger.warning("No audio player available (looked for aplay/paplay/afplay); skipping warmup WAV")
@@ -305,7 +314,10 @@ def play_warmup_wav(path: str | Path | None = None) -> None:
         log_checkpoint("warmup wav skipped", logger)
         return
 
-    cmd = [*_PLAYER_CMD, str(wav_path)]
+    # Apply the env-var ALSA device override per-call. _PLAYER_CMD was
+    # captured at module import time (before dotenv load) so the env var
+    # set in .env wouldn't show up there; resolve it now instead.
+    cmd = [*_maybe_apply_alsa_device(_PLAYER_CMD), str(wav_path)]
     try:
         subprocess.Popen(
             cmd,
