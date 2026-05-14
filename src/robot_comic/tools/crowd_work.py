@@ -8,6 +8,8 @@ from typing import Any, Dict
 from pathlib import Path
 from datetime import datetime
 
+import numpy as np
+
 from robot_comic.tools.core_tools import Tool, ToolDependencies
 
 
@@ -63,6 +65,16 @@ class CrowdWork(Tool):
                     "Roast fields from the 'roast' tool that have already been used as punchlines "
                     "(e.g. 'hair', 'clothing', 'build', 'expression', 'standout', 'energy'). "
                     "Pass after delivering a punchline so these are not repeated."
+                ),
+            },
+            "pending_embedding": {
+                "type": "array",
+                "items": {"type": "number"},
+                "description": (
+                    "128-D face embedding list returned by greet action='identify' when the visitor "
+                    "was not recognised (pending_embedding field in that response). "
+                    "Pass it here together with the visitor's name so the face is stored for future "
+                    "sessions. Omit when no pending_embedding was returned by greet."
                 ),
             },
         },
@@ -189,6 +201,23 @@ class CrowdWork(Tool):
                     self._state["roast_targets_used"].append(target)
             self._state["last_updated"] = datetime.now().isoformat()
             self._schedule_write()
+
+            # Persist face embedding when the LLM passes a pending_embedding from
+            # greet(action='identify').  Best-effort: failure is logged but not raised.
+            pending_raw = kwargs.get("pending_embedding")
+            stored_name: str | None = self._state.get("name")
+            if pending_raw is not None and stored_name and deps.face_db is not None:
+                try:
+                    embedding = np.asarray(pending_raw, dtype=np.float64)
+                    deps.face_db.add(stored_name, embedding)
+                    logger.info(
+                        "crowd_work: persisted face embedding for %r (%d-D)",
+                        stored_name,
+                        len(embedding),
+                    )
+                except Exception as exc:
+                    logger.warning("crowd_work: failed to persist face embedding: %s", exc)
+
             return {
                 "status": "updated",
                 "stored": {

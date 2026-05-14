@@ -62,6 +62,13 @@ class ToolDependencies:
     # Stable per-instance directory for tool-managed persistence (sessions, etc.).
     # None in dev/sim mode; tools fall back to a CWD-relative path in that case.
     instance_path: Path | None = None
+    # Face recognition pipeline — both fields must be set for the feature to
+    # activate.  face_embedder satisfies the FaceEmbedder Protocol; face_db is
+    # a FaceDatabase instance.  Injected by main.py when
+    # REACHY_MINI_FACE_RECOGNITION_ENABLED=1 and the face_recognition library
+    # is available; otherwise left as None to keep the path inert.
+    face_db: Any | None = None  # FaceDatabase from vision/face_db.py
+    face_embedder: Any | None = None  # FaceEmbedder implementor from vision/
 
 
 # Tool base class
