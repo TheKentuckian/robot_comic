@@ -608,11 +608,17 @@ def main() -> None:
     # reads it to suppress its own live.update() calls while the overlay is up.
     _overlay_active: list[bool] = [False]
 
+    # Construct MonitorInput on the main thread *before* Live is entered so
+    # that tty.cbreak() is called from the main thread.  Rich's Live with
+    # screen=True can otherwise race to modify terminal settings, leaving the
+    # cbreak setup in an undefined state and causing poll_key() to never
+    # deliver keypresses (root cause of #273).
+    from robot_comic.monitor_input import MonitorInput
+
+    inp = MonitorInput()
+
     def _auto_refresh() -> None:
         """Background thread: refresh render + handle keyboard input."""
-        from robot_comic.monitor_input import MonitorInput
-
-        inp = MonitorInput()
         try:
             while not stop_event.is_set():
                 now = time.time()
@@ -647,7 +653,7 @@ def main() -> None:
                 if not _overlay_active[0]:
                     live.update(_render())
         finally:
-            inp.close()
+            pass  # inp is owned by the outer scope; closed there
 
     def _run_persona_overlay(
         live: Live,
@@ -709,3 +715,4 @@ def main() -> None:
         pass
     finally:
         stop_event.set()
+        inp.close()
