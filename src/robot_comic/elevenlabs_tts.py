@@ -145,26 +145,34 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     def __init__(
         self,
-        deps: ToolDependencies,
+        deps: ToolDependencies | None = None,
         sim_mode: bool = False,
         instance_path: Optional[str] = None,
         startup_voice: Optional[str] = None,
+        **kwargs: Any,
     ) -> None:
+        # In the GeminiTextElevenLabsResponseHandler diamond, BaseLlamaResponseHandler
+        # appears earlier in the MRO and calls super().__init__(expected_layout=...).
+        # That super() lands here. Absorb the audio kwargs without clobbering BaseLlama's
+        # already-set shared state.
         super().__init__(
             expected_layout="mono",
             output_sample_rate=ELEVENLABS_OUTPUT_SAMPLE_RATE,
             input_sample_rate=16000,
         )
-        self.deps = deps
-        self.sim_mode = sim_mode
-        self.instance_path = instance_path
-        self._voice_override: str | None = startup_voice
+        _diamond_init = getattr(self, "deps", None) is not None
+        if not _diamond_init:
+            self.deps = deps
+            self.sim_mode = sim_mode
+            self.instance_path = instance_path
+            self._voice_override: str | None = startup_voice
+            self._http: httpx.AsyncClient | None = None
+            self._stop_event: asyncio.Event = asyncio.Event()
+            self._conversation_history: list[dict[str, Any]] = []
+            self.output_queue: asyncio.Queue[Any] = asyncio.Queue()
+        # ElevenLabs-specific state — always initialise.
         self._client: genai.Client | None = None
-        self._http: httpx.AsyncClient | None = None
-        self._stop_event: asyncio.Event = asyncio.Event()
-        self._conversation_history: list[dict[str, Any]] = []
         self._last_tts_rate_limited: bool = False
-        self.output_queue: asyncio.Queue[Any] = asyncio.Queue()
         self.cumulative_cost: float = 0.0
         # Drop-not-queue guard for concurrent Moonshine 'completed' events.
         # Without this, two coroutines can mutate _conversation_history in

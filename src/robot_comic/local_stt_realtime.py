@@ -275,7 +275,10 @@ class LocalSTTInputMixin:
             model_path,
         )
 
-        transcriber = Transcriber(model_path=model_path, model_arch=model_arch, update_interval=update_interval)
+        # moonshine_voice.Transcriber expects the *directory* containing the
+        # model file and its tokenizer.bin sibling, not the model file itself.
+        transcriber_path = model_path.parent if model_path.is_file() else model_path
+        transcriber = Transcriber(model_path=str(transcriber_path), model_arch=model_arch, update_interval=update_interval)
         stream = transcriber.create_stream(update_interval=update_interval)
         listener_cls = type(
             "RobotComicMoonshineListener",

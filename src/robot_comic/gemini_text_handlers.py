@@ -124,6 +124,27 @@ class GeminiTextElevenLabsResponseHandler(GeminiTextResponseHandler, ElevenLabsT
             startup_voice=self._voice_override,
         )
 
+    # ------------------------------------------------------------------ #
+    # MRO diamond shims: BaseLlamaResponseHandler (via GeminiTextResponseHandler)
+    # appears earlier in the MRO than ElevenLabsTTSResponseHandler, so its
+    # NotImplementedError stubs win the lookup for voice methods.
+    # Delegate to the ElevenLabs implementation.
+    # NOTE: _synthesize_and_enqueue is intentionally NOT delegated —
+    # ElevenLabsTTSResponseHandler uses a different response loop
+    # (_run_llm_with_tools / _stream_tts_to_queue) and does not implement
+    # the BaseLlamaResponseHandler.synth interface. Wiring this combination
+    # end-to-end requires more than a shim; tracked separately.
+    # ------------------------------------------------------------------ #
+
+    def get_current_voice(self) -> str:
+        return ElevenLabsTTSResponseHandler.get_current_voice(self)
+
+    async def get_available_voices(self) -> list[str]:
+        return await ElevenLabsTTSResponseHandler.get_available_voices(self)
+
+    async def change_voice(self, voice: str) -> str:
+        return await ElevenLabsTTSResponseHandler.change_voice(self, voice)
+
     async def _prepare_startup_credentials(self) -> None:
         # ElevenLabsTTSResponseHandler._prepare_startup_credentials creates the
         # Gemini (text-LLM) client for its own use *and* an httpx client for
