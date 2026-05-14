@@ -253,6 +253,31 @@ def run(
     )
     log_checkpoint("pause controller ready", logger)
 
+    # Face recognition pipeline — instantiated here so tools receive fully-wired deps.
+    face_db_instance: Any = None
+    face_embedder_instance: Any = None
+    if config.FACE_RECOGNITION_ENABLED:
+        try:
+            from robot_comic.vision.face_db import FaceDatabase
+            from robot_comic.vision.face_recognition_embedder import FaceRecognitionEmbedder
+
+            face_db_instance = FaceDatabase()
+            face_embedder_instance = FaceRecognitionEmbedder()
+            logger.info("Face recognition enabled: FaceRecognitionEmbedder + FaceDatabase ready")
+        except ImportError as _fr_exc:
+            from robot_comic.vision.face_embedder import StubFaceEmbedder
+
+            face_embedder_instance = StubFaceEmbedder()
+            logger.warning(
+                "REACHY_MINI_FACE_RECOGNITION_ENABLED=1 but face_recognition library is missing "
+                "(%s). Falling back to StubFaceEmbedder — face matching will not work. "
+                "Install with: pip install -e '.[face_recognition]'",
+                _fr_exc,
+            )
+        except Exception as _fr_exc:
+            logger.warning("Face recognition init failed (%s); feature disabled.", _fr_exc)
+    log_checkpoint("face recognition init", logger)
+
     deps = ToolDependencies(
         reachy_mini=robot,
         movement_manager=movement_manager,
@@ -261,6 +286,8 @@ def run(
         head_wobbler=head_wobbler,
         pause_controller=pause_controller,
         instance_path=Path(instance_path) if instance_path is not None else None,
+        face_db=face_db_instance,
+        face_embedder=face_embedder_instance,
     )
     log_checkpoint("tool deps ready", logger)
 

@@ -11,6 +11,9 @@ from typing import Any, Dict, List, Tuple, Optional
 from pathlib import Path
 from datetime import datetime, timedelta
 
+import numpy as np
+
+from robot_comic import config as _config
 from robot_comic.tools.move_head import MoveHead
 from robot_comic.tools.core_tools import Tool, ToolDependencies
 from robot_comic.tools.crowd_work import resolve_session_dir
@@ -129,9 +132,15 @@ class Greet(Tool):
     description = (
         "Two actions. "
         "action='scan': detect whether a face is present; executes a slow head sweep if not found immediately. "
-        "action='identify': fuzzy-match a spoken name against stored sessions from the last 30 days. "
-        "On match returns returning=true with profile and callback hints. "
-        "On no match returns returning=false and name_received=<name> — use name_received to address the new visitor by name without asking again."
+        "action='identify': attempt to identify the visitor. "
+        "When face recognition is enabled, the camera frame is checked first — on a face match, returns "
+        "returning=true with the recalled name and profile. "
+        "If the face is not recognised, returns returning=false with a pending_embedding flag so the robot "
+        "knows to ask the visitor's name and pass it to crowd_work update. "
+        "When face recognition is disabled or unavailable, falls back to fuzzy name matching against stored "
+        "sessions from the last 30 days: on match returns returning=true with profile and callback hints; "
+        "on no match returns returning=false and name_received=<name>. "
+        "The 'name' parameter is required when face recognition is disabled."
     )
     parameters_schema = {
         "type": "object",
@@ -141,12 +150,16 @@ class Greet(Tool):
                 "enum": ["scan", "identify"],
                 "description": (
                     "scan: detect face presence and sweep if needed. "
-                    "identify: match spoken name against stored sessions."
+                    "identify: identify the visitor by face (if enabled) or spoken name."
                 ),
             },
             "name": {
                 "type": "string",
-                "description": "The name spoken by the person. Required for action='identify'.",
+                "description": (
+                    "The name spoken by the person. "
+                    "Optional when face recognition is enabled (face is checked first). "
+                    "Required for action='identify' when face recognition is disabled."
+                ),
             },
         },
         "required": ["action"],
@@ -203,6 +216,48 @@ class Greet(Tool):
 
         return {"no_subject": True}
 
+    async def _identify_by_face(self, deps: ToolDependencies) -> Dict[str, Any] | None:
+        """Attempt face-embedding based identification.
+
+        Returns a result dict on success (match or no-match-with-embedding), or
+        ``None`` when face recognition is disabled / unavailable / no frame.
+        """
+        if not _config.config.FACE_RECOGNITION_ENABLED:
+            return None
+        if deps.face_embedder is None or deps.face_db is None:
+            return None
+
+        frame = deps.camera_worker.get_latest_frame() if deps.camera_worker else None
+        if frame is None:
+            logger.debug("greet._identify_by_face: no frame available, skipping face path")
+            return None
+
+        embedding: "np.ndarray[Any, np.dtype[Any]] | None" = deps.face_embedder.embed(frame)
+        if embedding is None:
+            logger.debug("greet._identify_by_face: no face detected in frame")
+            return {"returning": False, "name": None, "pending_embedding": True}
+
+        match = deps.face_db.match(embedding)
+        if match is not None:
+            matched_name: str = match.get("name", "")
+            logger.info("greet._identify_by_face: recognised %r", matched_name)
+            return {
+                "returning": True,
+                "name": matched_name,
+                "last_seen": match.get("last_seen"),
+                "session_count": match.get("session_count"),
+                "face_match": True,
+                "load_instruction": "Call crowd_work action=update with name before proceeding.",
+            }
+
+        # Face detected but not in DB — return embedding as list for crowd_work persistence.
+        logger.debug("greet._identify_by_face: face detected but no DB match")
+        return {
+            "returning": False,
+            "name": None,
+            "pending_embedding": embedding.tolist(),
+        }
+
     async def _identify(self, deps: ToolDependencies, name: str) -> Dict[str, Any]:
         assert self._session_dir is not None
         candidates = _load_candidates(self._session_dir)
@@ -246,6 +301,13 @@ class Greet(Tool):
             return await self._scan(deps)
 
         if action == "identify":
+            # Face-recognition path: try to identify the visitor from their face
+            # before falling back to spoken-name fuzzy matching.
+            face_result = await self._identify_by_face(deps)
+            if face_result is not None:
+                return face_result
+
+            # Name-based fallback (also the only path when face recognition is off).
             name = (kwargs.get("name") or "").strip()
             if not name:
                 return {
