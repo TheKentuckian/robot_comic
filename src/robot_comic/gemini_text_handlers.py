@@ -137,12 +137,15 @@ class GeminiTextElevenLabsResponseHandler(GeminiTextResponseHandler, ElevenLabsT
     # ------------------------------------------------------------------ #
 
     def get_current_voice(self) -> str:
+        """Delegate to the ElevenLabs implementation (diamond MRO shim)."""
         return ElevenLabsTTSResponseHandler.get_current_voice(self)
 
     async def get_available_voices(self) -> list[str]:
+        """Delegate to the ElevenLabs implementation (diamond MRO shim)."""
         return await ElevenLabsTTSResponseHandler.get_available_voices(self)
 
     async def change_voice(self, voice: str) -> str:
+        """Delegate to the ElevenLabs implementation (diamond MRO shim)."""
         return await ElevenLabsTTSResponseHandler.change_voice(self, voice)
 
     async def _prepare_startup_credentials(self) -> None:
