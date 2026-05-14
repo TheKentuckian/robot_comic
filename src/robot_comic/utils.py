@@ -7,10 +7,6 @@ import warnings
 import subprocess
 from typing import TYPE_CHECKING, Optional
 
-from reachy_mini import ReachyMini
-from robot_comic.camera_worker import CameraWorker
-from robot_comic.vision.head_tracking import HeadTracker
-
 
 HEAD_TRACKER_ENV = "REACHY_MINI_HEAD_TRACKER"
 HEAD_TRACKER_CHOICES = ("yolo", "mediapipe")
@@ -18,7 +14,10 @@ HEAD_TRACKER_DISABLED_VALUES = {"", "0", "false", "none", "off", "disabled"}
 
 
 if TYPE_CHECKING:
+    from reachy_mini import ReachyMini
+    from robot_comic.camera_worker import CameraWorker
     from robot_comic.vision.local_vision import VisionProcessor
+    from robot_comic.vision.head_tracking import HeadTracker
 
 
 class CameraVisionInitializationError(Exception):
@@ -102,11 +101,15 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
 def initialize_camera_and_vision(
     args: argparse.Namespace,
     current_robot: ReachyMini,
-) -> tuple[CameraWorker | None, VisionProcessor | None]:
+) -> "tuple[CameraWorker | None, VisionProcessor | None]":
     """Initialize camera capture, optional head tracking, and optional local vision."""
+    # Lazy import: camera_worker pulls in numpy + scipy (~0.5-1s) which we defer
+    # until after systemd READY=1 is issued.
+    from robot_comic.camera_worker import CameraWorker
+
     camera_worker: Optional[CameraWorker] = None
-    head_tracker: HeadTracker | None = None
-    vision_processor: Optional[VisionProcessor] = None
+    head_tracker: "HeadTracker | None" = None
+    vision_processor: Optional["VisionProcessor"] = None
 
     if not args.no_camera:
         requested_head_tracker = get_requested_head_tracker(args)

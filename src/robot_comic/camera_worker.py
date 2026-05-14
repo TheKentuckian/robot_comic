@@ -1,17 +1,19 @@
 """Camera worker thread with frame buffering and optional head tracking."""
 
+from __future__ import annotations
 import time
 import logging
 import threading
-from typing import List, Tuple
-
-import numpy as np
-from numpy.typing import NDArray
-from scipy.spatial.transform import Rotation as R
+from typing import TYPE_CHECKING, List, Tuple
 
 from reachy_mini import ReachyMini
 from reachy_mini.utils.interpolation import linear_pose_interpolation
 from robot_comic.vision.head_tracking import HeadTracker
+
+
+if TYPE_CHECKING:
+    import numpy as np
+    from numpy.typing import NDArray
 
 
 logger = logging.getLogger(__name__)
@@ -96,6 +98,11 @@ class CameraWorker:
 
     def working_loop(self) -> None:
         """Run the camera worker loop."""
+        # Lazy import: numpy + scipy are heavy (~0.5-1 s); deferred until the
+        # background thread actually starts so READY=1 fires first.
+        import numpy as np
+        from scipy.spatial.transform import Rotation as R
+
         logger.debug("Starting camera working loop")
 
         neutral_pose = np.eye(4)
