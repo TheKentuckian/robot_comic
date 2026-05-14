@@ -209,6 +209,71 @@ WOL_DEFAULT_RETRY_AFTER_S = 3.0
 LLAMA_GEMINI_TTS_OUTPUT = "llama_gemini_tts"
 LLAMA_ELEVENLABS_TTS_OUTPUT = "llama_elevenlabs_tts"
 
+# ---------------------------------------------------------------------------
+# Modular audio pipeline: separate input (STT) and output (TTS) backend IDs.
+# These are the canonical string values for AUDIO_INPUT_BACKEND and
+# AUDIO_OUTPUT_BACKEND — either derived from BACKEND_PROVIDER (backwards-compat
+# mode) or set explicitly via environment variables.
+# ---------------------------------------------------------------------------
+
+# Input (STT) backend identifiers
+AUDIO_INPUT_MOONSHINE = "moonshine"
+AUDIO_INPUT_OPENAI_REALTIME = "openai_realtime_input"
+AUDIO_INPUT_GEMINI_LIVE = "gemini_live_input"
+AUDIO_INPUT_HF = "hf_input"
+
+AUDIO_INPUT_CHOICES: tuple[str, ...] = (
+    AUDIO_INPUT_MOONSHINE,
+    AUDIO_INPUT_OPENAI_REALTIME,
+    AUDIO_INPUT_GEMINI_LIVE,
+    AUDIO_INPUT_HF,
+)
+
+# Output (TTS) backend identifiers
+AUDIO_OUTPUT_CHATTERBOX = "chatterbox"
+AUDIO_OUTPUT_GEMINI_TTS = "gemini_tts"
+AUDIO_OUTPUT_ELEVENLABS = "elevenlabs"
+AUDIO_OUTPUT_OPENAI_REALTIME = "openai_realtime_output"
+AUDIO_OUTPUT_GEMINI_LIVE = "gemini_live_output"
+AUDIO_OUTPUT_HF = "hf_output"
+
+AUDIO_OUTPUT_CHOICES: tuple[str, ...] = (
+    AUDIO_OUTPUT_CHATTERBOX,
+    AUDIO_OUTPUT_GEMINI_TTS,
+    AUDIO_OUTPUT_ELEVENLABS,
+    AUDIO_OUTPUT_OPENAI_REALTIME,
+    AUDIO_OUTPUT_GEMINI_LIVE,
+    AUDIO_OUTPUT_HF,
+)
+
+# Env-var names for explicit overrides
+AUDIO_INPUT_BACKEND_ENV = "REACHY_MINI_AUDIO_INPUT_BACKEND"
+AUDIO_OUTPUT_BACKEND_ENV = "REACHY_MINI_AUDIO_OUTPUT_BACKEND"
+
+# Supported (bundled) combinations — the only ones that map cleanly to an
+# existing handler class.  Any combo not in this set is aspirational and will
+# trigger a warning + fallback.
+_SUPPORTED_AUDIO_COMBINATIONS: frozenset[tuple[str, str]] = frozenset(
+    {
+        # BACKEND_PROVIDER=huggingface
+        (AUDIO_INPUT_HF, AUDIO_OUTPUT_HF),
+        # BACKEND_PROVIDER=openai
+        (AUDIO_INPUT_OPENAI_REALTIME, AUDIO_OUTPUT_OPENAI_REALTIME),
+        # BACKEND_PROVIDER=gemini
+        (AUDIO_INPUT_GEMINI_LIVE, AUDIO_OUTPUT_GEMINI_LIVE),
+        # BACKEND_PROVIDER=local_stt, LOCAL_STT_RESPONSE_BACKEND=chatterbox
+        (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_CHATTERBOX),
+        # BACKEND_PROVIDER=local_stt, LOCAL_STT_RESPONSE_BACKEND=gemini_tts
+        (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_GEMINI_TTS),
+        # BACKEND_PROVIDER=local_stt, LOCAL_STT_RESPONSE_BACKEND=elevenlabs
+        (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_ELEVENLABS),
+        # BACKEND_PROVIDER=local_stt, LOCAL_STT_RESPONSE_BACKEND=openai
+        (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_OPENAI_REALTIME),
+        # BACKEND_PROVIDER=local_stt, LOCAL_STT_RESPONSE_BACKEND=huggingface
+        (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_HF),
+    }
+)
+
 LOCAL_STT_OUTPUT_LABELS = {
     OPENAI_BACKEND: "Local STT + OpenAI voice",
     HF_BACKEND: "Local STT + Hugging Face voice",
@@ -423,6 +488,146 @@ def _normalize_local_stt_update_interval(value: str | None) -> float:
         )
         return LOCAL_STT_DEFAULT_UPDATE_INTERVAL
     return interval
+
+
+def derive_audio_backends(backend_provider: str) -> tuple[str, str]:
+    """Derive (AUDIO_INPUT_BACKEND, AUDIO_OUTPUT_BACKEND) from a BACKEND_PROVIDER value.
+
+    This is the backwards-compatibility bridge: when the new granular env vars
+    are not set, the existing BACKEND_PROVIDER determines the bundled pair so
+    existing deployments keep working without any config changes.
+
+    Args:
+        backend_provider: A valid BACKEND_PROVIDER string (e.g. "huggingface",
+            "openai", "gemini", "local_stt").
+
+    Returns:
+        A ``(input_backend, output_backend)`` tuple of canonical backend IDs.
+
+    """
+    normalized = _normalize_backend_provider(backend_provider)
+    if normalized == HF_BACKEND:
+        return (AUDIO_INPUT_HF, AUDIO_OUTPUT_HF)
+    if normalized == OPENAI_BACKEND:
+        return (AUDIO_INPUT_OPENAI_REALTIME, AUDIO_OUTPUT_OPENAI_REALTIME)
+    if normalized == GEMINI_BACKEND:
+        return (AUDIO_INPUT_GEMINI_LIVE, AUDIO_OUTPUT_GEMINI_LIVE)
+    # LOCAL_STT_BACKEND — output depends on LOCAL_STT_RESPONSE_BACKEND but we
+    # default to moonshine + chatterbox (the primary local-stt combination).
+    return (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_CHATTERBOX)
+
+
+def _normalize_audio_input_backend(value: str | None) -> str | None:
+    """Validate and normalize an AUDIO_INPUT_BACKEND value.
+
+    Returns the normalised string, or None if the value was absent/empty.
+    Logs a warning and returns None for unrecognised values.
+    """
+    candidate = (value or "").strip().lower()
+    if not candidate:
+        return None
+    if candidate in AUDIO_INPUT_CHOICES:
+        return candidate
+    logger.warning(
+        "Invalid %s=%r. Expected one of: %s. Ignoring.",
+        AUDIO_INPUT_BACKEND_ENV,
+        value,
+        ", ".join(AUDIO_INPUT_CHOICES),
+    )
+    return None
+
+
+def _normalize_audio_output_backend(value: str | None) -> str | None:
+    """Validate and normalize an AUDIO_OUTPUT_BACKEND value.
+
+    Returns the normalised string, or None if the value was absent/empty.
+    Logs a warning and returns None for unrecognised values.
+    """
+    candidate = (value or "").strip().lower()
+    if not candidate:
+        return None
+    if candidate in AUDIO_OUTPUT_CHOICES:
+        return candidate
+    logger.warning(
+        "Invalid %s=%r. Expected one of: %s. Ignoring.",
+        AUDIO_OUTPUT_BACKEND_ENV,
+        value,
+        ", ".join(AUDIO_OUTPUT_CHOICES),
+    )
+    return None
+
+
+def resolve_audio_backends(
+    backend_provider: str,
+    explicit_input: str | None,
+    explicit_output: str | None,
+) -> tuple[str, str]:
+    """Return the resolved (input, output) audio backend pair.
+
+    Resolution order:
+    1. If *both* explicit overrides are provided and the combination is
+       supported, use them directly.
+    2. If *both* are provided but the combination is unsupported, log a WARNING
+       and fall back to the BACKEND_PROVIDER-derived defaults.
+    3. If only one override is set, treat it the same as unsupported (partial
+       overrides are not yet implemented) — log a WARNING and fall back.
+    4. If neither is set, derive from BACKEND_PROVIDER (backwards compat).
+
+    Args:
+        backend_provider: The current BACKEND_PROVIDER value.
+        explicit_input:   Normalised AUDIO_INPUT_BACKEND override, or None.
+        explicit_output:  Normalised AUDIO_OUTPUT_BACKEND override, or None.
+
+    Returns:
+        A ``(input_backend, output_backend)`` tuple of canonical backend IDs.
+
+    """
+    derived = derive_audio_backends(backend_provider)
+
+    both_set = explicit_input is not None and explicit_output is not None
+    neither_set = explicit_input is None and explicit_output is None
+
+    if neither_set:
+        # Pure backwards-compat path — nothing to validate.
+        return derived
+
+    if not both_set:
+        # Partial override — not supported yet.
+        set_var = AUDIO_INPUT_BACKEND_ENV if explicit_input is not None else AUDIO_OUTPUT_BACKEND_ENV
+        logger.warning(
+            "Partial audio backend override detected: %s is set but the other is not. "
+            "Both %s and %s must be set together to take effect. "
+            "Falling back to BACKEND_PROVIDER=%r defaults: input=%r, output=%r.",
+            set_var,
+            AUDIO_INPUT_BACKEND_ENV,
+            AUDIO_OUTPUT_BACKEND_ENV,
+            backend_provider,
+            derived[0],
+            derived[1],
+        )
+        return derived
+
+    # Both are set — validate the combination.
+    # At this point both_set is True so neither value is None.
+    assert explicit_input is not None and explicit_output is not None
+    combo = (explicit_input, explicit_output)
+    if combo in _SUPPORTED_AUDIO_COMBINATIONS:
+        return combo
+
+    logger.warning(
+        "Unsupported audio backend combination: %s=%r + %s=%r. "
+        "This pairing has no handler implementation yet. "
+        "Falling back to BACKEND_PROVIDER=%r defaults: input=%r, output=%r. "
+        "See docs/audio-backends.md for the supported matrix.",
+        AUDIO_INPUT_BACKEND_ENV,
+        explicit_input,
+        AUDIO_OUTPUT_BACKEND_ENV,
+        explicit_output,
+        backend_provider,
+        derived[0],
+        derived[1],
+    )
+    return derived
 
 
 @dataclass(frozen=True)
@@ -682,6 +887,22 @@ class Config:
     WS_PORT = int(os.getenv("REACHY_MINI_WS_PORT", "8765"))
     WS_SERVER_HOST = os.getenv("REACHY_MINI_WS_SERVER_HOST", "localhost")
 
+    # ---------------------------------------------------------------------------
+    # Modular audio pipeline (config scaffold — handler splitting is a follow-up).
+    # Set REACHY_MINI_AUDIO_INPUT_BACKEND and REACHY_MINI_AUDIO_OUTPUT_BACKEND to
+    # mix-and-match STT/TTS backends independently of BACKEND_PROVIDER.  When
+    # neither env var is set the values are derived from BACKEND_PROVIDER so
+    # existing deployments are unaffected.  Setting only one of the two is not
+    # supported yet and is treated as if neither were set (with a warning).
+    # Unsupported combinations (no handler exists) also fall back to defaults.
+    # See docs/audio-backends.md for the full supported matrix.
+    # ---------------------------------------------------------------------------
+    _raw_audio_input = _normalize_audio_input_backend(os.getenv(AUDIO_INPUT_BACKEND_ENV))
+    _raw_audio_output = _normalize_audio_output_backend(os.getenv(AUDIO_OUTPUT_BACKEND_ENV))
+    _resolved_audio = resolve_audio_backends(BACKEND_PROVIDER, _raw_audio_input, _raw_audio_output)
+    AUDIO_INPUT_BACKEND: str = _resolved_audio[0]
+    AUDIO_OUTPUT_BACKEND: str = _resolved_audio[1]
+
     logger.debug(
         "Backend provider: %s, Model: %s, HF mode: %s, HF session URL set: %s, HF direct URL set: %s, HF_HOME: %s, Vision Model: %s, Local STT: %s/%s/%s response=%s cache=%s",
         BACKEND_PROVIDER,
@@ -836,7 +1057,11 @@ def refresh_runtime_config_from_env() -> None:
     config.WS_ENABLED = _env_flag("REACHY_MINI_WS_ENABLED", default=False)
     config.WS_PORT = int(os.getenv("REACHY_MINI_WS_PORT", "8765"))
     config.WS_SERVER_HOST = os.getenv("REACHY_MINI_WS_SERVER_HOST", "localhost")
-    config.FACE_RECOGNITION_ENABLED = _env_flag("REACHY_MINI_FACE_RECOGNITION_ENABLED", default=False)
+    _refresh_raw_input = _normalize_audio_input_backend(os.getenv(AUDIO_INPUT_BACKEND_ENV))
+    _refresh_raw_output = _normalize_audio_output_backend(os.getenv(AUDIO_OUTPUT_BACKEND_ENV))
+    _refresh_audio = resolve_audio_backends(config.BACKEND_PROVIDER, _refresh_raw_input, _refresh_raw_output)
+    config.AUDIO_INPUT_BACKEND = _refresh_audio[0]
+    config.AUDIO_OUTPUT_BACKEND = _refresh_audio[1]
 
 
 def get_backend_choice(model_name: str | None = None) -> str:
