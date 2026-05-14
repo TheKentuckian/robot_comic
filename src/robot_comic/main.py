@@ -69,20 +69,12 @@ def run(
     from robot_comic.moves import MovementManager
     from robot_comic.config import (
         HF_BACKEND,
-        OPENAI_BACKEND,
-        CHATTERBOX_OUTPUT,
-        ELEVENLABS_OUTPUT,
-        GEMINI_TTS_OUTPUT,
-        LOCAL_STT_BACKEND,
-        LLAMA_GEMINI_TTS_OUTPUT,
-        HF_LOCAL_CONNECTION_MODE,
-        LLAMA_ELEVENLABS_TTS_OUTPUT,
         config,
-        is_gemini_model,
         get_backend_label,
         get_hf_connection_selection,
         refresh_runtime_config_from_env,
     )
+    from robot_comic.handler_factory import HandlerFactory
     from robot_comic.startup_settings import (
         StartupSettings,
         load_startup_settings_into_runtime,
@@ -272,107 +264,20 @@ def run(
     )
     log_checkpoint("tool deps ready", logger)
 
-    if is_gemini_model():
-        from robot_comic.gemini_live import GeminiLiveHandler
-
-        log_checkpoint("import gemini_live", logger)
-        logger.info(
-            "Using %s via GeminiLiveHandler",
-            get_backend_label(config.BACKEND_PROVIDER),
-        )
-        handler = GeminiLiveHandler(
-            deps,
-            sim_mode=args.sim,
-            instance_path=instance_path,
-            startup_voice=startup_settings.voice,
-        )
-        log_checkpoint("handler init", logger)
-    elif config.BACKEND_PROVIDER == HF_BACKEND:
-        from robot_comic.huggingface_realtime import HuggingFaceRealtimeHandler
-
-        log_checkpoint("import huggingface_realtime", logger)
-        hf_connection_selection = get_hf_connection_selection()
-        transport_label = (
-            "Hugging Face direct websocket"
-            if hf_connection_selection.mode == HF_LOCAL_CONNECTION_MODE and hf_connection_selection.has_target
-            else "Hugging Face session proxy"
-        )
-        logger.info(
-            "Using %s via Hugging Face realtime handler (%s)",
-            get_backend_label(config.BACKEND_PROVIDER),
-            transport_label,
-        )
-        handler = HuggingFaceRealtimeHandler(
-            deps,
-            sim_mode=args.sim,
-            instance_path=instance_path,
-            startup_voice=startup_settings.voice,
-        )  # type: ignore[assignment]
-        log_checkpoint("handler init", logger)
-    elif config.BACKEND_PROVIDER == LOCAL_STT_BACKEND:
-        from robot_comic.gemini_tts import LocalSTTGeminiTTSHandler
-
-        log_checkpoint("import gemini_tts", logger)
-        from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
-
-        log_checkpoint("import chatterbox_tts", logger)
-        from robot_comic.elevenlabs_tts import LocalSTTElevenLabsHandler
-
-        log_checkpoint("import elevenlabs_tts", logger)
-        from robot_comic.llama_gemini_tts import LocalSTTLlamaGeminiTTSHandler
-
-        log_checkpoint("import llama_gemini_tts", logger)
-        from robot_comic.local_stt_realtime import (
-            LocalSTTOpenAIRealtimeHandler,
-            LocalSTTHuggingFaceRealtimeHandler,
-        )
-
-        log_checkpoint("import local_stt_realtime", logger)
-        from robot_comic.llama_elevenlabs_tts import LocalSTTLlamaElevenLabsHandler
-
-        log_checkpoint("import llama_elevenlabs_tts", logger)
-
-        local_stt_response_backend = getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
-        logger.info("Using %s", get_backend_label(config.BACKEND_PROVIDER))
-
-        handler_class: type[Any]
-        if local_stt_response_backend == HF_BACKEND:
-            handler_class = LocalSTTHuggingFaceRealtimeHandler
-        elif local_stt_response_backend == GEMINI_TTS_OUTPUT:
-            handler_class = LocalSTTGeminiTTSHandler
-        elif local_stt_response_backend == CHATTERBOX_OUTPUT:
-            handler_class = LocalSTTChatterboxHandler
-        elif local_stt_response_backend == ELEVENLABS_OUTPUT:
-            handler_class = LocalSTTElevenLabsHandler
-        elif local_stt_response_backend == LLAMA_GEMINI_TTS_OUTPUT:
-            handler_class = LocalSTTLlamaGeminiTTSHandler
-        elif local_stt_response_backend == LLAMA_ELEVENLABS_TTS_OUTPUT:
-            handler_class = LocalSTTLlamaElevenLabsHandler
-        else:
-            handler_class = LocalSTTOpenAIRealtimeHandler
-
-        handler = handler_class(
-            deps,
-            sim_mode=args.sim,
-            instance_path=instance_path,
-            startup_voice=startup_settings.voice,
-        )  # type: ignore[assignment]
-        log_checkpoint("handler init", logger)
-    else:
-        from robot_comic.openai_realtime import OpenaiRealtimeHandler
-
-        log_checkpoint("import openai_realtime", logger)
-        logger.info(
-            "Using %s via OpenAI realtime handler (OpenAI Realtime API)",
-            get_backend_label(config.BACKEND_PROVIDER),
-        )
-        handler = OpenaiRealtimeHandler(
-            deps,
-            sim_mode=args.sim,
-            instance_path=instance_path,
-            startup_voice=startup_settings.voice,
-        )  # type: ignore[assignment]
-        log_checkpoint("handler init", logger)
+    logger.info(
+        "Using audio backends: input=%r output=%r",
+        config.AUDIO_INPUT_BACKEND,
+        config.AUDIO_OUTPUT_BACKEND,
+    )
+    handler = HandlerFactory.build(
+        config.AUDIO_INPUT_BACKEND,
+        config.AUDIO_OUTPUT_BACKEND,
+        deps,
+        sim_mode=args.sim,
+        instance_path=instance_path,
+        startup_voice=startup_settings.voice,
+    )
+    log_checkpoint("handler init", logger)
 
     log_checkpoint("handler ready", logger)
 
