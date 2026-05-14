@@ -10,6 +10,7 @@ Audio output: 24 kHz, mono, 16-bit PCM — matches the existing pipeline.
 import os
 import json
 import time
+import uuid
 import random
 import asyncio
 import logging
@@ -20,6 +21,8 @@ import numpy as np
 from google import genai
 from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item
 from google.genai import types
+from opentelemetry import trace as _otel_trace
+from opentelemetry import context as _otel_context
 
 from robot_comic import telemetry
 from robot_comic.config import (
@@ -168,6 +171,14 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
     # verify against current ElevenLabs pricing
     ELEVENLABS_COST_PER_1M_CHARS: float = 0.50
 
+    # Telemetry labels — mirrors the pattern in BaseLlamaResponseHandler so the
+    # monitor / SigNoz dashboards can group turns by backend. Subclasses (e.g.
+    # GeminiTextElevenLabsResponseHandler) override _BACKEND_LABEL with a more
+    # specific name; the LLM side is always Gemini for this handler family.
+    _BACKEND_LABEL: str = "gemini_text_elevenlabs"
+    _LLM_SYSTEM: str = "gemini"
+    _TTS_SYSTEM: str = "elevenlabs"
+
     def __init__(
         self,
         deps: ToolDependencies | None = None,
@@ -196,6 +207,20 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             self._stop_event: asyncio.Event = asyncio.Event()
             self._conversation_history: list[dict[str, Any]] = []
             self.output_queue: asyncio.Queue[Any] = asyncio.Queue()
+            # OTel: stable session id across the lifetime of this handler so all
+            # turn spans on this connection roll up under one session.
+            self._session_id: str = str(uuid.uuid4())
+        # OTel turn span — set by the mixin (LocalSTTInputMixin opens an outer
+        # `turn` span when STT starts) or by this handler itself for the
+        # synthetic startup greeting path. Captured locally inside
+        # _dispatch_completed_transcript_impl so concurrent STT events don't
+        # close the wrong span.
+        self._turn_span: Any = getattr(self, "_turn_span", None)
+        self._turn_ctx_token: Any = getattr(self, "_turn_ctx_token", None)
+        # Ensure _session_id exists for the diamond-init path too (parent classes
+        # in the diamond may not set it).
+        if not hasattr(self, "_session_id"):
+            self._session_id = str(uuid.uuid4())
         # ElevenLabs-specific state — always initialise.
         self._client: genai.Client | None = None
         self._last_tts_rate_limited: bool = False
@@ -251,8 +276,37 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         await self._stop_event.wait()
 
     async def _send_startup_trigger(self) -> None:
-        """Kick off the opening sequence defined in the profile instructions."""
-        await self._dispatch_completed_transcript("[conversation started]")
+        """Kick off the opening sequence defined in the profile instructions.
+
+        Opens a synthetic outer turn span (no STT event fires for the boot
+        greeting) so the monitor displays the startup greeting as a turn row
+        with LLM and TTS children. Without this, the greeting was invisible
+        to operator dashboards.
+        """
+        _tracer = telemetry.get_tracer()
+        _turn_id = str(uuid.uuid4())
+        _turn_span = _tracer.start_span(
+            "turn",
+            attributes={
+                "turn.id": _turn_id,
+                "session.id": self._session_id,
+                "turn.excerpt": "[conversation started]",
+                "robot.mode": self._BACKEND_LABEL,
+            },
+        )
+        self._turn_span = _turn_span
+        try:
+            await self._dispatch_completed_transcript("[conversation started]")
+        finally:
+            # _dispatch_completed_transcript_impl closes/clears the span via its
+            # own captured reference; guard against double-close on its error
+            # paths.
+            if self._turn_span is _turn_span:
+                self._turn_span = None
+                try:
+                    _turn_span.end()
+                except Exception:
+                    pass
 
     async def shutdown(self) -> None:
         """Signal start_up to return and drain the output queue."""
@@ -362,59 +416,101 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         self._conversation_history.append({"role": "user", "parts": [{"text": transcript}]})
         trim_history_in_place(self._conversation_history, role_key="role")
 
+        # Capture the outer turn span NOW — the mixin can overwrite self._turn_span
+        # if another STT event fires concurrently. Using a local reference in the
+        # finally block guarantees we close the right span and never leak.
+        _outer_span = self._turn_span
+        _reattach_token: Any = None
+        if _outer_span is not None:
+            # Stamp backend identity / session info so the monitor groups this
+            # turn under the right handler. local_stt_realtime sets robot.mode
+            # to "local_stt" by default; replace with our handler label.
+            try:
+                _outer_span.set_attribute("robot.mode", self._BACKEND_LABEL)
+                _outer_span.set_attribute("gen_ai.system", self._LLM_SYSTEM)
+            except Exception:
+                pass
+            _reattach_token = _otel_context.attach(_otel_trace.set_span_in_context(_outer_span))
+
+        _tracer = telemetry.get_tracer()
+        _turn_start = time.perf_counter()
+        _outcome = "success"
         try:
-            response_text = await self._run_llm_with_tools()
-        except _LLMToolCallLimitExceeded as exc:
-            logger.warning("%s", exc)
-            await self.output_queue.put(
-                AdditionalOutputs({"role": "assistant", "content": "[Skipped TTS: tool-call limit reached]"})
-            )
-            return
-        except Exception as exc:
-            logger.warning("LLM call failed: %s", exc)
-            return
+            try:
+                response_text = await self._run_llm_with_tools()
+            except _LLMToolCallLimitExceeded as exc:
+                logger.warning("%s", exc)
+                await self.output_queue.put(
+                    AdditionalOutputs({"role": "assistant", "content": "[Skipped TTS: tool-call limit reached]"})
+                )
+                _outcome = "tool_limit_exceeded"
+                return
+            except Exception as exc:
+                logger.warning("LLM call failed: %s", exc)
+                _outcome = "llm_error"
+                return
 
-        if not response_text.strip():
-            # _run_llm_with_tools returned empty (Gemini emitted a candidate
-            # with no parts — typically finish_reason=STOP for short inputs
-            # with tools configured; safety blocks are also possible). Speak
-            # a short canned line so the operator gets audible feedback
-            # instead of perceiving the robot as hung. Tracked in #267.
-            response_text = random.choice(_EMPTY_RESPONSE_FILLERS)
-            logger.warning(
-                "LLM returned empty response_text; substituting canned filler %r",
-                response_text,
-            )
+            if not response_text.strip():
+                # _run_llm_with_tools returned empty (Gemini emitted a candidate
+                # with no parts — typically finish_reason=STOP for short inputs
+                # with tools configured; safety blocks are also possible). Speak
+                # a short canned line so the operator gets audible feedback
+                # instead of perceiving the robot as hung. Tracked in #267.
+                response_text = random.choice(_EMPTY_RESPONSE_FILLERS)
+                logger.warning(
+                    "LLM returned empty response_text; substituting canned filler %r",
+                    response_text,
+                )
+                _outcome = "empty_response_filler"
 
-        self._conversation_history.append({"role": "model", "parts": [{"text": response_text}]})
-        await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": response_text}))
+            self._conversation_history.append({"role": "model", "parts": [{"text": response_text}]})
+            await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": response_text}))
 
-        sentences = split_sentences(response_text) or [response_text]
-        any_audio = False
-        # List used as a one-shot first-audio marker shared with _stream_tts_to_queue.
-        # When non-empty, the first PCM chunk fires record_tts_first_audio and clears it.
-        first_audio_marker: list[float] = [time.perf_counter()]
-        for sentence in sentences:
-            # Extract delivery tags before stripping so they can guide voice_settings.
-            tags = extract_delivery_tags(sentence)
-            # Strip Gemini-style delivery tags ([fast], [annoyance], etc.) so they
-            # aren't spoken literally. [short pause] becomes a real silence gap.
-            spoken = strip_gemini_tags(sentence)
-            if not spoken:
-                continue
-            if SHORT_PAUSE_TAG in tags:
-                for frame in self._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS, ELEVENLABS_OUTPUT_SAMPLE_RATE)):
-                    await self._enqueue_audio_frame(frame)
-            sentence_had_audio = await self._stream_tts_to_queue(spoken, first_audio_marker, tags)
-            if sentence_had_audio:
-                any_audio = True
+            sentences = split_sentences(response_text) or [response_text]
+            any_audio = False
+            # List used as a one-shot first-audio marker shared with _stream_tts_to_queue.
+            # When non-empty, the first PCM chunk fires record_tts_first_audio and clears it.
+            first_audio_marker: list[float] = [time.perf_counter()]
+            for sentence in sentences:
+                # Extract delivery tags before stripping so they can guide voice_settings.
+                tags = extract_delivery_tags(sentence)
+                # Strip Gemini-style delivery tags ([fast], [annoyance], etc.) so they
+                # aren't spoken literally. [short pause] becomes a real silence gap.
+                spoken = strip_gemini_tags(sentence)
+                if not spoken:
+                    continue
+                if SHORT_PAUSE_TAG in tags:
+                    for frame in self._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS, ELEVENLABS_OUTPUT_SAMPLE_RATE)):
+                        await self._enqueue_audio_frame(frame)
+                sentence_had_audio = await self._stream_tts_to_queue(spoken, first_audio_marker, tags)
+                if sentence_had_audio:
+                    any_audio = True
 
-        if not any_audio:
-            if self._last_tts_rate_limited:
-                msg = "[ElevenLabs TTS rate-limited; try again later]"
-            else:
-                msg = "[TTS error — could not generate audio]"
-            await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": msg}))
+            if not any_audio:
+                if self._last_tts_rate_limited:
+                    msg = "[ElevenLabs TTS rate-limited; try again later]"
+                    _outcome = "tts_rate_limited"
+                else:
+                    msg = "[TTS error — could not generate audio]"
+                    _outcome = "tts_error"
+                await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": msg}))
+        finally:
+            if _reattach_token is not None:
+                _otel_context.detach(_reattach_token)
+            if _outer_span is not None:
+                try:
+                    _outer_span.set_attribute("turn.outcome", _outcome)
+                    _outer_span.end()
+                except Exception:
+                    pass
+                # Only clear if it still points at our span (a concurrent STT
+                # 'started' event may have already replaced it with the next turn).
+                if self._turn_span is _outer_span:
+                    self._turn_span = None
+                telemetry.record_turn(
+                    time.perf_counter() - _turn_start,
+                    {"robot.mode": self._BACKEND_LABEL, "turn.outcome": _outcome},
+                )
 
     async def _llm_generate_with_backoff(self, contents: Any, config: Any) -> Any:
         """Call generate_content with backoff on transient errors and 429s."""
@@ -471,18 +567,50 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         )
 
         history: list[Any] = list(self._conversation_history)
+        _tracer = telemetry.get_tracer()
 
-        for _ in range(_LLM_MAX_TOOL_ROUNDS):
-            response = await self._llm_generate_with_backoff(history, gen_config)
+        for _phase_n in range(_LLM_MAX_TOOL_ROUNDS):
+            _llm_span = _tracer.start_span(
+                "llm.request",
+                attributes={
+                    "gen_ai.system": self._LLM_SYSTEM,
+                    "gen_ai.operation.name": "chat",
+                    "gen_ai.request.model": ELEVENLABS_TTS_LLM_MODEL,
+                    "llm.phase": str(_phase_n),
+                },
+            )
+            _llm_start = time.perf_counter()
+            try:
+                response = await self._llm_generate_with_backoff(history, gen_config)
+            except Exception:
+                # Tag the span and re-raise so the outer turn span records the
+                # failure outcome.
+                _llm_span.set_attribute("finish_reason", "error")
+                _llm_span.end()
+                telemetry.record_llm_duration(
+                    time.perf_counter() - _llm_start,
+                    {"gen_ai.system": self._LLM_SYSTEM, "gen_ai.operation.name": "chat"},
+                )
+                raise
 
             candidates = response.candidates or []
+            candidate = candidates[0] if candidates else None
+            _finish_reason = getattr(candidate, "finish_reason", None) if candidate is not None else None
+            if _finish_reason is not None:
+                _llm_span.set_attribute("finish_reason", str(_finish_reason))
+            _llm_span.end()
+            telemetry.record_llm_duration(
+                time.perf_counter() - _llm_start,
+                {"gen_ai.system": self._LLM_SYSTEM, "gen_ai.operation.name": "chat"},
+            )
+
             if not candidates:
                 logger.warning(
                     "Gemini returned no candidates; skipping turn (prompt_feedback=%r)",
                     getattr(response, "prompt_feedback", None),
                 )
                 return ""
-            candidate = candidates[0]
+            assert candidate is not None  # candidates non-empty implies candidate set
             parts = (candidate.content.parts if candidate.content else None) or []
             if not parts:
                 # Empty content despite a candidate — usually finish_reason=SAFETY
@@ -503,14 +631,25 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             # Append model's function-call turn to history
             history.append(candidate.content)
 
-            # Execute tools and collect responses
+            # Execute tools and collect responses — each wrapped in tool.execute
+            # so the monitor can attribute tool latency back to the parent turn.
             response_parts: list[types.Part] = []
             for fc in function_calls:
                 logger.info("ElevenLabsTTS tool call: %s args=%s", fc.name, dict(fc.args))
+                _tool_id = uuid.uuid4().hex[:8]
+                _tool_span = _tracer.start_span(
+                    "tool.execute",
+                    attributes={
+                        "tool.name": fc.name or "",
+                        "tool.id": _tool_id,
+                    },
+                )
                 try:
                     result = await dispatch_tool_call(fc.name, json.dumps(dict(fc.args)), self.deps)
                 except Exception as exc:
                     result = {"error": str(exc)}
+                finally:
+                    _tool_span.end()
 
                 response_parts.append(
                     types.Part(function_response=types.FunctionResponse(name=fc.name, response=result))
@@ -589,61 +728,79 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
         self._last_tts_rate_limited = False
         frame_bytes = _CHUNK_SAMPLES * 2  # int16 = 2 bytes/sample
-        for attempt in range(_TTS_MAX_RETRIES):
-            try:
-                got_audio = False
-                leftover = b""
-                async with self._http.stream("POST", url, json=payload, headers=headers) as response:
-                    response.raise_for_status()
-                    async for chunk in response.aiter_bytes():
-                        if not chunk:
-                            continue
-                        if not got_audio:
-                            got_audio = True
-                            if first_audio_marker:
-                                telemetry.record_tts_first_audio(
-                                    time.perf_counter() - first_audio_marker[0],
-                                    {"gen_ai.system": "elevenlabs"},
-                                )
-                                first_audio_marker.clear()
-                        leftover += chunk
-                        while len(leftover) >= frame_bytes:
-                            frame = np.frombuffer(leftover[:frame_bytes], dtype=np.int16)
-                            await self._enqueue_audio_frame(frame)
-                            leftover = leftover[frame_bytes:]
-                if leftover:
-                    tail = np.frombuffer(leftover[: (len(leftover) // 2) * 2], dtype=np.int16)
-                    if len(tail) > 0:
-                        await self._enqueue_audio_frame(tail)
-                return got_audio
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code == 429:
-                    self._last_tts_rate_limited = True
-                    logger.warning(
-                        "ElevenLabs TTS 429 (attempt %d/%d); sleeping %.1fs before retry",
-                        attempt + 1,
-                        _TTS_MAX_RETRIES,
-                        _TTS_RETRY_BASE_DELAY * (2**attempt),
-                    )
-                    if attempt < _TTS_MAX_RETRIES - 1:
-                        await asyncio.sleep(_TTS_RETRY_BASE_DELAY * (2**attempt))
-                elif exc.response.status_code == 401:
-                    logger.error("ElevenLabs API key invalid or expired")
-                    return False
-                else:
+        _tts_span = telemetry.get_tracer().start_span(
+            "tts.synthesize",
+            attributes={
+                "gen_ai.system": self._TTS_SYSTEM,
+                "tts.voice_id": voice_id,
+                "tts.char_count": char_count,
+            },
+        )
+        _tts_start = time.perf_counter()
+        try:
+            for attempt in range(_TTS_MAX_RETRIES):
+                try:
+                    got_audio = False
+                    leftover = b""
+                    async with self._http.stream("POST", url, json=payload, headers=headers) as response:
+                        response.raise_for_status()
+                        async for chunk in response.aiter_bytes():
+                            if not chunk:
+                                continue
+                            if not got_audio:
+                                got_audio = True
+                                if first_audio_marker:
+                                    telemetry.record_tts_first_audio(
+                                        time.perf_counter() - first_audio_marker[0],
+                                        {"gen_ai.system": self._TTS_SYSTEM},
+                                    )
+                                    first_audio_marker.clear()
+                            leftover += chunk
+                            while len(leftover) >= frame_bytes:
+                                frame = np.frombuffer(leftover[:frame_bytes], dtype=np.int16)
+                                await self._enqueue_audio_frame(frame)
+                                leftover = leftover[frame_bytes:]
+                    if leftover:
+                        tail = np.frombuffer(leftover[: (len(leftover) // 2) * 2], dtype=np.int16)
+                        if len(tail) > 0:
+                            await self._enqueue_audio_frame(tail)
+                    return got_audio
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code == 429:
+                        self._last_tts_rate_limited = True
+                        logger.warning(
+                            "ElevenLabs TTS 429 (attempt %d/%d); sleeping %.1fs before retry",
+                            attempt + 1,
+                            _TTS_MAX_RETRIES,
+                            _TTS_RETRY_BASE_DELAY * (2**attempt),
+                        )
+                        if attempt < _TTS_MAX_RETRIES - 1:
+                            await asyncio.sleep(_TTS_RETRY_BASE_DELAY * (2**attempt))
+                    elif exc.response.status_code == 401:
+                        logger.error("ElevenLabs API key invalid or expired")
+                        return False
+                    else:
+                        logger.warning("TTS attempt %d/%d failed: %s", attempt + 1, _TTS_MAX_RETRIES, exc)
+                        if attempt < _TTS_MAX_RETRIES - 1:
+                            await asyncio.sleep(_TTS_RETRY_BASE_DELAY)
+                except Exception as exc:
                     logger.warning("TTS attempt %d/%d failed: %s", attempt + 1, _TTS_MAX_RETRIES, exc)
                     if attempt < _TTS_MAX_RETRIES - 1:
                         await asyncio.sleep(_TTS_RETRY_BASE_DELAY)
-            except Exception as exc:
-                logger.warning("TTS attempt %d/%d failed: %s", attempt + 1, _TTS_MAX_RETRIES, exc)
-                if attempt < _TTS_MAX_RETRIES - 1:
-                    await asyncio.sleep(_TTS_RETRY_BASE_DELAY)
 
-        if self._last_tts_rate_limited:
-            logger.error("ElevenLabs TTS exhausted %d retries on 429; skipping audio for this turn", _TTS_MAX_RETRIES)
-        else:
-            logger.error("ElevenLabs TTS exhausted %d retries; skipping audio for this turn", _TTS_MAX_RETRIES)
-        return False
+            if self._last_tts_rate_limited:
+                logger.error(
+                    "ElevenLabs TTS exhausted %d retries on 429; skipping audio for this turn", _TTS_MAX_RETRIES
+                )
+            else:
+                logger.error("ElevenLabs TTS exhausted %d retries; skipping audio for this turn", _TTS_MAX_RETRIES)
+            return False
+        finally:
+            _tts_span.end()
+            telemetry.record_tts(
+                time.perf_counter() - _tts_start,
+                {"gen_ai.system": self._TTS_SYSTEM},
+            )
 
     @staticmethod
     def _pcm_to_frames(pcm_bytes: bytes) -> "list[np.ndarray[Any, Any]]":
