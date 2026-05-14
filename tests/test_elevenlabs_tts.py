@@ -642,7 +642,7 @@ async def test_otel_spans_emitted_for_full_turn(monkeypatch: pytest.MonkeyPatch)
             self.candidates = [_FakeCandidate(text)]
             self.prompt_feedback = None
 
-    async def fake_backoff(self, contents: Any, cfg: Any) -> Any:
+    async def fake_backoff(self, contents: Any, cfg: Any, **kwargs: Any) -> Any:
         return _FakeResponse("Hello there.")
 
     monkeypatch.setattr(mod.ElevenLabsTTSResponseHandler, "_llm_generate_with_backoff", fake_backoff)
@@ -706,7 +706,7 @@ async def test_otel_turn_outcome_on_llm_error(monkeypatch: pytest.MonkeyPatch) -
     handler = _make_handler()
     handler._turn_span = outer
 
-    async def boom(self, contents: Any, cfg: Any) -> Any:
+    async def boom(self, contents: Any, cfg: Any, **kwargs: Any) -> Any:
         raise RuntimeError("simulated LLM outage")
 
     monkeypatch.setattr(mod.ElevenLabsTTSResponseHandler, "_llm_generate_with_backoff", boom)
@@ -720,3 +720,320 @@ async def test_otel_turn_outcome_on_llm_error(monkeypatch: pytest.MonkeyPatch) -
     assert turn_spans[0].attributes.get("turn.outcome") == "llm_error"
     # Handler state should be reset so the next turn doesn't see a stale span.
     assert handler._turn_span is None
+
+
+# ---------------------------------------------------------------------------
+# Per-turn API-call budget (#286) — Gemini 503 storms inside tool rounds
+# ---------------------------------------------------------------------------
+
+
+def _fake_503_exc() -> Exception:
+    """Build a 503-shaped exception that the retry helper treats as retryable."""
+    return RuntimeError("503 UNAVAILABLE: model overloaded")
+
+
+class _FakePart286:
+    def __init__(self, text: str | None = None, function_call: Any = None) -> None:
+        self.text = text
+        self.function_call = function_call
+
+
+class _FakeFunctionCall:
+    def __init__(self, name: str, args: dict[str, Any]) -> None:
+        self.name = name
+        self.args = args
+
+
+class _FakeContent286:
+    def __init__(self, parts: list[_FakePart286]) -> None:
+        self.parts = parts
+
+
+class _FakeCandidate286:
+    def __init__(self, parts: list[_FakePart286], finish_reason: str = "STOP") -> None:
+        self.content = _FakeContent286(parts)
+        self.finish_reason = finish_reason
+        self.safety_ratings = None
+
+
+class _FakeUsage:
+    def __init__(self, prompt: int, response: int) -> None:
+        self.prompt_token_count = prompt
+        self.candidates_token_count = response
+
+
+class _FakeResponse286:
+    def __init__(
+        self,
+        parts: list[_FakePart286] | None = None,
+        usage: _FakeUsage | None = None,
+    ) -> None:
+        if parts is None:
+            self.candidates = []
+        else:
+            self.candidates = [_FakeCandidate286(parts)]
+        self.prompt_feedback = None
+        self.usage_metadata = usage
+
+
+@pytest.mark.asyncio
+async def test_run_llm_with_tools_bails_on_api_budget_not_tool_rounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Gemini 503 storm inside tool rounds should trip the API-call budget
+    BEFORE the MAX_TOOL_ROUNDS ceiling — i.e. _LLMApiCallBudgetExceeded, not
+    _LLMToolCallLimitExceeded.
+
+    Setup: every round returns a tool call so the loop wants to keep going.
+    With the #286 budget guard at 3, the loop should raise after exactly 3
+    API calls instead of running all 5 MAX_TOOL_ROUNDS.
+
+    Regression guard for #286.
+    """
+    from robot_comic import elevenlabs_tts as mod
+
+    monkeypatch.setattr(mod.asyncio, "sleep", AsyncMock())
+    monkeypatch.setenv(mod._MAX_API_CALLS_PER_TURN_ENV, "3")
+    monkeypatch.setattr(mod, "get_active_tool_specs", lambda deps: [])
+    monkeypatch.setattr(mod, "get_session_instructions", lambda: "sys")
+
+    async def fake_dispatch(name: str, args_json: str, deps: Any) -> dict[str, Any]:
+        return {"ok": True}
+
+    monkeypatch.setattr(mod, "dispatch_tool_call", fake_dispatch)
+
+    handler = _make_handler()
+    handler._client = MagicMock()
+    handler._client.aio = MagicMock()
+    handler._client.aio.models = MagicMock()
+
+    call_log: list[int] = []
+
+    async def fake_generate(model: str, contents: Any, config: Any) -> Any:
+        call_log.append(1)
+        return _FakeResponse286(
+            parts=[_FakePart286(function_call=_FakeFunctionCall("dance", {}))],
+        )
+
+    handler._client.aio.models.generate_content = fake_generate
+
+    with pytest.raises(mod._LLMApiCallBudgetExceeded):
+        await handler._run_llm_with_tools()
+
+    assert len(call_log) == 3, f"Expected 3 API calls before budget trip, got {len(call_log)}"
+
+
+@pytest.mark.asyncio
+async def test_run_llm_with_tools_tool_rounds_use_tighter_retry_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Round 0 must use _LLM_MAX_RETRIES (4 attempts); rounds 1+ get
+    _LLM_MAX_RETRIES_IN_TOOL_ROUND (1 attempt). When round 0 returns a tool
+    call and round 1 starts 503'ing, round 1 should issue only 1 call before
+    raising — so total = 1 (round 0) + 1 (round 1, no retry) = 2."""
+    from robot_comic import elevenlabs_tts as mod
+
+    monkeypatch.setattr(mod.asyncio, "sleep", AsyncMock())
+    monkeypatch.setenv(mod._MAX_API_CALLS_PER_TURN_ENV, "100")
+    monkeypatch.setattr(mod, "get_active_tool_specs", lambda deps: [])
+    monkeypatch.setattr(mod, "get_session_instructions", lambda: "sys")
+
+    handler = _make_handler()
+    handler._client = MagicMock()
+    handler._client.aio = MagicMock()
+    handler._client.aio.models = MagicMock()
+
+    async def fake_dispatch(name: str, args_json: str, deps: Any) -> dict[str, Any]:
+        return {"ok": True}
+
+    monkeypatch.setattr(mod, "dispatch_tool_call", fake_dispatch)
+
+    call_log: list[int] = []
+    round_0_response = _FakeResponse286(
+        parts=[_FakePart286(function_call=_FakeFunctionCall("dance", {}))],
+    )
+
+    async def fake_generate(model: str, contents: Any, config: Any) -> Any:
+        call_log.append(1)
+        if len(call_log) == 1:
+            return round_0_response
+        raise _fake_503_exc()
+
+    handler._client.aio.models.generate_content = fake_generate
+
+    with pytest.raises(Exception):
+        await handler._run_llm_with_tools()
+
+    # 1 (round 0 success) + 1 (round 1, only attempt, raises) = 2 total calls.
+    assert len(call_log) == 2, f"Expected 2 API calls, got {len(call_log)}"
+
+
+@pytest.mark.asyncio
+async def test_run_llm_with_tools_first_round_uses_full_retries_on_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Round 0 alone should be able to consume all 4 retries on a 503 — the
+    cold-start path keeps its full budget; only tool rounds (1+) get the
+    tighter 1-retry policy."""
+    from robot_comic import elevenlabs_tts as mod
+
+    monkeypatch.setattr(mod.asyncio, "sleep", AsyncMock())
+    monkeypatch.setenv(mod._MAX_API_CALLS_PER_TURN_ENV, "100")
+    monkeypatch.setattr(mod, "get_active_tool_specs", lambda deps: [])
+    monkeypatch.setattr(mod, "get_session_instructions", lambda: "sys")
+
+    handler = _make_handler()
+    handler._client = MagicMock()
+    handler._client.aio = MagicMock()
+    handler._client.aio.models = MagicMock()
+
+    call_log: list[int] = []
+
+    async def fake_generate(model: str, contents: Any, config: Any) -> Any:
+        call_log.append(1)
+        raise _fake_503_exc()
+
+    handler._client.aio.models.generate_content = fake_generate
+
+    with pytest.raises(Exception):
+        await handler._run_llm_with_tools()
+
+    # Round 0 with _LLM_MAX_RETRIES=4 should produce exactly 4 calls before bailing.
+    assert len(call_log) == mod._LLM_MAX_RETRIES
+
+
+@pytest.mark.asyncio
+async def test_run_llm_with_tools_emits_token_usage_on_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When Gemini's response includes usage_metadata, the llm.request span
+    carries gen_ai.usage.input_tokens / output_tokens attributes."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from robot_comic import telemetry
+    from robot_comic import elevenlabs_tts as mod
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(telemetry, "get_tracer", lambda: provider.get_tracer("test"))
+    monkeypatch.setattr(mod, "get_active_tool_specs", lambda deps: [])
+    monkeypatch.setattr(mod, "get_session_instructions", lambda: "sys")
+
+    handler = _make_handler()
+
+    async def fake_backoff(self, contents: Any, cfg: Any, **kwargs: Any) -> Any:
+        return _FakeResponse286(
+            parts=[_FakePart286(text="hi")],
+            usage=_FakeUsage(prompt=123, response=45),
+        )
+
+    monkeypatch.setattr(mod.ElevenLabsTTSResponseHandler, "_llm_generate_with_backoff", fake_backoff)
+
+    text = await handler._run_llm_with_tools()
+    assert text == "hi"
+
+    spans = exporter.get_finished_spans()
+    llm_spans = [s for s in spans if s.name == "llm.request"]
+    assert llm_spans, "Expected an llm.request span"
+    attrs = llm_spans[0].attributes or {}
+    assert attrs.get("gen_ai.usage.input_tokens") == 123
+    assert attrs.get("gen_ai.usage.output_tokens") == 45
+
+
+@pytest.mark.asyncio
+async def test_run_llm_with_tools_stamps_api_call_count_on_turn_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The outer turn span receives gen_ai.usage.api_call_count = total API
+    calls (including retries) so a retry-storm turn is visible in dashboards."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from robot_comic import telemetry
+    from robot_comic import elevenlabs_tts as mod
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(telemetry, "get_tracer", lambda: provider.get_tracer("test"))
+    monkeypatch.setattr(mod, "get_active_tool_specs", lambda deps: [])
+    monkeypatch.setattr(mod, "get_session_instructions", lambda: "sys")
+
+    handler = _make_handler()
+    outer = provider.get_tracer("test").start_span("turn")
+    handler._turn_span = outer
+
+    async def fake_backoff(
+        self,
+        contents: Any,
+        cfg: Any,
+        in_tool_round: bool = False,
+        api_call_counter: list[int] | None = None,
+        max_api_calls: int | None = None,
+    ) -> Any:
+        # Simulate 3 API calls' worth of accounting on a single round.
+        if api_call_counter is not None:
+            api_call_counter[0] += 3
+        return _FakeResponse286(parts=[_FakePart286(text="ok")])
+
+    monkeypatch.setattr(mod.ElevenLabsTTSResponseHandler, "_llm_generate_with_backoff", fake_backoff)
+
+    await handler._run_llm_with_tools()
+    outer.end()
+
+    spans = exporter.get_finished_spans()
+    turn_spans = [s for s in spans if s.name == "turn"]
+    assert turn_spans
+    attrs = turn_spans[0].attributes or {}
+    assert attrs.get("gen_ai.usage.api_call_count") == 3
+
+
+@pytest.mark.asyncio
+async def test_dispatch_api_budget_bailout_uses_canned_filler_and_records_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When _run_llm_with_tools raises _LLMApiCallBudgetExceeded, the dispatch
+    layer speaks one of the canned fillers (same pattern as the #267 empty-STOP
+    path) and the assistant turn lands in _conversation_history so the next
+    user turn doesn't see role-alternation gaps."""
+    from robot_comic import elevenlabs_tts as mod
+
+    handler = _make_handler()
+
+    async def boom(self) -> str:  # type: ignore[no-untyped-def]
+        raise mod._LLMApiCallBudgetExceeded("simulated storm")
+
+    monkeypatch.setattr(mod.ElevenLabsTTSResponseHandler, "_run_llm_with_tools", boom)
+
+    captured_text: list[str] = []
+
+    async def fake_stream(
+        self,
+        text: str,
+        first_audio_marker: Any = None,
+        tags: Any = None,
+        target_queue: Any = None,
+    ) -> bool:
+        captured_text.append(text)
+        return True
+
+    monkeypatch.setattr(mod.ElevenLabsTTSResponseHandler, "_stream_tts_to_queue", fake_stream)
+
+    await handler._dispatch_completed_transcript("hey")
+
+    # The canned filler should have been streamed (sentence-splitter may break
+    # it into multiple chunks, so reassemble for comparison).
+    assert captured_text, "Expected the canned filler to be spoken"
+    assert any(filler.startswith(captured_text[0]) for filler in mod._EMPTY_RESPONSE_FILLERS), (
+        f"Streamed text {captured_text!r} doesn't match any known filler prefix"
+    )
+
+    # History must contain user + canned-assistant so role alternation is preserved.
+    roles = [turn["role"] for turn in handler._conversation_history]
+    assert roles == ["user", "model"], f"Expected ['user', 'model'], got {roles}"
+    last = handler._conversation_history[-1]["parts"][0]["text"]
+    assert last in mod._EMPTY_RESPONSE_FILLERS

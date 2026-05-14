@@ -66,8 +66,45 @@ _CHUNK_SAMPLES = 2400  # 100 ms at 24 kHz
 _TTS_MAX_RETRIES = 3
 _TTS_RETRY_BASE_DELAY = 0.5
 _LLM_MAX_RETRIES = 4
+# Tool-round LLM retries are intentionally tighter than the first-round budget:
+# once we've already invested an API call (and possibly a tool dispatch), a
+# Gemini 503 burst should bail rather than burn the rest of the per-turn API
+# budget on retries that may never succeed. See #286.
+_LLM_MAX_RETRIES_IN_TOOL_ROUND = 1
 _LLM_RETRY_BASE_DELAY = 1.0
 _LLM_MAX_TOOL_ROUNDS = 5
+
+# Per-turn ceiling on total LLM API calls (including retries) inside
+# _run_llm_with_tools. Default 8 = first-round full retry budget (4) + four
+# follow-up tool-round attempts (each with 1 retry, so 2 calls = 2*4 = 8 worst
+# case if every round retries once). In practice the well-behaved path uses
+# 1–3 calls; the 8-call ceiling kicks in only during a Gemini 503 storm to
+# stop the loop from blowing the whole per-turn budget on retries instead of
+# real reasoning. Tunable via REACHY_MINI_MAX_API_CALLS_PER_TURN.
+_MAX_API_CALLS_PER_TURN_ENV = "REACHY_MINI_MAX_API_CALLS_PER_TURN"
+_DEFAULT_MAX_API_CALLS_PER_TURN = 8
+
+
+def _get_max_api_calls_per_turn() -> int:
+    """Read REACHY_MINI_MAX_API_CALLS_PER_TURN at call time.
+
+    Returns _DEFAULT_MAX_API_CALLS_PER_TURN for unset/empty/invalid values,
+    floor of 1 otherwise (a ceiling of 0 would block every turn).
+    """
+    raw = os.environ.get(_MAX_API_CALLS_PER_TURN_ENV)
+    if raw is None or not raw.strip():
+        return _DEFAULT_MAX_API_CALLS_PER_TURN
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        logger.warning(
+            "%s=%r is not a valid int; using default %d",
+            _MAX_API_CALLS_PER_TURN_ENV,
+            raw,
+            _DEFAULT_MAX_API_CALLS_PER_TURN,
+        )
+        return _DEFAULT_MAX_API_CALLS_PER_TURN
+    return max(1, value)
 
 
 class _LLMToolCallLimitExceeded(Exception):
@@ -79,11 +116,21 @@ class _LLMToolCallLimitExceeded(Exception):
     """
 
 
+class _LLMApiCallBudgetExceeded(Exception):
+    """Raised when _run_llm_with_tools exhausts MAX_API_CALLS_PER_TURN.
+
+    Distinct from _LLMToolCallLimitExceeded: this is the "retry storm burned the
+    whole turn budget" bail-out (issue #286), not a sign of a runaway tool loop.
+    The caller speaks a canned filler so the operator gets audible feedback.
+    """
+
+
 # Sampled when the LLM returns an empty response (finish_reason=STOP with no
 # parts is the most common case for short user inputs + tools-configured
-# Gemini calls — see #267). Intent: short Hicks-flavoured lines so the
-# operator gets audible feedback instead of perceiving a hang. The persona
-# can still drive a real reply on the next turn.
+# Gemini calls — see #267), and reused for the per-turn API-budget bail-out
+# in #286 so the operator hears audible feedback instead of perceiving a hang.
+# Intent: short Hicks-flavoured lines that the persona can recover from on the
+# next turn.
 _EMPTY_RESPONSE_FILLERS: tuple[str, ...] = (
     "Yeah. I'm here.",
     "Try that again, friend.",
@@ -92,6 +139,18 @@ _EMPTY_RESPONSE_FILLERS: tuple[str, ...] = (
     "I caught that. Hold on.",
     "Hmm. Say more.",
 )
+
+
+def _pick_empty_response_filler() -> str:
+    """Return a randomly-chosen canned filler line.
+
+    Used by both the #267 empty-STOP path and the #286 per-turn API-budget
+    bail-out so both failure modes produce audible, persona-flavoured feedback
+    instead of dead air or a "[status]" string.
+    """
+    return random.choice(_EMPTY_RESPONSE_FILLERS)
+
+
 # _ECHO_COOLDOWN_S is now read from config.ECHO_COOLDOWN_MS at runtime.
 # This module-level constant is kept for backward compatibility with imports.
 _ECHO_COOLDOWN_S: float = 0.3
@@ -460,6 +519,15 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                 )
                 _outcome = "tool_limit_exceeded"
                 return
+            except _LLMApiCallBudgetExceeded as exc:
+                # Per-turn API-call budget tripped (#286): a Gemini 503 storm
+                # burned the retry budget before any real reasoning landed.
+                # Speak the same canned filler the empty-STOP path uses so the
+                # operator hears audible feedback, and record it in history so
+                # the assistant turn isn't silently lost.
+                logger.warning("%s", exc)
+                response_text = _pick_empty_response_filler()
+                _outcome = "api_budget_exceeded"
             except Exception as exc:
                 logger.warning("LLM call failed: %s", exc)
                 _outcome = "llm_error"
@@ -471,7 +539,7 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                 # with tools configured; safety blocks are also possible). Speak
                 # a short canned line so the operator gets audible feedback
                 # instead of perceiving the robot as hung. Tracked in #267.
-                response_text = random.choice(_EMPTY_RESPONSE_FILLERS)
+                response_text = _pick_empty_response_filler()
                 logger.warning(
                     "LLM returned empty response_text; substituting canned filler %r",
                     response_text,
@@ -527,10 +595,41 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                     {"robot.mode": self._BACKEND_LABEL, "turn.outcome": _outcome},
                 )
 
-    async def _llm_generate_with_backoff(self, contents: Any, config: Any) -> Any:
-        """Call generate_content with backoff on transient errors and 429s."""
+    async def _llm_generate_with_backoff(
+        self,
+        contents: Any,
+        config: Any,
+        in_tool_round: bool = False,
+        api_call_counter: list[int] | None = None,
+        max_api_calls: int | None = None,
+    ) -> Any:
+        """Call generate_content with backoff on transient errors and 429s.
+
+        ``in_tool_round`` (#286): when True, use _LLM_MAX_RETRIES_IN_TOOL_ROUND
+        instead of _LLM_MAX_RETRIES. The first LLM call in a turn keeps the
+        full 4-retry budget (cold-start latency is real); follow-up rounds use
+        a 1-retry budget so a Gemini 503 burst doesn't burn the per-turn API
+        ceiling on retries instead of actual reasoning.
+
+        ``api_call_counter`` (#286): a single-element list used as a mutable
+        counter so the caller can see every API call (including retries). The
+        counter is incremented immediately *before* each ``generate_content``
+        attempt. When ``max_api_calls`` is set and the counter would exceed it,
+        we raise :class:`_LLMApiCallBudgetExceeded` instead of issuing more
+        calls, even if retries remain.
+        """
         assert self._client is not None, "Client not initialised"
-        for attempt in range(_LLM_MAX_RETRIES):
+        max_retries = _LLM_MAX_RETRIES_IN_TOOL_ROUND if in_tool_round else _LLM_MAX_RETRIES
+        for attempt in range(max_retries):
+            # Enforce per-turn API-call budget BEFORE issuing the network call so
+            # a 503 storm cannot blow past the ceiling on the final retry.
+            if api_call_counter is not None and max_api_calls is not None:
+                if api_call_counter[0] >= max_api_calls:
+                    raise _LLMApiCallBudgetExceeded(
+                        f"Per-turn LLM API-call budget exhausted at {api_call_counter[0]}/{max_api_calls} "
+                        "(likely a Gemini 503 storm in tool rounds; see #286)"
+                    )
+                api_call_counter[0] += 1
             try:
                 return await self._client.aio.models.generate_content(
                     model=ELEVENLABS_TTS_LLM_MODEL,
@@ -541,12 +640,12 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                 msg = str(exc)
                 rate_limited = is_rate_limit_error(exc)
                 is_retryable = rate_limited or "503" in msg or "UNAVAILABLE" in msg
-                if not is_retryable or attempt == _LLM_MAX_RETRIES - 1:
-                    if rate_limited and attempt == _LLM_MAX_RETRIES - 1:
+                if not is_retryable or attempt == max_retries - 1:
+                    if rate_limited and attempt == max_retries - 1:
                         logger.error(
                             "Gemini LLM rate-limited (quota=%s) after %d attempts; giving up",
                             describe_quota_failure(exc),
-                            _LLM_MAX_RETRIES,
+                            max_retries,
                         )
                     raise
                 retry_after = extract_retry_after_seconds(exc) if rate_limited else None
@@ -556,14 +655,14 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                         "Gemini LLM 429 (quota=%s, attempt %d/%d); sleeping %.1fs before retry",
                         describe_quota_failure(exc),
                         attempt + 1,
-                        _LLM_MAX_RETRIES,
+                        max_retries,
                         delay,
                     )
                 else:
                     logger.warning(
                         "Gemini LLM attempt %d/%d failed (%s); retrying in %.1fs",
                         attempt + 1,
-                        _LLM_MAX_RETRIES,
+                        max_retries,
                         msg.split("\n")[0],
                         delay,
                     )
@@ -586,100 +685,143 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         history: list[Any] = list(self._conversation_history)
         _tracer = telemetry.get_tracer()
 
-        for _phase_n in range(_LLM_MAX_TOOL_ROUNDS):
-            _llm_span = _tracer.start_span(
-                "llm.request",
-                attributes={
-                    "gen_ai.system": self._LLM_SYSTEM,
-                    "gen_ai.operation.name": "chat",
-                    "gen_ai.request.model": ELEVENLABS_TTS_LLM_MODEL,
-                    "llm.phase": str(_phase_n),
-                },
-            )
-            _llm_start = time.perf_counter()
-            try:
-                response = await self._llm_generate_with_backoff(history, gen_config)
-            except Exception:
-                # Tag the span and re-raise so the outer turn span records the
-                # failure outcome.
-                _llm_span.set_attribute("finish_reason", "error")
+        # #286: track total LLM API calls (including retries) across the
+        # tool-round loop so a Gemini 503 storm can't burn the whole turn on
+        # retries. Mutable list so _llm_generate_with_backoff can increment it.
+        api_call_counter: list[int] = [0]
+        max_api_calls = _get_max_api_calls_per_turn()
+
+        try:
+            for _phase_n in range(_LLM_MAX_TOOL_ROUNDS):
+                _llm_span = _tracer.start_span(
+                    "llm.request",
+                    attributes={
+                        "gen_ai.system": self._LLM_SYSTEM,
+                        "gen_ai.operation.name": "chat",
+                        "gen_ai.request.model": ELEVENLABS_TTS_LLM_MODEL,
+                        "llm.phase": str(_phase_n),
+                    },
+                )
+                _llm_start = time.perf_counter()
+                try:
+                    response = await self._llm_generate_with_backoff(
+                        history,
+                        gen_config,
+                        in_tool_round=(_phase_n > 0),
+                        api_call_counter=api_call_counter,
+                        max_api_calls=max_api_calls,
+                    )
+                except Exception:
+                    # Tag the span and re-raise so the outer turn span records the
+                    # failure outcome.
+                    _llm_span.set_attribute("finish_reason", "error")
+                    _llm_span.end()
+                    telemetry.record_llm_duration(
+                        time.perf_counter() - _llm_start,
+                        {"gen_ai.system": self._LLM_SYSTEM, "gen_ai.operation.name": "chat"},
+                    )
+                    raise
+
+                # #286: record per-round token usage on the llm.request span if
+                # Gemini reported it. usage_metadata is present on most
+                # generate_content responses; older SDKs may omit it.
+                usage = getattr(response, "usage_metadata", None)
+                if usage is not None:
+                    try:
+                        prompt_tokens = getattr(usage, "prompt_token_count", None)
+                        response_tokens = getattr(usage, "candidates_token_count", None)
+                        if response_tokens is None:
+                            # Older SDK field name.
+                            response_tokens = getattr(usage, "response_token_count", None)
+                        if prompt_tokens is not None:
+                            _llm_span.set_attribute("gen_ai.usage.input_tokens", int(prompt_tokens))
+                        if response_tokens is not None:
+                            _llm_span.set_attribute("gen_ai.usage.output_tokens", int(response_tokens))
+                    except Exception:
+                        pass
+
+                candidates = response.candidates or []
+                candidate = candidates[0] if candidates else None
+                _finish_reason = getattr(candidate, "finish_reason", None) if candidate is not None else None
+                if _finish_reason is not None:
+                    _llm_span.set_attribute("finish_reason", str(_finish_reason))
                 _llm_span.end()
                 telemetry.record_llm_duration(
                     time.perf_counter() - _llm_start,
                     {"gen_ai.system": self._LLM_SYSTEM, "gen_ai.operation.name": "chat"},
                 )
-                raise
 
-            candidates = response.candidates or []
-            candidate = candidates[0] if candidates else None
-            _finish_reason = getattr(candidate, "finish_reason", None) if candidate is not None else None
-            if _finish_reason is not None:
-                _llm_span.set_attribute("finish_reason", str(_finish_reason))
-            _llm_span.end()
-            telemetry.record_llm_duration(
-                time.perf_counter() - _llm_start,
-                {"gen_ai.system": self._LLM_SYSTEM, "gen_ai.operation.name": "chat"},
+                if not candidates:
+                    logger.warning(
+                        "Gemini returned no candidates; skipping turn (prompt_feedback=%r)",
+                        getattr(response, "prompt_feedback", None),
+                    )
+                    return ""
+                assert candidate is not None  # candidates non-empty implies candidate set
+                parts = (candidate.content.parts if candidate.content else None) or []
+                if not parts:
+                    # Empty content despite a candidate — usually finish_reason=SAFETY
+                    # (safety filter blocked) or MAX_TOKENS (truncated to nothing) or
+                    # RECITATION. Log so we can tune the system prompt / settings.
+                    logger.warning(
+                        "Gemini candidate has no parts; finish_reason=%r safety_ratings=%r prompt_feedback=%r",
+                        getattr(candidate, "finish_reason", None),
+                        getattr(candidate, "safety_ratings", None),
+                        getattr(response, "prompt_feedback", None),
+                    )
+                    return ""
+                function_calls = [p.function_call for p in parts if p.function_call is not None]
+
+                if not function_calls:
+                    return "".join(p.text for p in parts if p.text).strip()
+
+                # Append model's function-call turn to history
+                history.append(candidate.content)
+
+                # Execute tools and collect responses — each wrapped in tool.execute
+                # so the monitor can attribute tool latency back to the parent turn.
+                response_parts: list[types.Part] = []
+                for fc in function_calls:
+                    logger.info("ElevenLabsTTS tool call: %s args=%s", fc.name, dict(fc.args))
+                    _tool_id = uuid.uuid4().hex[:8]
+                    _tool_span = _tracer.start_span(
+                        "tool.execute",
+                        attributes={
+                            "tool.name": fc.name or "",
+                            "tool.id": _tool_id,
+                        },
+                    )
+                    try:
+                        result = await dispatch_tool_call(fc.name, json.dumps(dict(fc.args)), self.deps)
+                    except Exception as exc:
+                        result = {"error": str(exc)}
+                    finally:
+                        _tool_span.end()
+
+                    response_parts.append(
+                        types.Part(function_response=types.FunctionResponse(name=fc.name, response=result))
+                    )
+                    await self.output_queue.put(
+                        AdditionalOutputs({"role": "assistant", "content": f"🛠️ Used tool {fc.name}"})
+                    )
+
+                history.append(types.Content(role="user", parts=response_parts))
+
+            raise _LLMToolCallLimitExceeded(
+                f"Gemini tool-call loop exceeded {_LLM_MAX_TOOL_ROUNDS} rounds without producing a final response"
             )
-
-            if not candidates:
-                logger.warning(
-                    "Gemini returned no candidates; skipping turn (prompt_feedback=%r)",
-                    getattr(response, "prompt_feedback", None),
-                )
-                return ""
-            assert candidate is not None  # candidates non-empty implies candidate set
-            parts = (candidate.content.parts if candidate.content else None) or []
-            if not parts:
-                # Empty content despite a candidate — usually finish_reason=SAFETY
-                # (safety filter blocked) or MAX_TOKENS (truncated to nothing) or
-                # RECITATION. Log so we can tune the system prompt / settings.
-                logger.warning(
-                    "Gemini candidate has no parts; finish_reason=%r safety_ratings=%r prompt_feedback=%r",
-                    getattr(candidate, "finish_reason", None),
-                    getattr(candidate, "safety_ratings", None),
-                    getattr(response, "prompt_feedback", None),
-                )
-                return ""
-            function_calls = [p.function_call for p in parts if p.function_call is not None]
-
-            if not function_calls:
-                return "".join(p.text for p in parts if p.text).strip()
-
-            # Append model's function-call turn to history
-            history.append(candidate.content)
-
-            # Execute tools and collect responses — each wrapped in tool.execute
-            # so the monitor can attribute tool latency back to the parent turn.
-            response_parts: list[types.Part] = []
-            for fc in function_calls:
-                logger.info("ElevenLabsTTS tool call: %s args=%s", fc.name, dict(fc.args))
-                _tool_id = uuid.uuid4().hex[:8]
-                _tool_span = _tracer.start_span(
-                    "tool.execute",
-                    attributes={
-                        "tool.name": fc.name or "",
-                        "tool.id": _tool_id,
-                    },
-                )
+        finally:
+            # #286: stamp total API call count on the outer turn span so the
+            # monitor / SigNoz dashboards can see retry-storm turns at a glance.
+            # The outer span was captured in _dispatch_completed_transcript_impl;
+            # we read it from self._turn_span here. Best-effort: don't let a
+            # span error mask the real result/exception.
+            _turn_span = getattr(self, "_turn_span", None)
+            if _turn_span is not None:
                 try:
-                    result = await dispatch_tool_call(fc.name, json.dumps(dict(fc.args)), self.deps)
-                except Exception as exc:
-                    result = {"error": str(exc)}
-                finally:
-                    _tool_span.end()
-
-                response_parts.append(
-                    types.Part(function_response=types.FunctionResponse(name=fc.name, response=result))
-                )
-                await self.output_queue.put(
-                    AdditionalOutputs({"role": "assistant", "content": f"🛠️ Used tool {fc.name}"})
-                )
-
-            history.append(types.Content(role="user", parts=response_parts))
-
-        raise _LLMToolCallLimitExceeded(
-            f"Gemini tool-call loop exceeded {_LLM_MAX_TOOL_ROUNDS} rounds without producing a final response"
-        )
+                    _turn_span.set_attribute("gen_ai.usage.api_call_count", api_call_counter[0])
+                except Exception:
+                    pass
 
     async def _stream_tts_to_queue(
         self,
