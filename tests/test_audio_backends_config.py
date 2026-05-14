@@ -22,6 +22,9 @@ from robot_comic.config import (
     GEMINI_BACKEND,
     OPENAI_BACKEND,
     AUDIO_OUTPUT_HF,
+    CHATTERBOX_OUTPUT,
+    ELEVENLABS_OUTPUT,
+    GEMINI_TTS_OUTPUT,
     LOCAL_STT_BACKEND,
     AUDIO_INPUT_MOONSHINE,
     AUDIO_INPUT_BACKEND_ENV,
@@ -29,9 +32,11 @@ from robot_comic.config import (
     AUDIO_OUTPUT_CHATTERBOX,
     AUDIO_OUTPUT_ELEVENLABS,
     AUDIO_OUTPUT_GEMINI_TTS,
+    LLAMA_GEMINI_TTS_OUTPUT,
     AUDIO_OUTPUT_BACKEND_ENV,
     AUDIO_OUTPUT_GEMINI_LIVE,
     AUDIO_INPUT_OPENAI_REALTIME,
+    LLAMA_ELEVENLABS_TTS_OUTPUT,
     AUDIO_OUTPUT_OPENAI_REALTIME,
     derive_audio_backends,
     resolve_audio_backends,
@@ -64,6 +69,59 @@ class TestDeriveAudioBackends:
     def test_invalid_provider_raises(self) -> None:
         with pytest.raises(ValueError):
             derive_audio_backends("does_not_exist")
+
+
+# ---------------------------------------------------------------------------
+# derive_audio_backends — LOCAL_STT_RESPONSE_BACKEND lookup (issue #262)
+# ---------------------------------------------------------------------------
+
+
+class TestDeriveAudioBackendsLocalSttResponseLookup:
+    """derive_audio_backends() must map LOCAL_STT_RESPONSE_BACKEND to the
+    correct AUDIO_OUTPUT_* constant per the table in issue #262, rather than
+    unconditionally returning chatterbox.
+    """
+
+    @pytest.mark.parametrize(
+        ("response_backend", "expected_output"),
+        [
+            (CHATTERBOX_OUTPUT, AUDIO_OUTPUT_CHATTERBOX),
+            (ELEVENLABS_OUTPUT, AUDIO_OUTPUT_ELEVENLABS),
+            (LLAMA_ELEVENLABS_TTS_OUTPUT, AUDIO_OUTPUT_ELEVENLABS),
+            (GEMINI_TTS_OUTPUT, AUDIO_OUTPUT_GEMINI_TTS),
+            (LLAMA_GEMINI_TTS_OUTPUT, AUDIO_OUTPUT_GEMINI_TTS),
+            (OPENAI_BACKEND, AUDIO_OUTPUT_OPENAI_REALTIME),
+            (HF_BACKEND, AUDIO_OUTPUT_HF),
+        ],
+    )
+    def test_response_backend_selects_output(
+        self,
+        response_backend: str,
+        expected_output: str,
+    ) -> None:
+        result = derive_audio_backends(LOCAL_STT_BACKEND, response_backend)
+        assert result == (AUDIO_INPUT_MOONSHINE, expected_output)
+
+    def test_response_backend_none_defaults_to_chatterbox(self) -> None:
+        # When LOCAL_STT_RESPONSE_BACKEND is unset (None), keep the historical
+        # chatterbox default so existing deployments aren't disturbed.
+        result = derive_audio_backends(LOCAL_STT_BACKEND, None)
+        assert result == (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_CHATTERBOX)
+
+    def test_response_backend_empty_string_defaults_to_chatterbox(self) -> None:
+        result = derive_audio_backends(LOCAL_STT_BACKEND, "")
+        assert result == (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_CHATTERBOX)
+
+    def test_response_backend_unknown_value_defaults_to_chatterbox(self) -> None:
+        # Unrecognised values shouldn't crash; fall back to the safe default.
+        result = derive_audio_backends(LOCAL_STT_BACKEND, "not_a_real_backend")
+        assert result == (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_CHATTERBOX)
+
+    def test_response_backend_ignored_for_non_local_stt_providers(self) -> None:
+        # response_backend is only consulted when backend_provider==local_stt.
+        # For other providers it must be ignored entirely.
+        result = derive_audio_backends(HF_BACKEND, ELEVENLABS_OUTPUT)
+        assert result == (AUDIO_INPUT_HF, AUDIO_OUTPUT_HF)
 
 
 # ---------------------------------------------------------------------------

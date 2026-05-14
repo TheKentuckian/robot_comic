@@ -505,16 +505,42 @@ def _normalize_local_stt_update_interval(value: str | None) -> float:
     return interval
 
 
-def derive_audio_backends(backend_provider: str) -> tuple[str, str]:
+# Mapping from LOCAL_STT_RESPONSE_BACKEND values to canonical AUDIO_OUTPUT_*
+# constants. Used by derive_audio_backends() so that BACKEND_PROVIDER=local_stt
+# pipelines honour LOCAL_STT_RESPONSE_BACKEND instead of always falling back to
+# chatterbox. See issue #262.
+_LOCAL_STT_RESPONSE_TO_AUDIO_OUTPUT: dict[str, str] = {
+    CHATTERBOX_OUTPUT: AUDIO_OUTPUT_CHATTERBOX,
+    ELEVENLABS_OUTPUT: AUDIO_OUTPUT_ELEVENLABS,
+    LLAMA_ELEVENLABS_TTS_OUTPUT: AUDIO_OUTPUT_ELEVENLABS,
+    GEMINI_TTS_OUTPUT: AUDIO_OUTPUT_GEMINI_TTS,
+    LLAMA_GEMINI_TTS_OUTPUT: AUDIO_OUTPUT_GEMINI_TTS,
+    OPENAI_BACKEND: AUDIO_OUTPUT_OPENAI_REALTIME,
+    HF_BACKEND: AUDIO_OUTPUT_HF,
+}
+
+
+def derive_audio_backends(
+    backend_provider: str,
+    response_backend: str | None = None,
+) -> tuple[str, str]:
     """Derive (AUDIO_INPUT_BACKEND, AUDIO_OUTPUT_BACKEND) from a BACKEND_PROVIDER value.
 
     This is the backwards-compatibility bridge: when the new granular env vars
     are not set, the existing BACKEND_PROVIDER determines the bundled pair so
     existing deployments keep working without any config changes.
 
+    For ``backend_provider == "local_stt"`` the ``response_backend`` argument
+    (the operator-set ``LOCAL_STT_RESPONSE_BACKEND``) selects which TTS output
+    backend is paired with moonshine. When ``response_backend`` is None or
+    unrecognised, falls back to ``AUDIO_OUTPUT_CHATTERBOX`` (the historical
+    default).
+
     Args:
         backend_provider: A valid BACKEND_PROVIDER string (e.g. "huggingface",
             "openai", "gemini", "local_stt").
+        response_backend: Normalised ``LOCAL_STT_RESPONSE_BACKEND`` value, only
+            consulted when ``backend_provider == "local_stt"``.
 
     Returns:
         A ``(input_backend, output_backend)`` tuple of canonical backend IDs.
@@ -527,9 +553,13 @@ def derive_audio_backends(backend_provider: str) -> tuple[str, str]:
         return (AUDIO_INPUT_OPENAI_REALTIME, AUDIO_OUTPUT_OPENAI_REALTIME)
     if normalized == GEMINI_BACKEND:
         return (AUDIO_INPUT_GEMINI_LIVE, AUDIO_OUTPUT_GEMINI_LIVE)
-    # LOCAL_STT_BACKEND — output depends on LOCAL_STT_RESPONSE_BACKEND but we
-    # default to moonshine + chatterbox (the primary local-stt combination).
-    return (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_CHATTERBOX)
+    # LOCAL_STT_BACKEND — input is always moonshine; output depends on
+    # LOCAL_STT_RESPONSE_BACKEND. Default to chatterbox when unset/unknown.
+    output = _LOCAL_STT_RESPONSE_TO_AUDIO_OUTPUT.get(
+        (response_backend or "").strip().lower(),
+        AUDIO_OUTPUT_CHATTERBOX,
+    )
+    return (AUDIO_INPUT_MOONSHINE, output)
 
 
 def _normalize_audio_input_backend(value: str | None) -> str | None:
@@ -576,6 +606,7 @@ def resolve_audio_backends(
     backend_provider: str,
     explicit_input: str | None,
     explicit_output: str | None,
+    response_backend: str | None = None,
 ) -> tuple[str, str]:
     """Return the resolved (input, output) audio backend pair.
 
@@ -589,15 +620,18 @@ def resolve_audio_backends(
     4. If neither is set, derive from BACKEND_PROVIDER (backwards compat).
 
     Args:
-        backend_provider: The current BACKEND_PROVIDER value.
-        explicit_input:   Normalised AUDIO_INPUT_BACKEND override, or None.
-        explicit_output:  Normalised AUDIO_OUTPUT_BACKEND override, or None.
+        backend_provider:  The current BACKEND_PROVIDER value.
+        explicit_input:    Normalised AUDIO_INPUT_BACKEND override, or None.
+        explicit_output:   Normalised AUDIO_OUTPUT_BACKEND override, or None.
+        response_backend:  Normalised LOCAL_STT_RESPONSE_BACKEND value (only
+            consulted on the local_stt fallback path; ignored when explicit
+            overrides win).
 
     Returns:
         A ``(input_backend, output_backend)`` tuple of canonical backend IDs.
 
     """
-    derived = derive_audio_backends(backend_provider)
+    derived = derive_audio_backends(backend_provider, response_backend)
 
     both_set = explicit_input is not None and explicit_output is not None
     neither_set = explicit_input is None and explicit_output is None
@@ -942,7 +976,12 @@ class Config:
     # ---------------------------------------------------------------------------
     _raw_audio_input = _normalize_audio_input_backend(os.getenv(AUDIO_INPUT_BACKEND_ENV))
     _raw_audio_output = _normalize_audio_output_backend(os.getenv(AUDIO_OUTPUT_BACKEND_ENV))
-    _resolved_audio = resolve_audio_backends(BACKEND_PROVIDER, _raw_audio_input, _raw_audio_output)
+    _resolved_audio = resolve_audio_backends(
+        BACKEND_PROVIDER,
+        _raw_audio_input,
+        _raw_audio_output,
+        response_backend=LOCAL_STT_RESPONSE_BACKEND,
+    )
     AUDIO_INPUT_BACKEND: str = _resolved_audio[0]
     AUDIO_OUTPUT_BACKEND: str = _resolved_audio[1]
 
@@ -1110,7 +1149,12 @@ def refresh_runtime_config_from_env() -> None:
     config.WS_SERVER_HOST = os.getenv("REACHY_MINI_WS_SERVER_HOST", "localhost")
     _refresh_raw_input = _normalize_audio_input_backend(os.getenv(AUDIO_INPUT_BACKEND_ENV))
     _refresh_raw_output = _normalize_audio_output_backend(os.getenv(AUDIO_OUTPUT_BACKEND_ENV))
-    _refresh_audio = resolve_audio_backends(config.BACKEND_PROVIDER, _refresh_raw_input, _refresh_raw_output)
+    _refresh_audio = resolve_audio_backends(
+        config.BACKEND_PROVIDER,
+        _refresh_raw_input,
+        _refresh_raw_output,
+        response_backend=config.LOCAL_STT_RESPONSE_BACKEND,
+    )
     config.AUDIO_INPUT_BACKEND = _refresh_audio[0]
     config.AUDIO_OUTPUT_BACKEND = _refresh_audio[1]
 
