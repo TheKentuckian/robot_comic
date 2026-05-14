@@ -194,6 +194,35 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
         self._tts_start_at: float | None = None
         self._current_response_has_tool_call: bool = False
 
+        # WS channel: set via set_ws_client() from main.py when WS_ENABLED.
+        # Can be a WsClient (Pi) or WsServer (laptop); only WsClient emits pi_status.
+        self._ws_client: Any = None
+
+    def set_ws_client(self, ws_client: Any) -> None:
+        """Attach a WsClient (Pi) or WsServer (laptop) for fire-and-forget status emits."""
+        self._ws_client = ws_client
+
+    def _ws_emit(self, msg: Any) -> None:
+        """Fire-and-forget: schedule *msg* send on the current event loop.
+
+        Silently swallows all errors so WS failures never affect turn processing.
+        """
+        from robot_comic.ws_client import WsClient
+
+        if self._ws_client is None or not isinstance(self._ws_client, WsClient):
+            return
+
+        async def _send() -> None:
+            try:
+                await self._ws_client.send(msg)
+            except Exception as exc:
+                logger.warning("ws: emit failed: %s", exc)
+
+        try:
+            asyncio.create_task(_send())
+        except RuntimeError:
+            pass  # no running loop — skip silently
+
     @staticmethod
     def _sanitize_tool_result_for_model(tool_name: str, tool_result: dict[str, Any]) -> dict[str, Any]:
         """Remove bulky transport-only fields before echoing tool output back to the model."""
@@ -780,6 +809,19 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
                                 )
                             self._tts_start_at = None
                         self._close_turn_span("success")
+                        # Fire-and-forget pi_status after audio queue is flushed.
+                        if self._ws_client is not None:
+                            from robot_comic.ws_protocol import MsgType as _MsgType
+                            from robot_comic.ws_protocol import WsMessage as _WsMessage
+
+                            _motor_state = "paused" if self.deps.movement_manager._is_paused else "active"
+                            _persona = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None) or "default"
+                            self._ws_emit(
+                                _WsMessage(
+                                    type=_MsgType.PI_STATUS,
+                                    payload={"motor_state": _motor_state, "persona": _persona},
+                                )
+                            )
 
                     if event.type == "response.created":
                         self._mark_activity("response_created")
