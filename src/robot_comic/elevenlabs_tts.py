@@ -463,10 +463,24 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
             candidates = response.candidates or []
             if not candidates:
-                logger.warning("Gemini returned no candidates; skipping turn")
+                logger.warning(
+                    "Gemini returned no candidates; skipping turn (prompt_feedback=%r)",
+                    getattr(response, "prompt_feedback", None),
+                )
                 return ""
             candidate = candidates[0]
             parts = (candidate.content.parts if candidate.content else None) or []
+            if not parts:
+                # Empty content despite a candidate — usually finish_reason=SAFETY
+                # (safety filter blocked) or MAX_TOKENS (truncated to nothing) or
+                # RECITATION. Log so we can tune the system prompt / settings.
+                logger.warning(
+                    "Gemini candidate has no parts; finish_reason=%r safety_ratings=%r prompt_feedback=%r",
+                    getattr(candidate, "finish_reason", None),
+                    getattr(candidate, "safety_ratings", None),
+                    getattr(response, "prompt_feedback", None),
+                )
+                return ""
             function_calls = [p.function_call for p in parts if p.function_call is not None]
 
             if not function_calls:
