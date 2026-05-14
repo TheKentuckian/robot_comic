@@ -7,6 +7,7 @@ Covers:
 - Missing WAV graceful no-op
 - Blip WAV generation
 - Blip playback dispatch (Linux + Windows)
+- Split intro+picker chaining and locked-persona suppression (issue #311)
 """
 
 from __future__ import annotations
@@ -445,3 +446,208 @@ class TestBlipEnvFlag:
             play_warmup_wav(wav)
 
         mock_blip.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Split intro+picker chaining (issue #311)
+# ---------------------------------------------------------------------------
+
+
+def _write_minimal_wav(path: Path, n_frames: int = 240, framerate: int = 24000) -> None:
+    """Write a syntactically valid mono 16-bit PCM WAV with *n_frames* samples.
+
+    Used by the split-asset tests so ``wave.open`` succeeds when the chain
+    worker reads the intro duration. 240 frames @ 24 kHz = 10 ms so the
+    daemon-thread sleep finishes quickly during tests that wait on it.
+    """
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(framerate)
+        wf.writeframes(b"\x00\x00" * n_frames)
+
+
+class TestSplitWelcomeChaining:
+    """play_warmup_wav (no path arg) honours the intro+picker split + lock state."""
+
+    @pytest.fixture
+    def split_assets(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, Path]:
+        """Stage temp intro/picker/legacy WAVs and redirect the default paths to them."""
+        assets = tmp_path / "assets" / "welcome"
+        assets.mkdir(parents=True)
+        intro = assets / "welcome_intro.wav"
+        picker = assets / "welcome_picker.wav"
+        legacy = assets / "welcome.wav"
+        _write_minimal_wav(intro)
+        _write_minimal_wav(picker)
+        _write_minimal_wav(legacy)
+
+        import robot_comic.warmup_audio as wa
+
+        monkeypatch.setattr(wa, "default_welcome_intro_path", lambda: intro)
+        monkeypatch.setattr(wa, "default_welcome_picker_path", lambda: picker)
+        monkeypatch.setattr(wa, "default_warmup_wav_path", lambda: legacy)
+        return intro, picker, legacy
+
+    def test_locked_persona_plays_only_intro(
+        self,
+        split_assets: tuple[Path, Path, Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With REACHY_MINI_CUSTOM_PROFILE set, the picker prompt must not play."""
+        intro, picker, _legacy = split_assets
+
+        # Force the locked-persona check to return True via the env var fallback,
+        # and clear the config attribute so the function reaches the env branch
+        # deterministically.
+        monkeypatch.setenv("REACHY_MINI_CUSTOM_PROFILE", "astronomer")
+
+        dispatched_paths: list[Path] = []
+
+        def fake_dispatch(p: Path) -> bool:
+            dispatched_paths.append(p)
+            return True
+
+        with (
+            patch("robot_comic.warmup_audio._dispatch_single_wav", side_effect=fake_dispatch),
+            patch("robot_comic.warmup_audio._is_persona_locked", return_value=True),
+            patch("robot_comic.startup_timer.log_checkpoint"),
+            patch.dict("os.environ", {"REACHY_MINI_WARMUP_BLIP_ENABLED": "0"}, clear=False),
+        ):
+            from robot_comic.warmup_audio import play_warmup_wav
+
+            play_warmup_wav()
+
+        assert dispatched_paths == [intro], f"locked persona should play only the intro, got {dispatched_paths}"
+        assert picker not in dispatched_paths
+
+    def test_unlocked_persona_chains_intro_then_picker(
+        self,
+        split_assets: tuple[Path, Path, Path],
+    ) -> None:
+        """Unlocked: intro dispatched on the main path, picker dispatched on the worker thread."""
+        intro, picker, _legacy = split_assets
+
+        dispatched_paths: list[Path] = []
+        dispatch_lock_event_set = False  # placeholder for readability
+
+        def fake_dispatch(p: Path) -> bool:
+            dispatched_paths.append(p)
+            return True
+
+        with (
+            patch("robot_comic.warmup_audio._dispatch_single_wav", side_effect=fake_dispatch),
+            patch("robot_comic.warmup_audio._is_persona_locked", return_value=False),
+            patch("robot_comic.startup_timer.log_checkpoint"),
+            patch.dict("os.environ", {"REACHY_MINI_WARMUP_BLIP_ENABLED": "0"}, clear=False),
+        ):
+            import robot_comic.warmup_audio as wa
+
+            wa.play_warmup_wav()
+
+            # The chain worker thread should be running; wait for it to finish.
+            for t in [th for th in __import__("threading").enumerate() if th.name == "warmup-picker-chain"]:
+                t.join(timeout=2.0)
+
+        assert dispatched_paths == [intro, picker], (
+            f"unlocked persona should play intro then picker, got {dispatched_paths}"
+        )
+        # Sanity: ordering is intro-first; the variable is only here for clarity.
+        del dispatch_lock_event_set
+
+    def test_legacy_fallback_when_split_files_missing(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When welcome_intro.wav or welcome_picker.wav is missing, fall back to welcome.wav."""
+        assets = tmp_path / "assets" / "welcome"
+        assets.mkdir(parents=True)
+        # Only the legacy file exists; split pair is absent.
+        legacy = assets / "welcome.wav"
+        _write_minimal_wav(legacy)
+        missing_intro = assets / "welcome_intro.wav"
+        missing_picker = assets / "welcome_picker.wav"
+        assert not missing_intro.exists()
+        assert not missing_picker.exists()
+
+        import robot_comic.warmup_audio as wa
+
+        monkeypatch.setattr(wa, "default_welcome_intro_path", lambda: missing_intro)
+        monkeypatch.setattr(wa, "default_welcome_picker_path", lambda: missing_picker)
+        monkeypatch.setattr(wa, "default_warmup_wav_path", lambda: legacy)
+
+        dispatched_paths: list[Path] = []
+
+        def fake_dispatch(p: Path) -> bool:
+            dispatched_paths.append(p)
+            return True
+
+        with (
+            patch("robot_comic.warmup_audio._dispatch_single_wav", side_effect=fake_dispatch),
+            patch("robot_comic.startup_timer.log_checkpoint"),
+            patch.dict("os.environ", {"REACHY_MINI_WARMUP_BLIP_ENABLED": "0"}, clear=False),
+        ):
+            wa.play_warmup_wav()
+
+        assert dispatched_paths == [legacy], (
+            f"missing split files should trigger legacy fallback, got {dispatched_paths}"
+        )
+
+    def test_explicit_path_bypasses_split_logic(
+        self,
+        split_assets: tuple[Path, Path, Path],
+        tmp_path: Path,
+    ) -> None:
+        """When a caller passes path= explicitly, that single file is played
+        regardless of whether split assets exist (legacy/test compatibility)."""
+        _intro, _picker, _legacy = split_assets
+        explicit = tmp_path / "custom.wav"
+        _write_minimal_wav(explicit)
+
+        dispatched_paths: list[Path] = []
+
+        def fake_dispatch(p: Path) -> bool:
+            dispatched_paths.append(p)
+            return True
+
+        with (
+            patch("robot_comic.warmup_audio._dispatch_single_wav", side_effect=fake_dispatch),
+            patch("robot_comic.warmup_audio._is_persona_locked", return_value=False),
+            patch("robot_comic.startup_timer.log_checkpoint"),
+            patch.dict("os.environ", {"REACHY_MINI_WARMUP_BLIP_ENABLED": "0"}, clear=False),
+        ):
+            from robot_comic.warmup_audio import play_warmup_wav
+
+            play_warmup_wav(explicit)
+
+        assert dispatched_paths == [explicit], f"explicit path arg should bypass split logic, got {dispatched_paths}"
+
+
+class TestIsPersonaLocked:
+    """_is_persona_locked reads from config first, falls back to env var."""
+
+    def test_returns_true_when_config_attr_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from robot_comic import config as _config
+        from robot_comic.warmup_audio import _is_persona_locked
+
+        # Clear env to ensure the config path is what's flipping the result.
+        monkeypatch.delenv("REACHY_MINI_CUSTOM_PROFILE", raising=False)
+        monkeypatch.setattr(_config, "REACHY_MINI_CUSTOM_PROFILE", "astronomer", raising=False)
+        assert _is_persona_locked() is True
+
+    def test_returns_true_when_env_set_and_config_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from robot_comic import config as _config
+        from robot_comic.warmup_audio import _is_persona_locked
+
+        monkeypatch.setattr(_config, "REACHY_MINI_CUSTOM_PROFILE", None, raising=False)
+        monkeypatch.setenv("REACHY_MINI_CUSTOM_PROFILE", "astronomer")
+        assert _is_persona_locked() is True
+
+    def test_returns_false_when_both_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from robot_comic import config as _config
+        from robot_comic.warmup_audio import _is_persona_locked
+
+        monkeypatch.setattr(_config, "REACHY_MINI_CUSTOM_PROFILE", None, raising=False)
+        monkeypatch.delenv("REACHY_MINI_CUSTOM_PROFILE", raising=False)
+        assert _is_persona_locked() is False
