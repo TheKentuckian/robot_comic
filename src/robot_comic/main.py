@@ -191,6 +191,17 @@ def run(
 
     _telemetry.init()
 
+    # Surface "app.startup" on the monitor boot-timeline lane (#301): time
+    # from Python process import (STARTUP_T0) to telemetry initialisation.
+    try:
+        _telemetry.emit_supporting_event(
+            "app.startup",
+            dur_ms=startup_timer.since_startup() * 1000,
+        )
+    except Exception:
+        # Telemetry must never block startup; swallow any export failure.
+        pass
+
     if config.BACKEND_PROVIDER == HF_BACKEND:
         logger.info(
             "Configured backend provider: %s (%s), connection mode: %s",

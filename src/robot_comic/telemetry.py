@@ -59,6 +59,13 @@ _SPAN_ATTRS_TO_KEEP = frozenset(
         "tool.id",
         "vad.duration_ms",
         "stt.type",
+        # Supporting boot-timeline events (issue #301). The exporter surfaces
+        # ``event.kind`` so the TUI can route these spans to a parallel
+        # ``supporting_events`` lane. ``event.dur_ms`` carries an externally
+        # measured duration that may differ from the span's own wall-clock
+        # (e.g. duration since process start for synthetic point events).
+        "event.kind",
+        "event.dur_ms",
     }
 )
 
@@ -293,3 +300,53 @@ def inc_errors(attrs: dict[str, Any]) -> None:
     """Increment robot.errors counter."""
     if errors is not None:
         errors.add(1, attributes=attrs)
+
+
+_FIRST_GREETING_EMITTED: bool = False
+
+
+def emit_first_greeting_audio_once() -> None:
+    """Emit ``first_greeting.tts_first_audio`` exactly once per process (#301).
+
+    Closes the boot-timeline by recording when the first PCM frame of the
+    synthetic startup turn is enqueued. ``event.dur_ms`` carries seconds
+    since ``startup_timer.STARTUP_T0`` so the operator can read the full
+    boot-to-first-audible-word window directly off the supporting-event row.
+    """
+    global _FIRST_GREETING_EMITTED
+    if _FIRST_GREETING_EMITTED:
+        return
+    _FIRST_GREETING_EMITTED = True
+    try:
+        from robot_comic.startup_timer import since_startup
+
+        dur_ms = since_startup() * 1000
+    except Exception:
+        dur_ms = None
+    try:
+        emit_supporting_event("first_greeting.tts_first_audio", dur_ms=dur_ms)
+    except Exception:
+        pass
+
+
+def emit_supporting_event(name: str, dur_ms: Optional[float] = None) -> None:
+    """Emit a synthetic boot-timeline span (``event.kind=supporting``).
+
+    Opens and immediately closes a span carrying ``event.kind=supporting`` so
+    the monitor TUI can place it on its boot-timeline lane (issue #301).
+
+    When *dur_ms* is supplied, it is attached as ``event.dur_ms`` so the
+    operator-visible duration reflects an externally measured window rather
+    than the span's own (effectively zero) wall-clock. The exporter still
+    emits the span's own ``dur_ms`` at the top level; the monitor prefers
+    ``attrs["event.dur_ms"]`` when present.
+
+    Safe to call whether or not instrumentation is enabled — when OTel is not
+    initialised this resolves to the no-op default tracer.
+    """
+    tracer = get_tracer()
+    attrs: dict[str, Any] = {"event.kind": "supporting"}
+    if dur_ms is not None:
+        attrs["event.dur_ms"] = float(dur_ms)
+    with tracer.start_as_current_span(name, attributes=attrs):
+        pass
