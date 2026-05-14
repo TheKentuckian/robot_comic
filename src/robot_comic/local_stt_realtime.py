@@ -198,6 +198,14 @@ class LocalSTTInputMixin:
             "last_text": "",
             "last_event_at": time.monotonic(),
             "audio_frames": 0,
+            # Dedup bookkeeping — see `_log_heartbeat`.
+            "last_logged_state": None,
+            "last_logged_text": None,
+            "last_logged_frames": 0,
+            "last_logged_at": 0.0,
+            # First-audio-frame timestamp, used to suppress the "thread-lock or
+            # model stall" warning during the post-startup warm-up window.
+            "first_audio_at": None,
         }
         self._heartbeat_future: "asyncio.Future[Any] | ConcurrentFuture[None] | None" = None
         self._welcome_gate: WelcomeGate | None = self._build_welcome_gate()
@@ -448,25 +456,64 @@ class LocalSTTInputMixin:
             ),
         )
 
+    # Re-log the same (state, text) at INFO at most this often, to keep a
+    # periodic liveness ping in the journal without drowning it.
+    _HEARTBEAT_REPEAT_INFO_INTERVAL_S: float = 30.0
+    # Suppress the "thread-lock or model stall" warning during the first
+    # window after the audio source starts emitting frames (covers
+    # resume-from-suspend warm-up).
+    _STARTUP_STALL_GRACE_S: float = 10.0
+
     def _log_heartbeat(self) -> None:
-        """Emit one heartbeat log line with current Moonshine state."""
+        """Emit one heartbeat log line with current Moonshine state.
+
+        Dedup: a heartbeat at the same (state, text) as the previous emit
+        is demoted to DEBUG (a "pure" heartbeat — only `age`/`frames` are
+        moving). To preserve liveness, an INFO line is still re-emitted at
+        most once every ``_HEARTBEAT_REPEAT_INFO_INTERVAL_S``.
+
+        Idle-stall warning: suppressed during the first
+        ``_STARTUP_STALL_GRACE_S`` seconds after the first audio frame, to
+        avoid false positives during post-suspend warm-up.
+        """
         h = self._heartbeat
-        age = time.monotonic() - h["last_event_at"]
+        now = time.monotonic()
+        age = now - h["last_event_at"]
         text_snippet = (h["last_text"] or "")[:40]
-        logger.info(
+
+        state = h["state"]
+        same_signal = state == h["last_logged_state"] and text_snippet == h["last_logged_text"]
+        since_logged = now - h["last_logged_at"]
+        repeat_window = self._HEARTBEAT_REPEAT_INFO_INTERVAL_S
+
+        if not same_signal or since_logged >= repeat_window or h["last_logged_state"] is None:
+            level = logging.INFO
+            h["last_logged_at"] = now
+        else:
+            level = logging.DEBUG
+
+        logger.log(
+            level,
             "[Moonshine] state=%s  last_event=%s  age=%.1fs  frames=%d  text=%r",
-            h["state"],
+            state,
             h["last_event"],
             age,
             h["audio_frames"],
             text_snippet,
         )
-        if h["state"] == "idle" and age > 10.0 and h["audio_frames"] > 0:
-            logger.warning(
-                "[Moonshine] idle for %.1fs with %d audio frames received — possible thread-lock or model stall",
-                age,
-                h["audio_frames"],
-            )
+        h["last_logged_state"] = state
+        h["last_logged_text"] = text_snippet
+        h["last_logged_frames"] = h["audio_frames"]
+
+        if state == "idle" and age > 10.0 and h["audio_frames"] > 0:
+            first_audio_at = h.get("first_audio_at")
+            in_startup_grace = first_audio_at is not None and (now - first_audio_at) < self._STARTUP_STALL_GRACE_S
+            if not in_startup_grace:
+                logger.warning(
+                    "[Moonshine] idle for %.1fs with %d audio frames received — possible thread-lock or model stall",
+                    age,
+                    h["audio_frames"],
+                )
 
     async def _moonshine_heartbeat_loop(self) -> None:
         """Log Moonshine state every second while the stream is active."""
@@ -504,6 +551,8 @@ class LocalSTTInputMixin:
         try:
             self._local_stt_stream.add_audio(audio_float.tolist(), self.local_stt_sample_rate)
             self._heartbeat["audio_frames"] += 1
+            if self._heartbeat["first_audio_at"] is None:
+                self._heartbeat["first_audio_at"] = time.monotonic()
         except Exception as e:
             logger.debug("Dropping local STT audio frame: %s", e)
 

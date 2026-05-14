@@ -103,3 +103,186 @@ def test_log_heartbeat_emits_info(caplog):
     with caplog.at_level(logging.INFO, logger="robot_comic.local_stt_realtime"):
         obj._log_heartbeat()
     assert any("Moonshine" in r.message for r in caplog.records)
+
+
+# --- Dedup / startup-grace tests for the real handler's _log_heartbeat ------
+
+
+def _fresh_handler():
+    """Construct a real LocalSTTRealtimeHandler with no I/O wired up.
+
+    All `_log_heartbeat` cares about is the `_heartbeat` dict, so we can
+    poke that directly. This exercises the real mixin code (not a stub).
+    """
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    return LocalSTTRealtimeHandler(deps)
+
+
+def test_heartbeat_dedupes_identical_state_text_to_debug(caplog):
+    """Repeated identical (state, text) heartbeats should be DEBUG, not INFO."""
+    import logging
+
+    handler = _fresh_handler()
+    handler._heartbeat.update(
+        {
+            "state": "completed",
+            "last_event": "completed",
+            "last_text": "to see how we're doing for it's",
+            "last_event_at": _time_mod.monotonic(),
+            "audio_frames": 100,
+        }
+    )
+
+    # First emit: changed signal vs. initial None → INFO.
+    with caplog.at_level(logging.DEBUG, logger="robot_comic.local_stt_realtime"):
+        handler._log_heartbeat()
+        # Bump frame count to simulate ongoing audio while still in completed.
+        handler._heartbeat["audio_frames"] = 200
+        handler._log_heartbeat()
+        handler._heartbeat["audio_frames"] = 300
+        handler._log_heartbeat()
+
+    moonshine_records = [r for r in caplog.records if "Moonshine] state=" in r.message]
+    assert len(moonshine_records) == 3, [r.levelname for r in moonshine_records]
+    assert moonshine_records[0].levelno == logging.INFO
+    assert moonshine_records[1].levelno == logging.DEBUG
+    assert moonshine_records[2].levelno == logging.DEBUG
+
+
+def test_heartbeat_changed_state_re_emits_info(caplog):
+    """A change in state or text should immediately re-emit at INFO."""
+    import logging
+
+    handler = _fresh_handler()
+    handler._heartbeat.update(
+        {
+            "state": "partial",
+            "last_event": "partial",
+            "last_text": "hello",
+            "last_event_at": _time_mod.monotonic(),
+            "audio_frames": 1,
+        }
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="robot_comic.local_stt_realtime"):
+        handler._log_heartbeat()  # INFO (first)
+        handler._log_heartbeat()  # DEBUG (dedup)
+        handler._heartbeat["state"] = "completed"
+        handler._heartbeat["last_event"] = "completed"
+        handler._heartbeat["last_text"] = "hello world"
+        handler._log_heartbeat()  # INFO (state+text changed)
+
+    moonshine_records = [r for r in caplog.records if "Moonshine] state=" in r.message]
+    assert [r.levelno for r in moonshine_records] == [logging.INFO, logging.DEBUG, logging.INFO]
+
+
+def test_heartbeat_repeats_info_periodically_for_liveness(caplog, monkeypatch):
+    """Even on identical (state, text), an INFO line should re-emit every ~30s."""
+    import logging
+
+    handler = _fresh_handler()
+    base = 1000.0
+
+    times = iter([base, base + 1.0, base + 31.0])
+    monkeypatch.setattr(
+        "robot_comic.local_stt_realtime.time.monotonic",
+        lambda: next(times),
+    )
+
+    handler._heartbeat.update(
+        {
+            "state": "completed",
+            "last_event": "completed",
+            "last_text": "stuck text",
+            "last_event_at": base - 5.0,
+            "audio_frames": 10,
+        }
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="robot_comic.local_stt_realtime"):
+        handler._log_heartbeat()  # t=base → INFO (first)
+        handler._log_heartbeat()  # t=base+1 → DEBUG (dedup)
+        handler._log_heartbeat()  # t=base+31 → INFO (interval elapsed)
+
+    moonshine_records = [r for r in caplog.records if "Moonshine] state=" in r.message]
+    assert [r.levelno for r in moonshine_records] == [logging.INFO, logging.DEBUG, logging.INFO]
+
+
+def test_idle_stall_warning_suppressed_during_startup_grace(caplog, monkeypatch):
+    """The 'thread-lock or model stall' warning should NOT fire within ~10s of first audio."""
+    import logging
+
+    handler = _fresh_handler()
+    base = 5000.0
+
+    # Pretend first audio arrived 3s ago (well inside the grace window) but the
+    # last event was 12s ago (which would normally trigger the warning).
+    handler._heartbeat.update(
+        {
+            "state": "idle",
+            "last_event": None,
+            "last_text": "",
+            "last_event_at": base - 12.0,
+            "audio_frames": 5,
+            "first_audio_at": base - 3.0,
+        }
+    )
+    monkeypatch.setattr("robot_comic.local_stt_realtime.time.monotonic", lambda: base)
+
+    with caplog.at_level(logging.WARNING, logger="robot_comic.local_stt_realtime"):
+        handler._log_heartbeat()
+
+    stall_records = [r for r in caplog.records if "thread-lock or model stall" in r.message]
+    assert stall_records == [], "stall warning fired during startup grace window"
+
+
+def test_idle_stall_warning_fires_after_startup_grace(caplog, monkeypatch):
+    """Past the grace window, an idle stall *should* still warn."""
+    import logging
+
+    handler = _fresh_handler()
+    base = 6000.0
+
+    handler._heartbeat.update(
+        {
+            "state": "idle",
+            "last_event": None,
+            "last_text": "",
+            "last_event_at": base - 12.0,
+            "audio_frames": 5,
+            "first_audio_at": base - 60.0,
+        }
+    )
+    monkeypatch.setattr("robot_comic.local_stt_realtime.time.monotonic", lambda: base)
+
+    with caplog.at_level(logging.WARNING, logger="robot_comic.local_stt_realtime"):
+        handler._log_heartbeat()
+
+    stall_records = [r for r in caplog.records if "thread-lock or model stall" in r.message]
+    assert len(stall_records) == 1
+
+
+def test_idle_stall_warning_suppressed_when_no_audio_seen_yet(caplog, monkeypatch):
+    """Before the first audio frame, the original guard (audio_frames > 0) still skips."""
+    import logging
+
+    handler = _fresh_handler()
+    base = 7000.0
+
+    handler._heartbeat.update(
+        {
+            "state": "idle",
+            "last_event": None,
+            "last_text": "",
+            "last_event_at": base - 12.0,
+            "audio_frames": 0,
+            "first_audio_at": None,
+        }
+    )
+    monkeypatch.setattr("robot_comic.local_stt_realtime.time.monotonic", lambda: base)
+
+    with caplog.at_level(logging.WARNING, logger="robot_comic.local_stt_realtime"):
+        handler._log_heartbeat()
+
+    stall_records = [r for r in caplog.records if "thread-lock or model stall" in r.message]
+    assert stall_records == []
