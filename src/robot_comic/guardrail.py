@@ -1,37 +1,97 @@
-"""Disengagement guardrail for high-intensity personas (Bill Hicks).
+"""Disengagement guardrail for high-intensity personas.
 
 ``EngagementMonitor`` inspects each user turn for discomfort signals using a
 lightweight keyword/regex heuristic — no LLM call, no network, O(n) on the
 phrase list.
 
 Activation is persona-aware: only profiles listed in
-``GUARDRAIL_PROFILES`` (default: ``{"bill_hicks"}``) activate the monitor.
-The feature can be force-disabled for any profile via the
-``REACHY_MINI_GUARDRAIL_ENABLED`` environment variable.
+``GUARDRAIL_PROFILES`` (default: ``{"bill_hicks", "andrew_dice_clay",
+"richard_pryor"}``) activate the monitor.  The feature can be force-disabled
+for any profile via the ``REACHY_MINI_GUARDRAIL_ENABLED`` environment variable.
 
-Soften note injected into the next system prompt when ``should_soften`` is True::
+Optional LLM-scored mode
+------------------------
+When ``REACHY_MINI_GUARDRAIL_LLM_SCORING=1`` is set **and** an ``http_client``
+is passed to ``analyze()``, the monitor sends a lightweight one-shot prompt to
+the local llama-server to score discomfort more accurately.  On any parse or
+network error it falls back transparently to the heuristic score.
 
-    NOTE: the user seems uncomfortable with the current intensity — pivot to
-    lighter, observational material for the next few turns.
+Soften notes
+------------
+Each guardrail-active persona has its own soften note, injected at runtime
+(not persisted) into the system prompt when ``should_soften`` is True.
+Use :func:`get_soften_note` to retrieve the note for a given persona name.
+
+Calibration logging
+-------------------
+Every ``analyze()`` invocation emits a DEBUG line::
+
+    guardrail.calibration persona=<name> heuristic_score=<float>
+    llm_score=<float|null> consecutive_discomfort=<int> should_soften=<bool>
 """
 
 from __future__ import annotations
 import os
 import re
+import json
 import logging
+from typing import Any
 
 
 logger = logging.getLogger(__name__)
 
-# The single-line note prepended (at runtime only) to the system prompt when
-# the monitor decides the persona should soften.  Not persisted anywhere.
-SOFTEN_NOTE = (
+# ---------------------------------------------------------------------------
+# Per-persona soften notes
+# ---------------------------------------------------------------------------
+
+# The note prepended (at runtime only) to the system prompt when the monitor
+# decides the persona should soften.  Not persisted anywhere.
+# Kept for backwards-compat — callers that imported SOFTEN_NOTE directly still
+# work (they receive the bill_hicks note).
+SOFTEN_NOTES: dict[str, str] = {
+    "bill_hicks": (
+        "NOTE: the user seems uncomfortable with the current intensity — "
+        "pivot to lighter, observational material for the next few turns."
+    ),
+    "andrew_dice_clay": (
+        "NOTE: the user seems uncomfortable — dial down the misogyny vector "
+        "and pivot to crowd banter for the next few turns."
+    ),
+    "richard_pryor": (
+        "NOTE: the user seems uncomfortable — pivot from the heavier "
+        "vulnerability toward observational humor for the next few turns."
+    ),
+}
+
+_SOFTEN_NOTE_GENERIC = (
     "NOTE: the user seems uncomfortable with the current intensity — "
-    "pivot to lighter, observational material for the next few turns."
+    "ease back and pivot to lighter material for the next few turns."
 )
 
+# Backwards-compat alias (bill_hicks note).
+SOFTEN_NOTE: str = SOFTEN_NOTES["bill_hicks"]
+
+
+def get_soften_note(persona: str | None) -> str:
+    """Return the persona-specific soften note, or the generic fallback."""
+    if persona and persona in SOFTEN_NOTES:
+        return SOFTEN_NOTES[persona]
+    return _SOFTEN_NOTE_GENERIC
+
+
+# ---------------------------------------------------------------------------
+# Guardrail-active profiles
+# ---------------------------------------------------------------------------
+
 # Profiles that opt in to the guardrail by default.
-GUARDRAIL_PROFILES: frozenset[str] = frozenset({"bill_hicks"})
+# - bill_hicks: confrontational Socratic pressure
+# - andrew_dice_clay: explicit misogynist/aggression register
+# - richard_pryor: vulnerability-heavy; lower-confidence inclusion but
+#   documented: Pryor's edge is more vulnerability than aggression, so the
+#   threshold may need future tuning against calibration data.
+GUARDRAIL_PROFILES: frozenset[str] = frozenset(
+    {"bill_hicks", "andrew_dice_clay", "richard_pryor"}
+)
 
 # Number of consecutive discomfort turns required before ``should_soften``
 # fires.  Override via ``REACHY_MINI_GUARDRAIL_THRESHOLD``.
@@ -43,7 +103,8 @@ _DEFAULT_THRESHOLD = 2
 # Phrases that indicate the user wants to disengage or tone things down.
 # Each entry is compiled into a case-insensitive regex with word-boundary
 # anchors where helpful.  The list is intentionally conservative to avoid
-# false positives on content-level disagreement (which Hicks *should* engage).
+# false positives on content-level disagreement (which intense personas
+# *should* engage).
 _DISCOMFORT_PHRASES: list[str] = [
     r"\bstop\b",
     r"\benough\b",
@@ -126,6 +187,12 @@ def _guardrail_enabled_for_profile(profile: str | None) -> bool:
     return (profile or "") in GUARDRAIL_PROFILES
 
 
+def _llm_scoring_enabled() -> bool:
+    """Return True when REACHY_MINI_GUARDRAIL_LLM_SCORING is set to a truthy value."""
+    raw = os.getenv("REACHY_MINI_GUARDRAIL_LLM_SCORING", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _get_threshold() -> int:
     """Return the consecutive-discomfort threshold from env or default."""
     raw = os.getenv("REACHY_MINI_GUARDRAIL_THRESHOLD", "").strip()
@@ -144,6 +211,17 @@ def _get_threshold() -> int:
     return _DEFAULT_THRESHOLD
 
 
+# ---------------------------------------------------------------------------
+# LLM scoring prompt
+# ---------------------------------------------------------------------------
+
+_LLM_SCORE_PROMPT = (
+    'Score the user\'s discomfort with the conversation from 0.0 (engaged/enjoying) to '
+    '1.0 (uncomfortable/wants to stop). Return JSON: {"score": <float>, "reason": <short string>}. '
+    "User text: "
+)
+
+
 class EngagementMonitor:
     r"""Stateful per-session monitor for user disengagement signals.
 
@@ -152,10 +230,18 @@ class EngagementMonitor:
         monitor = EngagementMonitor(profile="bill_hicks")
         score, should_soften = monitor.analyze(user_text)
         if should_soften:
-            instructions = SOFTEN_NOTE + "\n\n" + base_instructions
+            note = get_soften_note("bill_hicks")
+            instructions = note + "\n\n" + base_instructions
 
     The monitor is a no-op (``score=0.0, should_soften=False``) when the
     active profile is not in ``GUARDRAIL_PROFILES`` and no env-override is set.
+
+    Optional LLM scoring
+    --------------------
+    Pass an ``http_client`` with a ``post(url, json, timeout)`` interface to
+    ``analyze()`` when ``REACHY_MINI_GUARDRAIL_LLM_SCORING=1`` is set.  The
+    monitor will call :meth:`score_via_llm` asynchronously and use the result
+    instead of the heuristic.  Falls back to heuristic on any error.
     """
 
     def __init__(self, profile: str | None = None) -> None:
@@ -191,11 +277,69 @@ class EngagementMonitor:
         """Discomfort score from the most recent ``analyze()`` call."""
         return self._last_score
 
-    def analyze(self, user_text: str) -> tuple[float, bool]:
+    async def score_via_llm(self, user_text: str, http_client: Any) -> float:  # noqa: ANN401
+        """Score *user_text* discomfort via a one-shot LLM call.
+
+        Sends a prompt to the local llama-server (same endpoint used by the
+        handler's ``_http`` client) asking for a JSON score in ``[0.0, 1.0]``.
+
+        Args:
+            user_text: The raw transcript of the latest user turn.
+            http_client: An object with a ``post(url, json, timeout)`` async
+                coroutine compatible with ``httpx.AsyncClient``.
+
+        Returns:
+            The LLM-scored discomfort value, or the heuristic fallback on any
+            parse/network error.
+
+        """
+        from robot_comic import config as _cfg  # local import to avoid circular
+
+        prompt = _LLM_SCORE_PROMPT + user_text
+        try:
+            resp = await http_client.post(
+                _cfg.config.LLAMA_CPP_URL + "/completion",
+                json={
+                    "prompt": prompt,
+                    "max_tokens": 80,
+                    "temperature": 0.1,
+                },
+                timeout=5.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            # llama.cpp /completion returns {"content": "..."}
+            content = data.get("content", "")
+            parsed = json.loads(content)
+            score = float(parsed["score"])
+            score = max(0.0, min(1.0, score))
+            logger.debug(
+                "EngagementMonitor LLM score=%.2f reason=%r",
+                score,
+                parsed.get("reason", ""),
+            )
+            return score
+        except Exception as exc:
+            logger.debug(
+                "EngagementMonitor: LLM scoring failed (%s), falling back to heuristic",
+                exc,
+            )
+            return _score_discomfort(user_text)
+
+    def analyze(
+        self,
+        user_text: str,
+        llm_score: float | None = None,
+    ) -> tuple[float, bool]:
         """Inspect *user_text* and update engagement state.
 
         Args:
             user_text: The raw transcript of the latest user turn.
+            llm_score: Pre-computed LLM discomfort score (0.0–1.0).  When
+                provided **and** ``REACHY_MINI_GUARDRAIL_LLM_SCORING`` is
+                enabled, this value is used instead of the heuristic.  Callers
+                that want LLM scoring should ``await score_via_llm(...)`` first
+                and pass the result here.
 
         Returns:
             ``(discomfort_score, should_soften)`` where:
@@ -205,17 +349,29 @@ class EngagementMonitor:
 
         """
         if not self._enabled:
+            logger.debug(
+                "guardrail.calibration persona=%r heuristic_score=0.0 llm_score=null"
+                " consecutive_discomfort=0 should_soften=False",
+                self._profile,
+            )
             return 0.0, False
 
-        score = _score_discomfort(user_text)
-        self._last_score = score
+        heuristic_score = _score_discomfort(user_text)
+
+        use_llm = _llm_scoring_enabled() and llm_score is not None
+        effective_score: float = (
+            llm_score if (use_llm and llm_score is not None) else heuristic_score
+        )
+        log_llm = f"{llm_score:.2f}" if llm_score is not None else "null"
+
+        self._last_score = effective_score
 
         # A score ≥ 0.5 counts as a discomfort signal.
-        if score >= 0.5:
+        if effective_score >= 0.5:
             self._consecutive_discomfort += 1
             logger.debug(
                 "EngagementMonitor: discomfort score=%.2f consecutive=%d threshold=%d",
-                score,
+                effective_score,
                 self._consecutive_discomfort,
                 self._threshold,
             )
@@ -223,7 +379,7 @@ class EngagementMonitor:
             if self._consecutive_discomfort > 0:
                 logger.debug(
                     "EngagementMonitor: engagement signal (score=%.2f) — resetting consecutive counter",
-                    score,
+                    effective_score,
                 )
             self._consecutive_discomfort = 0
 
@@ -234,7 +390,19 @@ class EngagementMonitor:
                 self._consecutive_discomfort,
                 self._threshold,
             )
-        return score, should_soften
+
+        # Calibration log — one structured line per analyze() call.
+        logger.debug(
+            "guardrail.calibration persona=%r heuristic_score=%.2f llm_score=%s"
+            " consecutive_discomfort=%d should_soften=%s",
+            self._profile,
+            heuristic_score,
+            log_llm,
+            self._consecutive_discomfort,
+            should_soften,
+        )
+
+        return effective_score, should_soften
 
     def reset(self) -> None:
         """Reset engagement state (e.g., on new session or profile switch)."""
