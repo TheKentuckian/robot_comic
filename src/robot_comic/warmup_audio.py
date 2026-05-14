@@ -137,10 +137,10 @@ def _play_windows(wav_path: Path) -> bool:
     ``wav_path.is_file()`` before calling this).
     """
     try:
-        import winsound  # noqa: PLC0415 — Windows-only stdlib module
+        import winsound  # type: ignore[import-not-found,unused-ignore] # noqa: PLC0415 — Windows-only stdlib module
 
-        flags = winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT
-        winsound.PlaySound(str(wav_path), flags)
+        flags = winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT  # type: ignore[attr-defined,unused-ignore]
+        winsound.PlaySound(str(wav_path), flags)  # type: ignore[attr-defined,unused-ignore]
         return True
     except Exception as exc:
         logger.warning("winsound.PlaySound failed: %s", exc)

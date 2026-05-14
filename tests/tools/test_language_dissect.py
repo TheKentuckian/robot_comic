@@ -14,12 +14,8 @@ import pytest
 # Module loading helpers
 # ---------------------------------------------------------------------------
 
-_TOOL_PATH = (
-    Path(__file__).parents[2] / "src" / "robot_comic" / "tools" / "language_dissect.py"
-)
-_EUPHEMISMS_PATH = (
-    Path(__file__).parents[2] / "profiles" / "george_carlin" / "euphemisms.json"
-)
+_TOOL_PATH = Path(__file__).parents[2] / "src" / "robot_comic" / "tools" / "language_dissect.py"
+_EUPHEMISMS_PATH = Path(__file__).parents[2] / "profiles" / "george_carlin" / "euphemisms.json"
 
 
 def _load_language_dissect_module():
@@ -57,30 +53,22 @@ class TestEuphemismsDictionary:
     def test_dict_loads_as_mapping(self, euphemisms_dict):
         """euphemisms.json must parse as a non-empty dict."""
         assert isinstance(euphemisms_dict, dict)
-        assert len(euphemisms_dict) >= 30, (
-            f"Expected at least 30 entries, got {len(euphemisms_dict)}"
-        )
+        assert len(euphemisms_dict) >= 30, f"Expected at least 30 entries, got {len(euphemisms_dict)}"
 
     def test_every_entry_has_required_keys(self, euphemisms_dict):
         """Every entry must have literal_words, euphemism_target, dissection_suggestion."""
         required = {"literal_words", "euphemism_target", "dissection_suggestion"}
         for phrase, entry in euphemisms_dict.items():
             missing = required - entry.keys()
-            assert not missing, (
-                f"Entry '{phrase}' is missing keys: {missing}"
-            )
+            assert not missing, f"Entry '{phrase}' is missing keys: {missing}"
 
     def test_literal_words_is_dict(self, euphemisms_dict):
         """literal_words must be a dict mapping word strings to meaning strings."""
         for phrase, entry in euphemisms_dict.items():
             lw = entry["literal_words"]
-            assert isinstance(lw, dict), (
-                f"Entry '{phrase}': literal_words must be a dict, got {type(lw).__name__}"
-            )
+            assert isinstance(lw, dict), f"Entry '{phrase}': literal_words must be a dict, got {type(lw).__name__}"
             for word, meaning in lw.items():
-                assert isinstance(word, str) and word, (
-                    f"Entry '{phrase}': literal_words key must be non-empty string"
-                )
+                assert isinstance(word, str) and word, f"Entry '{phrase}': literal_words key must be non-empty string"
                 assert isinstance(meaning, str) and meaning, (
                     f"Entry '{phrase}': literal_words value must be non-empty string"
                 )
@@ -111,9 +99,7 @@ class TestEuphemismsDictionary:
             "correctional facility",
         ]
         for phrase in expected:
-            assert phrase in euphemisms_dict, (
-                f"Expected canonical phrase '{phrase}' not found in euphemisms.json"
-            )
+            assert phrase in euphemisms_dict, f"Expected canonical phrase '{phrase}' not found in euphemisms.json"
 
 
 # ---------------------------------------------------------------------------
