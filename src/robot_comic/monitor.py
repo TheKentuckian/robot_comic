@@ -364,7 +364,10 @@ def _parse_span(line: str) -> Optional[dict[str, Any]]:
 # Persona-switcher overlay
 # ---------------------------------------------------------------------------
 
-_ADMIN_BASE_URL = "http://localhost:8000"
+# The app's admin server (LocalStream.init_admin_ui) listens on 7860; the
+# reachy_mini daemon listens on 8000 and does not expose /personalities or
+# /api/battery. Both endpoints the monitor talks to are app-side.
+_ADMIN_BASE_URL = "http://localhost:7860"
 
 
 def _fetch_personas(base_url: str) -> tuple[list[str], str]:
@@ -536,7 +539,7 @@ def main() -> None:
     # Battery status — polled every ~30 s from the admin API.
     _battery: list[Optional[dict[str, Any]]] = [None]
     _battery_last_check: list[float] = [0.0]
-    _battery_base_url: str = "http://localhost:8000"
+    _battery_base_url: str = _ADMIN_BASE_URL
 
     def _battery_footer() -> Text:
         """Render a compact battery status line for the panel subtitle."""

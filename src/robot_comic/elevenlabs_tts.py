@@ -10,6 +10,7 @@ Audio output: 24 kHz, mono, 16-bit PCM — matches the existing pipeline.
 import os
 import json
 import time
+import random
 import asyncio
 import logging
 from typing import Any, Optional
@@ -60,6 +61,30 @@ _TTS_RETRY_BASE_DELAY = 0.5
 _LLM_MAX_RETRIES = 4
 _LLM_RETRY_BASE_DELAY = 1.0
 _LLM_MAX_TOOL_ROUNDS = 5
+
+
+class _LLMToolCallLimitExceeded(Exception):
+    """Raised when _run_llm_with_tools exhausts the per-turn tool-call budget.
+
+    Caught by _dispatch_completed_transcript_impl so the limit message stays out
+    of TTS — the caller logs a quiet assistant note instead of speaking a status
+    string aloud.
+    """
+
+
+# Sampled when the LLM returns an empty response (finish_reason=STOP with no
+# parts is the most common case for short user inputs + tools-configured
+# Gemini calls — see #267). Intent: short Hicks-flavoured lines so the
+# operator gets audible feedback instead of perceiving a hang. The persona
+# can still drive a real reply on the next turn.
+_EMPTY_RESPONSE_FILLERS: tuple[str, ...] = (
+    "Yeah. I'm here.",
+    "Try that again, friend.",
+    "You still with me?",
+    "Mhm. Go on.",
+    "I caught that. Hold on.",
+    "Hmm. Say more.",
+)
 # _ECHO_COOLDOWN_S is now read from config.ECHO_COOLDOWN_MS at runtime.
 # This module-level constant is kept for backward compatibility with imports.
 _ECHO_COOLDOWN_S: float = 0.3
@@ -145,26 +170,35 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     def __init__(
         self,
-        deps: ToolDependencies,
+        deps: ToolDependencies | None = None,
         sim_mode: bool = False,
         instance_path: Optional[str] = None,
         startup_voice: Optional[str] = None,
+        **kwargs: Any,
     ) -> None:
+        # In the GeminiTextElevenLabsResponseHandler diamond, BaseLlamaResponseHandler
+        # appears earlier in the MRO and calls super().__init__(expected_layout=...).
+        # That super() lands here. Absorb the audio kwargs without clobbering BaseLlama's
+        # already-set shared state.
         super().__init__(
             expected_layout="mono",
             output_sample_rate=ELEVENLABS_OUTPUT_SAMPLE_RATE,
             input_sample_rate=16000,
         )
-        self.deps = deps
-        self.sim_mode = sim_mode
-        self.instance_path = instance_path
-        self._voice_override: str | None = startup_voice
+        _diamond_init = getattr(self, "deps", None) is not None
+        if not _diamond_init:
+            assert deps is not None, "deps required for non-diamond instantiation"
+            self.deps = deps
+            self.sim_mode = sim_mode
+            self.instance_path = instance_path
+            self._voice_override: str | None = startup_voice
+            self._http: httpx.AsyncClient | None = None
+            self._stop_event: asyncio.Event = asyncio.Event()
+            self._conversation_history: list[dict[str, Any]] = []
+            self.output_queue: asyncio.Queue[Any] = asyncio.Queue()
+        # ElevenLabs-specific state — always initialise.
         self._client: genai.Client | None = None
-        self._http: httpx.AsyncClient | None = None
-        self._stop_event: asyncio.Event = asyncio.Event()
-        self._conversation_history: list[dict[str, Any]] = []
         self._last_tts_rate_limited: bool = False
-        self.output_queue: asyncio.Queue[Any] = asyncio.Queue()
         self.cumulative_cost: float = 0.0
         # Drop-not-queue guard for concurrent Moonshine 'completed' events.
         # Without this, two coroutines can mutate _conversation_history in
@@ -332,9 +366,27 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
         try:
             response_text = await self._run_llm_with_tools()
+        except _LLMToolCallLimitExceeded as exc:
+            logger.warning("%s", exc)
+            await self.output_queue.put(
+                AdditionalOutputs({"role": "assistant", "content": "[Skipped TTS: tool-call limit reached]"})
+            )
+            return
         except Exception as exc:
             logger.warning("LLM call failed: %s", exc)
             return
+
+        if not response_text.strip():
+            # _run_llm_with_tools returned empty (Gemini emitted a candidate
+            # with no parts — typically finish_reason=STOP for short inputs
+            # with tools configured; safety blocks are also possible). Speak
+            # a short canned line so the operator gets audible feedback
+            # instead of perceiving the robot as hung. Tracked in #267.
+            response_text = random.choice(_EMPTY_RESPONSE_FILLERS)
+            logger.warning(
+                "LLM returned empty response_text; substituting canned filler %r",
+                response_text,
+            )
 
         self._conversation_history.append({"role": "model", "parts": [{"text": response_text}]})
         await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": response_text}))
@@ -425,11 +477,30 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         for _ in range(_LLM_MAX_TOOL_ROUNDS):
             response = await self._llm_generate_with_backoff(history, gen_config)
 
-            candidate = response.candidates[0]
-            function_calls = [p.function_call for p in candidate.content.parts if p.function_call is not None]
+            candidates = response.candidates or []
+            if not candidates:
+                logger.warning(
+                    "Gemini returned no candidates; skipping turn (prompt_feedback=%r)",
+                    getattr(response, "prompt_feedback", None),
+                )
+                return ""
+            candidate = candidates[0]
+            parts = (candidate.content.parts if candidate.content else None) or []
+            if not parts:
+                # Empty content despite a candidate — usually finish_reason=SAFETY
+                # (safety filter blocked) or MAX_TOKENS (truncated to nothing) or
+                # RECITATION. Log so we can tune the system prompt / settings.
+                logger.warning(
+                    "Gemini candidate has no parts; finish_reason=%r safety_ratings=%r prompt_feedback=%r",
+                    getattr(candidate, "finish_reason", None),
+                    getattr(candidate, "safety_ratings", None),
+                    getattr(response, "prompt_feedback", None),
+                )
+                return ""
+            function_calls = [p.function_call for p in parts if p.function_call is not None]
 
             if not function_calls:
-                return "".join(p.text for p in candidate.content.parts if p.text).strip()
+                return "".join(p.text for p in parts if p.text).strip()
 
             # Append model's function-call turn to history
             history.append(candidate.content)
@@ -452,7 +523,9 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
             history.append(types.Content(role="user", parts=response_parts))
 
-        return "[Response generation reached tool call limit]"
+        raise _LLMToolCallLimitExceeded(
+            f"Gemini tool-call loop exceeded {_LLM_MAX_TOOL_ROUNDS} rounds without producing a final response"
+        )
 
     async def _stream_tts_to_queue(
         self,
