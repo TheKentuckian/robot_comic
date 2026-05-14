@@ -361,6 +361,17 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             logger.warning("LLM call failed: %s", exc)
             return
 
+        if not response_text.strip():
+            # _run_llm_with_tools returned empty (e.g. Gemini sent a response
+            # with no parts after a tool round). Don't push empty text into
+            # TTS — ElevenLabs rejects empty input and we'd surface a spurious
+            # "[TTS error]" to the UI. Quietly drop the turn instead.
+            logger.warning("LLM returned empty response_text; skipping TTS for this turn")
+            await self.output_queue.put(
+                AdditionalOutputs({"role": "assistant", "content": "[Skipped TTS: empty LLM response]"})
+            )
+            return
+
         self._conversation_history.append({"role": "model", "parts": [{"text": response_text}]})
         await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": response_text}))
 
@@ -450,11 +461,16 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         for _ in range(_LLM_MAX_TOOL_ROUNDS):
             response = await self._llm_generate_with_backoff(history, gen_config)
 
-            candidate = response.candidates[0]
-            function_calls = [p.function_call for p in candidate.content.parts if p.function_call is not None]
+            candidates = response.candidates or []
+            if not candidates:
+                logger.warning("Gemini returned no candidates; skipping turn")
+                return ""
+            candidate = candidates[0]
+            parts = (candidate.content.parts if candidate.content else None) or []
+            function_calls = [p.function_call for p in parts if p.function_call is not None]
 
             if not function_calls:
-                return "".join(p.text for p in candidate.content.parts if p.text).strip()
+                return "".join(p.text for p in parts if p.text).strip()
 
             # Append model's function-call turn to history
             history.append(candidate.content)

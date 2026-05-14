@@ -7,6 +7,17 @@ from robot_comic.tools.core_tools import Tool, ToolDependencies
 
 logger = logging.getLogger(__name__)
 
+# Emotions to filter out at the tool layer. These animations have keyframe
+# amplitudes large enough that on at least one chassis they swing the head
+# into the surround cowling. Until per-emotion velocity clamping lands
+# (see #264), drop them entirely.
+BLOCKED_EMOTION_PREFIXES: tuple[str, ...] = ("lonely",)
+
+
+def _is_blocked_emotion(name: str) -> bool:
+    return any(name.startswith(prefix) for prefix in BLOCKED_EMOTION_PREFIXES)
+
+
 # Initialize emotion library
 try:
     from reachy_mini.motion.recorded_move import RecordedMoves
@@ -21,13 +32,20 @@ except ImportError as e:
     EMOTION_AVAILABLE = False
 
 
+def _safe_emotion_names() -> list[str]:
+    """Return the available emotion names with blocked prefixes filtered out."""
+    if not EMOTION_AVAILABLE:
+        return []
+    return [n for n in RECORDED_MOVES.list_moves() if not _is_blocked_emotion(n)]
+
+
 def get_available_emotions_and_descriptions() -> str:
     """Get formatted list of available emotions with descriptions."""
     if not EMOTION_AVAILABLE:
         return "Emotions not available"
 
     try:
-        emotion_names = RECORDED_MOVES.list_moves()
+        emotion_names = _safe_emotion_names()
         if not emotion_names:
             return "No emotions currently available"
 
@@ -50,7 +68,7 @@ class PlayEmotion(Tool):
         "properties": {
             "emotion": {
                 "type": "string",
-                "enum": list(RECORDED_MOVES.list_moves()) if EMOTION_AVAILABLE else [],
+                "enum": _safe_emotion_names(),
                 "description": f"""Name of the emotion to play; omit for random.
                                     Here is a list of the available emotions, you MUST only choose from these: \n
                                     {get_available_emotions_and_descriptions()}
@@ -69,9 +87,15 @@ class PlayEmotion(Tool):
 
         logger.info("Tool call: play_emotion emotion=%s", emotion_name)
 
+        # Defence in depth: if the LLM hallucinates a blocked emotion despite
+        # it being absent from the enum, refuse here too.
+        if emotion_name and _is_blocked_emotion(emotion_name):
+            logger.warning("Refusing blocked emotion %r (matches BLOCKED_EMOTION_PREFIXES)", emotion_name)
+            return {"error": f"Emotion '{emotion_name}' is disabled on this chassis."}
+
         # Check if emotion exists
         try:
-            emotion_names = RECORDED_MOVES.list_moves()
+            emotion_names = _safe_emotion_names()
             if not emotion_names:
                 return {"error": "No emotions currently available"}
 

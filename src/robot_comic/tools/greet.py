@@ -205,6 +205,15 @@ class Greet(Tool):
                 break
             await asyncio.sleep(_SCAN_POLL_INTERVAL_S)
 
+        # Kill-switch: when this is set, skip the head sweep entirely and just
+        # report no_subject. Used to keep the chassis safe while the discrete
+        # 4-step sweep is observed to swing the head hard enough into the
+        # cowling on at least one unit (tracked in #264). Default off so this
+        # is opt-in via env until the proper velocity-clamped path lands.
+        if os.environ.get("REACHY_MINI_GREET_SWEEP_DISABLED", "").lower() in ("1", "true", "yes"):
+            logger.info("greet: sweep disabled by REACHY_MINI_GREET_SWEEP_DISABLED; returning no_subject")
+            return {"no_subject": True}
+
         for direction in SWEEP_POSITIONS:
             move_result = await MoveHead()(deps, direction=direction)
             if "error" in move_result:
