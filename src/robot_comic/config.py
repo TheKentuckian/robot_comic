@@ -668,6 +668,12 @@ class Config:
     # local STT pipeline.  Default is False (gate disabled).
     WELCOME_GATE_ENABLED = _env_flag("REACHY_MINI_WELCOME_GATE_ENABLED", default=False)
 
+    # Face recognition: when enabled, the camera pipeline will attempt to match
+    # incoming visitors against the stored face-embedding database and surface
+    # a name for repeat-visitor callbacks.  Requires a real FaceEmbedder
+    # implementation (follow-up PR); keep False until then.
+    FACE_RECOGNITION_ENABLED = _env_flag("REACHY_MINI_FACE_RECOGNITION_ENABLED", default=False)
+
     # WebSocket Pi ↔ laptop channel (opt-in, default disabled).
     # REACHY_MINI_WS_ENABLED: set to 1/true to enable the bidirectional channel.
     # REACHY_MINI_WS_PORT: TCP port (server listens, client connects); default 8765.
@@ -830,6 +836,7 @@ def refresh_runtime_config_from_env() -> None:
     config.WS_ENABLED = _env_flag("REACHY_MINI_WS_ENABLED", default=False)
     config.WS_PORT = int(os.getenv("REACHY_MINI_WS_PORT", "8765"))
     config.WS_SERVER_HOST = os.getenv("REACHY_MINI_WS_SERVER_HOST", "localhost")
+    config.FACE_RECOGNITION_ENABLED = _env_flag("REACHY_MINI_FACE_RECOGNITION_ENABLED", default=False)
 
 
 def get_backend_choice(model_name: str | None = None) -> str:
