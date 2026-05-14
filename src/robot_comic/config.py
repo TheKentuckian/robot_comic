@@ -891,9 +891,12 @@ class Config:
     # REACHY_MINI_WS_ENABLED: set to 1/true to enable the bidirectional channel.
     # REACHY_MINI_WS_PORT: TCP port (server listens, client connects); default 8765.
     # REACHY_MINI_WS_SERVER_HOST: hostname/IP of the laptop (Pi-side client only).
+    # WS_PAUSE_FLAG: runtime flag set by a laptop_command(action="pause") to signal
+    # the handler to pause between turns. Reset to False on action="resume".
     WS_ENABLED = _env_flag("REACHY_MINI_WS_ENABLED", default=False)
     WS_PORT = int(os.getenv("REACHY_MINI_WS_PORT", "8765"))
     WS_SERVER_HOST = os.getenv("REACHY_MINI_WS_SERVER_HOST", "localhost")
+    WS_PAUSE_FLAG: bool = False
 
     # ---------------------------------------------------------------------------
     # Modular audio pipeline (config scaffold — handler splitting is a follow-up).

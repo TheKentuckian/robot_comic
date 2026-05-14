@@ -279,6 +279,68 @@ def run(
     )
     log_checkpoint("handler init", logger)
 
+    # ---------------------------------------------------------------------------
+    # WebSocket Pi ↔ laptop channel (opt-in via REACHY_MINI_WS_ENABLED).
+    # ---------------------------------------------------------------------------
+    _ws_endpoint: Any = None  # WsClient (Pi) or WsServer (laptop)
+    _ws_loop: asyncio.AbstractEventLoop | None = None
+
+    if config.WS_ENABLED:
+        from robot_comic.ws_client import WsClient
+        from robot_comic.ws_server import WsServer
+
+        # Heuristic: if LLAMA_CPP_URL points to localhost we're on the laptop.
+        _is_laptop = config.LLAMA_CPP_URL.startswith("http://localhost") or config.LLAMA_CPP_URL.startswith(
+            "http://127."
+        )
+
+        _ws_loop = asyncio.new_event_loop()
+
+        def _run_ws_loop(loop: asyncio.AbstractEventLoop) -> None:
+            asyncio.set_event_loop(loop)
+            loop.run_forever()
+
+        _ws_thread = threading.Thread(target=_run_ws_loop, args=(_ws_loop,), daemon=True, name="ws-io")
+        _ws_thread.start()
+
+        if _is_laptop:
+            _ws_server = WsServer(port=config.WS_PORT)
+
+            def _laptop_on_message(msg: Any, _conn: Any) -> None:
+                from robot_comic.ws_protocol import MsgType
+
+                if msg.type in (MsgType.PI_STATUS, MsgType.PI_EVENT):
+                    logger.info("ws_server: received %s: %s", msg.type, msg.payload)
+                elif msg.type == MsgType.LAPTOP_COMMAND:
+                    action = msg.payload.get("action") or msg.payload.get("command", "")
+                    if action == "restart":
+                        logger.info(
+                            "ws_server: restart command received — triggering exit %d", ADMIN_RESTART_EXIT_CODE
+                        )
+                        os.kill(os.getpid(), signal.SIGTERM)
+                    elif action == "pause":
+                        logger.info("ws_server: pause command received")
+                        config.WS_PAUSE_FLAG = True
+                    elif action == "resume":
+                        logger.info("ws_server: resume command received")
+                        config.WS_PAUSE_FLAG = False
+                    else:
+                        logger.info("ws_server: laptop_command action=%r (unhandled)", action)
+
+            _ws_server.on_message(_laptop_on_message)
+            asyncio.run_coroutine_threadsafe(_ws_server.start(), _ws_loop)
+            _ws_endpoint = _ws_server
+            logger.info("ws: laptop mode — WsServer started on port %d", config.WS_PORT)
+        else:
+            _ws_client = WsClient(server_host=config.WS_SERVER_HOST, port=config.WS_PORT)
+            asyncio.run_coroutine_threadsafe(_ws_client.start(), _ws_loop)
+            _ws_endpoint = _ws_client
+            logger.info("ws: Pi mode — WsClient connecting to %s:%d", config.WS_SERVER_HOST, config.WS_PORT)
+
+        # Wire the WS endpoint into the handler so it can emit per-turn status.
+        if hasattr(handler, "set_ws_client"):
+            handler.set_ws_client(_ws_endpoint)
+
     log_checkpoint("handler ready", logger)
 
     # Kiosk-mode startup screen: opt-in welcome prompt + dynamic persona listing.
@@ -369,6 +431,18 @@ def run(
     if camera_worker:
         camera_worker.start()
 
+    # Emit boot event now that all handlers are ready (Pi side only).
+    if config.WS_ENABLED and _ws_loop is not None and _ws_endpoint is not None:
+        from robot_comic.ws_client import WsClient as _WsClient
+        from robot_comic.ws_protocol import make_pi_event as _make_pi_event
+
+        if isinstance(_ws_endpoint, _WsClient):
+            _boot_future = asyncio.run_coroutine_threadsafe(_ws_endpoint.send(_make_pi_event("boot")), _ws_loop)
+            try:
+                _boot_future.result(timeout=1.0)
+            except Exception as _boot_exc:
+                logger.warning("ws: failed to emit boot event: %s", _boot_exc)
+
     def poll_stop_event() -> None:
         """Poll the stop event to allow graceful shutdown."""
         if app_stop_event is not None:
@@ -417,6 +491,28 @@ def run(
         head_wobbler.stop()
         if camera_worker:
             camera_worker.stop()
+
+        # Emit shutdown event (Pi side) and stop WS endpoint.
+        if config.WS_ENABLED and _ws_loop is not None and _ws_endpoint is not None:
+            from robot_comic.ws_client import WsClient as _WsClientShutdown
+            from robot_comic.ws_protocol import make_pi_event as _make_pi_event_shutdown
+
+            if isinstance(_ws_endpoint, _WsClientShutdown):
+                _sd_future = asyncio.run_coroutine_threadsafe(
+                    _ws_endpoint.send(_make_pi_event_shutdown("shutdown")), _ws_loop
+                )
+                try:
+                    _sd_future.result(timeout=1.0)
+                except Exception as _sd_exc:
+                    logger.warning("ws: failed to emit shutdown event: %s", _sd_exc)
+
+            _stop_future = asyncio.run_coroutine_threadsafe(_ws_endpoint.stop(), _ws_loop)
+            try:
+                _stop_future.result(timeout=2.0)
+            except Exception as _stop_exc:
+                logger.warning("ws: error stopping ws endpoint: %s", _stop_exc)
+
+            _ws_loop.call_soon_threadsafe(_ws_loop.stop)
 
         # Ensure media is explicitly closed before disconnecting
         try:
