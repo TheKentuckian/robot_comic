@@ -1,0 +1,116 @@
+<?xml version="1.0"?>
+<!--
+  ClickHouse server config — Pi 5 8 GB tuned.
+  Key changes vs upstream defaults:
+    max_server_memory_usage_to_ram_ratio  0.9 → 0.35  (~2.8 GB cap on 8 GB Pi)
+    uncompressed_cache_size               8 GB → 512 MB
+    mark_cache_size                       5 GB → 256 MB
+  These leave ~5 GB headroom for robot_comic, OS, and other services.
+-->
+<clickhouse>
+    <logger>
+        <level>information</level>
+        <log>/var/log/clickhouse-server/clickhouse-server.log</log>
+        <errorlog>/var/log/clickhouse-server/clickhouse-server.err.log</errorlog>
+        <size>1000M</size>
+        <count>3</count>
+        <console>1</console>
+        <formatting>
+            <type>json</type>
+        </formatting>
+    </logger>
+
+    <!-- Pi 5 memory cap: keep ClickHouse within ~2.8 GB on an 8 GB board -->
+    <max_server_memory_usage>0</max_server_memory_usage>
+    <max_server_memory_usage_to_ram_ratio>0.35</max_server_memory_usage_to_ram_ratio>
+
+    <!-- Smaller caches for embedded use -->
+    <uncompressed_cache_size>536870912</uncompressed_cache_size>    <!-- 512 MB -->
+    <mark_cache_size>268435456</mark_cache_size>                    <!-- 256 MB -->
+
+    <mlock_executable>false</mlock_executable>
+
+    <listen_host>0.0.0.0</listen_host>
+    <http_port>8123</http_port>
+    <tcp_port>9000</tcp_port>
+    <mysql_port>9004</mysql_port>
+
+    <max_connections>512</max_connections>
+    <keep_alive_timeout>3</keep_alive_timeout>
+    <max_concurrent_queries>50</max_concurrent_queries>
+    <max_thread_pool_size>1000</max_thread_pool_size>
+
+    <path>/var/lib/clickhouse/</path>
+    <tmp_path>/var/lib/clickhouse/tmp/</tmp_path>
+    <user_scripts_path>/var/lib/clickhouse/user_scripts/</user_scripts_path>
+    <user_defined_executable_functions_config>/etc/clickhouse-server/custom-function.xml</user_defined_executable_functions_config>
+
+    <users_config>users.xml</users_config>
+    <default_profile>default</default_profile>
+    <default_database>default</default_database>
+
+    <!-- ZooKeeper for ClickHouse replication metadata -->
+    <zookeeper incl="zookeeper-servers" optional="true" />
+
+    <remote_servers incl="clickhouse_remote_servers" />
+
+    <include_from>/etc/clickhouse-server/config.d/cluster.xml</include_from>
+
+    <builtin_dictionaries_reload_interval>3600</builtin_dictionaries_reload_interval>
+    <max_session_timeout>3600</max_session_timeout>
+    <default_session_timeout>60</default_session_timeout>
+
+    <query_log>
+        <database>system</database>
+        <table>query_log</table>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <max_size_rows>1048576</max_size_rows>
+        <reserved_size_rows>8192</reserved_size_rows>
+        <buffer_size_rows_flush_threshold>524288</buffer_size_rows_flush_threshold>
+        <flush_on_crash>false</flush_on_crash>
+    </query_log>
+
+    <metric_log>
+        <database>system</database>
+        <table>metric_log</table>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <collect_interval_milliseconds>1000</collect_interval_milliseconds>
+        <max_size_rows>1048576</max_size_rows>
+        <reserved_size_rows>8192</reserved_size_rows>
+        <buffer_size_rows_flush_threshold>524288</buffer_size_rows_flush_threshold>
+        <flush_on_crash>false</flush_on_crash>
+    </metric_log>
+
+    <asynchronous_metric_log>
+        <database>system</database>
+        <table>asynchronous_metric_log</table>
+        <flush_interval_milliseconds>7000</flush_interval_milliseconds>
+        <max_size_rows>1048576</max_size_rows>
+        <reserved_size_rows>8192</reserved_size_rows>
+        <buffer_size_rows_flush_threshold>524288</buffer_size_rows_flush_threshold>
+        <flush_on_crash>false</flush_on_crash>
+    </asynchronous_metric_log>
+
+    <opentelemetry_span_log>
+        <engine>
+            engine MergeTree
+            partition by toYYYYMM(finish_date)
+            order by (finish_date, finish_time_us, trace_id)
+        </engine>
+        <database>system</database>
+        <table>opentelemetry_span_log</table>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <max_size_rows>1048576</max_size_rows>
+        <reserved_size_rows>8192</reserved_size_rows>
+        <buffer_size_rows_flush_threshold>524288</buffer_size_rows_flush_threshold>
+        <flush_on_crash>false</flush_on_crash>
+    </opentelemetry_span_log>
+
+    <prometheus>
+        <endpoint>/metrics</endpoint>
+        <port>9363</port>
+        <metrics>true</metrics>
+        <events>true</events>
+        <asynchronous_metrics>true</asynchronous_metrics>
+    </prometheus>
+</clickhouse>

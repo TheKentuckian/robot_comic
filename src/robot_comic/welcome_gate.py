@@ -53,9 +53,9 @@ def _levenshtein(a: str, b: str) -> int:
         for j in range(1, len_b + 1):
             cost = 0 if a[i - 1] == b[j - 1] else 1
             curr[j] = min(
-                curr[j - 1] + 1,        # insertion
-                prev[j] + 1,            # deletion
-                prev[j - 1] + cost,     # substitution
+                curr[j - 1] + 1,  # insertion
+                prev[j] + 1,  # deletion
+                prev[j - 1] + cost,  # substitution
             )
         prev, curr = curr, prev
 

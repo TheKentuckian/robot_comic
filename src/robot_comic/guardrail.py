@@ -77,9 +77,7 @@ _DISCOMFORT_PHRASES: list[str] = [
 ]
 
 # Compile once at module load.
-_DISCOMFORT_RE: list[re.Pattern[str]] = [
-    re.compile(p, re.IGNORECASE) for p in _DISCOMFORT_PHRASES
-]
+_DISCOMFORT_RE: list[re.Pattern[str]] = [re.compile(p, re.IGNORECASE) for p in _DISCOMFORT_PHRASES]
 
 # Minimum word count below which a response is treated as "very short"
 # (a mild secondary signal — not enough alone, raises score by less).
@@ -136,9 +134,13 @@ def _get_threshold() -> int:
             val = int(raw)
             if val >= 1:
                 return val
-            logger.warning("REACHY_MINI_GUARDRAIL_THRESHOLD=%r must be >= 1; using default %d", raw, _DEFAULT_THRESHOLD)
+            logger.warning(
+                "REACHY_MINI_GUARDRAIL_THRESHOLD=%r must be >= 1; using default %d", raw, _DEFAULT_THRESHOLD
+            )
         except ValueError:
-            logger.warning("REACHY_MINI_GUARDRAIL_THRESHOLD=%r is not an integer; using default %d", raw, _DEFAULT_THRESHOLD)
+            logger.warning(
+                "REACHY_MINI_GUARDRAIL_THRESHOLD=%r is not an integer; using default %d", raw, _DEFAULT_THRESHOLD
+            )
     return _DEFAULT_THRESHOLD
 
 
