@@ -12,6 +12,7 @@ import logging
 from typing import Any, Callable, Optional
 
 from fastapi import Query, FastAPI, Request
+from pydantic import BaseModel
 
 from .config import (
     LOCKED_PROFILE,
@@ -35,6 +36,13 @@ from .headless_personality import (
 logger = logging.getLogger(__name__)
 
 
+class ApplyPayload(BaseModel):
+    """Request body for POST /personalities/apply."""
+
+    name: str
+    persist: Optional[bool] = False
+
+
 def mount_personality_routes(
     app: FastAPI,
     handler: ConversationHandler,
@@ -45,14 +53,9 @@ def mount_personality_routes(
 ) -> None:
     """Register personality management endpoints on a FastAPI app."""
     try:
-        from pydantic import BaseModel
         from fastapi.responses import JSONResponse
     except Exception:  # pragma: no cover - only when settings app not available
         return
-
-    class ApplyPayload(BaseModel):
-        name: str
-        persist: Optional[bool] = False
 
     def _startup_choice() -> Any:
         """Return the persisted startup personality or default."""
