@@ -91,11 +91,34 @@ class TestDetectPlayer:
         def _which(cmd: str) -> str | None:
             return f"/usr/bin/{cmd}" if cmd == "aplay" else None
 
-        with patch.object(sys, "platform", "linux"), patch("shutil.which", side_effect=_which):
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch("shutil.which", side_effect=_which),
+            patch.dict("os.environ", {}, clear=False) as env,
+        ):
+            env.pop("REACHY_MINI_ALSA_DEVICE", None)
             from robot_comic.warmup_audio import _detect_player
 
             result = _detect_player()
             assert result == ["/usr/bin/aplay", "-q"]
+
+    def test_linux_aplay_appends_alsa_device_override_when_env_set(self) -> None:
+        """On-robot deployments set REACHY_MINI_ALSA_DEVICE so aplay routes
+        through the dmix sink the daemon shares; the env knob has to make it
+        onto the command line."""
+
+        def _which(cmd: str) -> str | None:
+            return f"/usr/bin/{cmd}" if cmd == "aplay" else None
+
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch("shutil.which", side_effect=_which),
+            patch.dict("os.environ", {"REACHY_MINI_ALSA_DEVICE": "plug:reachymini_audio_sink"}),
+        ):
+            from robot_comic.warmup_audio import _detect_player
+
+            result = _detect_player()
+            assert result == ["/usr/bin/aplay", "-q", "-D", "plug:reachymini_audio_sink"]
 
     def test_linux_no_player_returns_none(self) -> None:
         with patch.object(sys, "platform", "linux"), patch("shutil.which", return_value=None):

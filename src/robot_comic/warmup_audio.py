@@ -71,16 +71,20 @@ def _detect_player() -> list[str] | None:
         return [paplay]
     aplay = shutil.which("aplay")
     if aplay:
+        cmd = [aplay, "-q"]
         # When the reachy_mini daemon holds the USB speaker (`/dev/snd/pcmC0D0p`)
         # exclusively via mmap, the default ALSA hw device is busy and `aplay`
         # fails silently with "Device or resource busy". Reachy Mini ships an
         # `~/.asoundrc` that defines a `dmix`-backed `reachymini_audio_sink`
-        # which allows concurrent openers; route through `plug:` so format and
-        # rate conversion (mono 24 kHz → stereo 16 kHz) happen automatically.
-        # On non-Reachy hosts where this PCM isn't defined, aplay will error at
-        # spawn time rather than silently drop audio — louder than the previous
-        # failure mode.
-        return [aplay, "-q", "-D", "plug:reachymini_audio_sink"]
+        # which allows concurrent openers; on-robot deployments should set
+        # `REACHY_MINI_ALSA_DEVICE=plug:reachymini_audio_sink` to route through
+        # it (the `plug:` prefix handles format/rate conversion automatically).
+        # On hosts without that PCM defined (CI / dev laptops), leave the env
+        # var unset and aplay uses the default device.
+        device = os.environ.get("REACHY_MINI_ALSA_DEVICE", "").strip()
+        if device:
+            cmd.extend(["-D", device])
+        return cmd
     return None
 
 
