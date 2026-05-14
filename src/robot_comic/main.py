@@ -259,6 +259,7 @@ def run(
         shutdown_phrases=pause_settings.resolved_shutdown(),
         switch_phrases=pause_settings.resolved_switch(),
     )
+    log_checkpoint("pause controller ready", logger)
 
     deps = ToolDependencies(
         reachy_mini=robot,
@@ -269,9 +270,12 @@ def run(
         pause_controller=pause_controller,
         instance_path=Path(instance_path) if instance_path is not None else None,
     )
+    log_checkpoint("tool deps ready", logger)
+
     if is_gemini_model():
         from robot_comic.gemini_live import GeminiLiveHandler
 
+        log_checkpoint("import gemini_live", logger)
         logger.info(
             "Using %s via GeminiLiveHandler",
             get_backend_label(config.BACKEND_PROVIDER),
@@ -282,9 +286,11 @@ def run(
             instance_path=instance_path,
             startup_voice=startup_settings.voice,
         )
+        log_checkpoint("handler init", logger)
     elif config.BACKEND_PROVIDER == HF_BACKEND:
         from robot_comic.huggingface_realtime import HuggingFaceRealtimeHandler
 
+        log_checkpoint("import huggingface_realtime", logger)
         hf_connection_selection = get_hf_connection_selection()
         transport_label = (
             "Hugging Face direct websocket"
@@ -302,16 +308,29 @@ def run(
             instance_path=instance_path,
             startup_voice=startup_settings.voice,
         )  # type: ignore[assignment]
+        log_checkpoint("handler init", logger)
     elif config.BACKEND_PROVIDER == LOCAL_STT_BACKEND:
         from robot_comic.gemini_tts import LocalSTTGeminiTTSHandler
+
+        log_checkpoint("import gemini_tts", logger)
         from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
+
+        log_checkpoint("import chatterbox_tts", logger)
         from robot_comic.elevenlabs_tts import LocalSTTElevenLabsHandler
+
+        log_checkpoint("import elevenlabs_tts", logger)
         from robot_comic.llama_gemini_tts import LocalSTTLlamaGeminiTTSHandler
+
+        log_checkpoint("import llama_gemini_tts", logger)
         from robot_comic.local_stt_realtime import (
             LocalSTTOpenAIRealtimeHandler,
             LocalSTTHuggingFaceRealtimeHandler,
         )
+
+        log_checkpoint("import local_stt_realtime", logger)
         from robot_comic.llama_elevenlabs_tts import LocalSTTLlamaElevenLabsHandler
+
+        log_checkpoint("import llama_elevenlabs_tts", logger)
 
         local_stt_response_backend = getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
         logger.info("Using %s", get_backend_label(config.BACKEND_PROVIDER))
@@ -338,9 +357,11 @@ def run(
             instance_path=instance_path,
             startup_voice=startup_settings.voice,
         )  # type: ignore[assignment]
+        log_checkpoint("handler init", logger)
     else:
         from robot_comic.openai_realtime import OpenaiRealtimeHandler
 
+        log_checkpoint("import openai_realtime", logger)
         logger.info(
             "Using %s via OpenAI realtime handler (OpenAI Realtime API)",
             get_backend_label(config.BACKEND_PROVIDER),
@@ -351,6 +372,7 @@ def run(
             instance_path=instance_path,
             startup_voice=startup_settings.voice,
         )  # type: ignore[assignment]
+        log_checkpoint("handler init", logger)
 
     log_checkpoint("handler ready", logger)
 
