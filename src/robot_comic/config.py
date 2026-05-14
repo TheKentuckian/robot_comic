@@ -947,6 +947,13 @@ class Config:
     STARTUP_SCREEN_ENABLED = _env_flag("REACHY_MINI_STARTUP_SCREEN", default=False)
     STARTUP_SCREEN_PERSONA_ORDER = os.getenv("REACHY_MINI_STARTUP_SCREEN_PERSONA_ORDER", "")
 
+    # Boot-time opener strategy (#290). "canned" reads a per-persona line from
+    # profiles/<persona>/openers.txt and enqueues it directly to TTS, bypassing
+    # the LLM entirely. "llm" preserves the legacy synthetic
+    # "[conversation started]" round-trip — fragile under Gemini load but kept
+    # behind the flag for A/B comparison. Default: canned.
+    STARTUP_TRIGGER_MODE: str = (os.getenv("REACHY_MINI_STARTUP_TRIGGER_MODE") or "canned").strip().lower()
+
     # Face recognition: when enabled, the camera pipeline will attempt to match
     # incoming visitors against the stored face-embedding database and surface
     # a name for repeat-visitor callbacks.  Requires a real FaceEmbedder
@@ -1144,6 +1151,7 @@ def refresh_runtime_config_from_env() -> None:
     config.ECHO_COOLDOWN_MS = int(os.getenv(ECHO_COOLDOWN_MS_ENV, str(DEFAULT_ECHO_COOLDOWN_MS)))
     config.STARTUP_SCREEN_ENABLED = _env_flag("REACHY_MINI_STARTUP_SCREEN", default=False)
     config.STARTUP_SCREEN_PERSONA_ORDER = os.getenv("REACHY_MINI_STARTUP_SCREEN_PERSONA_ORDER", "")
+    config.STARTUP_TRIGGER_MODE = (os.getenv("REACHY_MINI_STARTUP_TRIGGER_MODE") or "canned").strip().lower()
     config.WS_ENABLED = _env_flag("REACHY_MINI_WS_ENABLED", default=False)
     config.WS_PORT = int(os.getenv("REACHY_MINI_WS_PORT", "8765"))
     config.WS_SERVER_HOST = os.getenv("REACHY_MINI_WS_SERVER_HOST", "localhost")

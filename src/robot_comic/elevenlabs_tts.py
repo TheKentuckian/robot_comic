@@ -35,6 +35,7 @@ from robot_comic.config import (
     config,
     set_custom_profile,
 )
+from robot_comic.openers import get_canned_opener
 from robot_comic.prompts import get_session_instructions
 from robot_comic.gemini_tts import (
     SHORT_PAUSE_MS,
@@ -291,37 +292,75 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         await self._stop_event.wait()
 
     async def _send_startup_trigger(self) -> None:
-        """Kick off the opening sequence defined in the profile instructions.
+        """Kick off the opening sequence.
+
+        Default mode ("canned", #290): bypass the LLM and synthesize a
+        per-persona line read from ``profiles/<persona>/openers.txt``.
+        Legacy mode ("llm"): keep the synthetic ``[conversation started]``
+        round-trip available for A/B comparison.
 
         Opens a synthetic outer turn span (no STT event fires for the boot
         greeting) so the monitor displays the startup greeting as a turn row
         with LLM and TTS children. Without this, the greeting was invisible
         to operator dashboards.
         """
+        mode = getattr(config, "STARTUP_TRIGGER_MODE", "canned")
         _tracer = telemetry.get_tracer()
         _turn_id = str(uuid.uuid4())
+        _excerpt = "[startup opener]" if mode == "canned" else "[conversation started]"
         _turn_span = _tracer.start_span(
             "turn",
             attributes={
                 "turn.id": _turn_id,
                 "session.id": self._session_id,
-                "turn.excerpt": "[conversation started]",
+                "turn.excerpt": _excerpt,
                 "robot.mode": self._BACKEND_LABEL,
             },
         )
         self._turn_span = _turn_span
         try:
-            await self._dispatch_completed_transcript("[conversation started]")
+            if mode == "canned":
+                await self._speak_canned_opener(get_canned_opener())
+            else:
+                await self._dispatch_completed_transcript("[conversation started]")
         finally:
             # _dispatch_completed_transcript_impl closes/clears the span via its
             # own captured reference; guard against double-close on its error
-            # paths.
+            # paths. The canned path does not touch the span, so we close it
+            # here.
             if self._turn_span is _turn_span:
                 self._turn_span = None
                 try:
                     _turn_span.end()
                 except Exception:
                     pass
+
+    async def _speak_canned_opener(self, text: str) -> None:
+        """Enqueue *text* directly to ElevenLabs TTS and record a model turn."""
+        if not text or not text.strip():
+            logger.warning("Canned opener was empty; skipping startup speak.")
+            return
+        logger.info("Canned startup opener: %r", text)
+        self._conversation_history.append({"role": "model", "parts": [{"text": text}]})
+        await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": text}))
+        # Reset byte-count echo-guard accumulators for this new response turn.
+        self._response_audio_bytes = 0
+        self._response_start_ts = 0.0
+
+        try:
+            sentences = split_sentences(text) or [text]
+            first_audio_marker: list[float] = [time.perf_counter()]
+            for sentence in sentences:
+                tags = extract_delivery_tags(sentence)
+                spoken = strip_gemini_tags(sentence)
+                if not spoken:
+                    continue
+                if SHORT_PAUSE_TAG in tags:
+                    for frame in self._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS, ELEVENLABS_OUTPUT_SAMPLE_RATE)):
+                        await self._enqueue_audio_frame(frame)
+                await self._stream_tts_to_queue(spoken, first_audio_marker, tags)
+        except Exception as exc:
+            logger.warning("Canned opener TTS failed: %s", exc)
 
     async def shutdown(self) -> None:
         """Signal start_up to return and drain the output queue."""
