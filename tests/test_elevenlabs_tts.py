@@ -561,3 +561,148 @@ async def test_dispatch_applies_tags_before_streaming(monkeypatch: pytest.Monkey
     text, tags = captured_calls[0]
     assert text == "Zoom in!"
     assert "fast" in tags
+
+
+# ---------------------------------------------------------------------------
+# OTel instrumentation (issue #268)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_otel_spans_emitted_for_full_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """End-to-end turn through ElevenLabsTTSResponseHandler emits the expected
+    span hierarchy: a parent ``turn`` span with ``llm.request`` and
+    ``tts.synthesize`` children carrying the documented attributes.
+
+    Regression guard for #268, where the handler inherited no OTel
+    instrumentation and the monitor saw only the ``stt.infer`` mixin span.
+    """
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from robot_comic import telemetry
+    from robot_comic import elevenlabs_tts as mod
+
+    # Swap in a private TracerProvider so the test only sees its own spans
+    # (the global provider is process-wide and shared with other tests).
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(telemetry, "get_tracer", lambda: provider.get_tracer("test"))
+
+    # Open a synthetic outer turn span (simulating LocalSTTInputMixin's role
+    # in the live path) so the handler attaches its llm.request / tts.synthesize
+    # spans as children.
+    outer = provider.get_tracer("test").start_span(
+        "turn",
+        attributes={
+            "turn.id": "test-turn",
+            "session.id": "test-session",
+            "robot.mode": "local_stt",  # will be overwritten with the handler label
+        },
+    )
+    handler = _make_handler()
+    handler._turn_span = outer
+
+    # Stub the LLM round-trip with a minimal "no tool calls, just text"
+    # Gemini response so we exercise the real _run_llm_with_tools wrapper
+    # (which is what opens the llm.request span).
+    class _FakePart:
+        def __init__(self, text: str) -> None:
+            self.text = text
+            self.function_call = None
+
+    class _FakeContent:
+        def __init__(self, text: str) -> None:
+            self.parts = [_FakePart(text)]
+
+    class _FakeCandidate:
+        def __init__(self, text: str) -> None:
+            self.content = _FakeContent(text)
+            self.finish_reason = "STOP"
+            self.safety_ratings = None
+
+    class _FakeResponse:
+        def __init__(self, text: str) -> None:
+            self.candidates = [_FakeCandidate(text)]
+            self.prompt_feedback = None
+
+    async def fake_backoff(self, contents: Any, cfg: Any) -> Any:
+        return _FakeResponse("Hello there.")
+
+    monkeypatch.setattr(mod.ElevenLabsTTSResponseHandler, "_llm_generate_with_backoff", fake_backoff)
+
+    # Stub the TTS HTTP stream so _stream_tts_to_queue exercises its span wrap.
+    monkeypatch.setattr(mod.config, "ELEVENLABS_API_KEY", "k", raising=False)
+    monkeypatch.setattr(mod, "load_profile_elevenlabs_config", lambda: {"voice_id": "voice-abc"})
+    handler._http.stream = _stream_factory(_FakeStreamResponse([_silent_pcm_bytes(2400)]))
+
+    await handler._dispatch_completed_transcript("hi")
+
+    # _dispatch_completed_transcript_impl closes the outer span as part of its
+    # finally block — no need to end() it manually here.
+    spans = exporter.get_finished_spans()
+    names = [s.name for s in spans]
+    assert names.count("turn") == 1, f"Expected exactly one turn span, got {names}"
+    assert "llm.request" in names, f"Missing llm.request span; got {names}"
+    assert "tts.synthesize" in names, f"Missing tts.synthesize span; got {names}"
+
+    turn_span = next(s for s in spans if s.name == "turn")
+    llm_span = next(s for s in spans if s.name == "llm.request")
+    tts_span = next(s for s in spans if s.name == "tts.synthesize")
+
+    # Attribute parity with BaseLlamaResponseHandler.
+    assert turn_span.attributes is not None
+    assert turn_span.attributes.get("robot.mode") == "gemini_text_elevenlabs"
+    assert turn_span.attributes.get("turn.outcome") == "success"
+    assert turn_span.attributes.get("gen_ai.system") == "gemini"
+
+    assert llm_span.attributes is not None
+    assert llm_span.attributes.get("gen_ai.system") == "gemini"
+    assert llm_span.attributes.get("gen_ai.operation.name") == "chat"
+    assert llm_span.attributes.get("finish_reason") == "STOP"
+
+    assert tts_span.attributes is not None
+    assert tts_span.attributes.get("gen_ai.system") == "elevenlabs"
+    assert tts_span.attributes.get("tts.voice_id") == "voice-abc"
+
+    # Children should belong to the outer turn's trace.
+    assert llm_span.context.trace_id == turn_span.context.trace_id
+    assert tts_span.context.trace_id == turn_span.context.trace_id
+
+
+@pytest.mark.asyncio
+async def test_otel_turn_outcome_on_llm_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the LLM call raises, the outer turn span still closes with
+    ``turn.outcome=llm_error`` and is not left open."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from robot_comic import telemetry
+    from robot_comic import elevenlabs_tts as mod
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(telemetry, "get_tracer", lambda: provider.get_tracer("test"))
+
+    outer = provider.get_tracer("test").start_span("turn")
+    handler = _make_handler()
+    handler._turn_span = outer
+
+    async def boom(self, contents: Any, cfg: Any) -> Any:
+        raise RuntimeError("simulated LLM outage")
+
+    monkeypatch.setattr(mod.ElevenLabsTTSResponseHandler, "_llm_generate_with_backoff", boom)
+
+    await handler._dispatch_completed_transcript("hi")
+
+    spans = exporter.get_finished_spans()
+    turn_spans = [s for s in spans if s.name == "turn"]
+    assert len(turn_spans) == 1
+    assert turn_spans[0].attributes is not None
+    assert turn_spans[0].attributes.get("turn.outcome") == "llm_error"
+    # Handler state should be reset so the next turn doesn't see a stale span.
+    assert handler._turn_span is None
