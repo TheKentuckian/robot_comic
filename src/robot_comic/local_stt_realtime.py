@@ -43,6 +43,28 @@ logger = logging.getLogger(__name__)
 
 LOCAL_STT_SAMPLE_RATE = 16000
 
+# Operator-flipped env var. When set to "1" the module emits a verbose
+# stream of diagnostic logs (listener wiring, add_audio shape/dtype, periodic
+# state dumps, callback fires) intended for chassis-side disambiguation of
+# the four hypotheses in issue #314. Zero impact when unset.
+_DIAG_ENV_VAR = "MOONSHINE_DIAG"
+
+# Cap how many add_audio frames we log in full detail to avoid drowning the
+# journal once the operator has confirmed dtype/shape are stable.
+_DIAG_ADD_AUDIO_LOG_LIMIT = 20
+
+# Cadence of the periodic state-dump log during a stall.
+_DIAG_PERIODIC_LOG_INTERVAL_S = 5.0
+
+
+def _diag_enabled() -> bool:
+    """Return True iff the operator has enabled MOONSHINE_DIAG=1.
+
+    Read from the environment on every call so unit tests can toggle the flag
+    between subtests via monkeypatch without restarting the process.
+    """
+    return os.environ.get(_DIAG_ENV_VAR) == "1"
+
 
 class LocalSTTDependencyError(RuntimeError):
     """Raised when the optional local STT dependency is not installed."""
@@ -122,8 +144,31 @@ class _MoonshineListener:  # base class is attached dynamically in _build_local_
     def __init__(self, handler: "LocalSTTInputMixin") -> None:
         self.handler = handler
 
+    def _diag_log_callback(self, kind: str, event: Any, text: str) -> None:
+        """Emit a structured callback-fired log entry when MOONSHINE_DIAG=1.
+
+        Issue #314 hypothesis 1: these are the events that AREN'T firing on
+        the stall. If the operator sees any of these in the journal during
+        the failing window, hypothesis 1 (listener wiring) is invalidated
+        and the bug is upstream of the callback (VAD / shape / starvation).
+        """
+        if not _diag_enabled():
+            return
+        try:
+            logger.info(
+                "[MOONSHINE_DIAG] callback=%s listener_id=%s stream_id=%s event_type=%s text=%r",
+                kind,
+                id(self),
+                id(getattr(self.handler, "_local_stt_stream", None)),
+                type(event).__name__,
+                text[:80],
+            )
+        except Exception as e:  # pragma: no cover - defensive only
+            logger.debug("[MOONSHINE_DIAG] callback log failed: %s", e)
+
     def on_line_started(self, event: Any) -> None:
         text = self._text_from_event(event)
+        self._diag_log_callback("on_line_started", event, text)
         self.handler._heartbeat.update(
             {"state": "speech_started", "last_event": "started", "last_text": text, "last_event_at": time.monotonic()}
         )
@@ -131,6 +176,7 @@ class _MoonshineListener:  # base class is attached dynamically in _build_local_
 
     def on_line_updated(self, event: Any) -> None:
         text = self._text_from_event(event)
+        self._diag_log_callback("on_line_updated", event, text)
         self.handler._heartbeat.update(
             {"state": "partial", "last_event": "partial", "last_text": text, "last_event_at": time.monotonic()}
         )
@@ -138,6 +184,7 @@ class _MoonshineListener:  # base class is attached dynamically in _build_local_
 
     def on_line_text_changed(self, event: Any) -> None:
         text = self._text_from_event(event)
+        self._diag_log_callback("on_line_text_changed", event, text)
         self.handler._heartbeat.update(
             {"state": "partial", "last_event": "partial", "last_text": text, "last_event_at": time.monotonic()}
         )
@@ -145,6 +192,7 @@ class _MoonshineListener:  # base class is attached dynamically in _build_local_
 
     def on_line_completed(self, event: Any) -> None:
         text = self._text_from_event(event)
+        self._diag_log_callback("on_line_completed", event, text)
         self.handler._heartbeat.update(
             {"state": "completed", "last_event": "completed", "last_text": text, "last_event_at": time.monotonic()}
         )
@@ -160,6 +208,13 @@ class _MoonshineListener:  # base class is attached dynamically in _build_local_
         self.handler._pending_stream_rearm = True
 
     def on_error(self, event: Any) -> None:
+        if _diag_enabled():
+            logger.info(
+                "[MOONSHINE_DIAG] callback=on_error listener_id=%s stream_id=%s event=%r",
+                id(self),
+                id(getattr(self.handler, "_local_stt_stream", None)),
+                getattr(event, "error", event),
+            )
         logger.warning("Local STT error: %s", getattr(event, "error", event))
         # If the stream errored out we also need to rearm — the underlying
         # C handle may be in a state where no further events will fire.
@@ -227,6 +282,14 @@ class LocalSTTInputMixin:
             "first_audio_at": None,
         }
         self._heartbeat_future: "asyncio.Future[Any] | ConcurrentFuture[None] | None" = None
+        # MOONSHINE_DIAG=1 bookkeeping (issue #314). Tracks how many add_audio
+        # frames we have logged in detail, the wallclock of the last add_audio
+        # call (so the periodic dump can show elapsed-since-last-frame), and
+        # the future for the periodic state-dump task. All unused when diag
+        # is disabled.
+        self._diag_add_audio_logged: int = 0
+        self._diag_last_add_audio_at: float | None = None
+        self._diag_periodic_future: "asyncio.Future[Any] | ConcurrentFuture[None] | None" = None
         self._welcome_gate: WelcomeGate | None = self._build_welcome_gate()
 
     def _build_welcome_gate(self) -> WelcomeGate | None:
@@ -318,6 +381,15 @@ class LocalSTTInputMixin:
                 self._moonshine_heartbeat_loop(), self._local_loop
             )
 
+        # MOONSHINE_DIAG periodic state-dump task. Independent of the regular
+        # heartbeat: fires every 5s regardless of the dedup logic, so the
+        # operator can diff listener_id / stream_id / audio_frames across the
+        # full stall window even when the regular heartbeat is suppressed.
+        if _diag_enabled() and self._local_loop is not None:
+            self._diag_periodic_future = asyncio.run_coroutine_threadsafe(
+                self._moonshine_diag_periodic_loop(), self._local_loop
+            )
+
     def _open_local_stt_stream(self) -> None:
         """Create + start a fresh Moonshine stream on the current transcriber.
 
@@ -340,6 +412,34 @@ class LocalSTTInputMixin:
         self._local_stt_stream = stream
         self._local_stt_listener = listener
         self._pending_stream_rearm = False
+        # Reset add_audio diag counter so a rearm gets its own fresh window of
+        # detailed frame logs — useful for #314 hypothesis 1 (listener wiring
+        # is fine on first boot but broken after rearm, or vice versa).
+        self._diag_add_audio_logged = 0
+        self._diag_last_add_audio_at = None
+        if _diag_enabled():
+            # Snapshot the stream's public callable surface — useful for
+            # hypothesis 3 (sample-rate / shape mismatch) and to confirm the
+            # transcriber actually returns a stream that supports add_audio /
+            # add_listener after a rearm.
+            try:
+                stream_methods = sorted(
+                    name for name in dir(stream) if not name.startswith("_") and callable(getattr(stream, name, None))
+                )
+            except Exception:  # pragma: no cover - defensive only
+                stream_methods = []
+            logger.info(
+                "[MOONSHINE_DIAG] stream_opened transcriber_id=%s stream_id=%s "
+                "stream_type=%s listener_id=%s listener_type=%s update_interval=%.3fs "
+                "stream_methods=%s",
+                id(transcriber),
+                id(stream),
+                type(stream).__name__,
+                id(listener),
+                type(listener).__name__,
+                self._local_stt_update_interval,
+                stream_methods,
+            )
 
     def _rearm_local_stt_stream(self) -> None:
         """Tear down the current Moonshine stream and start a fresh one.
@@ -356,6 +456,14 @@ class LocalSTTInputMixin:
         so the multi-hundred-millisecond ONNX model load is NOT repeated.
         """
         old_stream = self._local_stt_stream
+        old_listener = self._local_stt_listener
+        if _diag_enabled():
+            logger.info(
+                "[MOONSHINE_DIAG] rearm_begin old_stream_id=%s old_listener_id=%s pending_rearm=%s",
+                id(old_stream),
+                id(old_listener),
+                self._pending_stream_rearm,
+            )
         self._local_stt_stream = None
         self._local_stt_listener = None
         if old_stream is not None:
@@ -586,6 +694,51 @@ class LocalSTTInputMixin:
             self._log_heartbeat()
             await asyncio.sleep(1.0)
 
+    def _diag_log_periodic_state(self) -> None:
+        """Emit one MOONSHINE_DIAG periodic state-dump line.
+
+        Run from `_moonshine_diag_periodic_loop` every 5s. Captures the
+        information needed to diff state across a stall window:
+
+        - listener_id / stream_id — confirm wiring is stable (#314 hyp 1)
+        - audio_frames — confirm receive() is still ingesting (#314 hyp 4)
+        - elapsed_since_last_add_audio_s — confirm the input pump isn't stuck
+        - pending_rearm — surface a stuck rearm flag
+        - last_event / last_event_age — last callback time vs now
+        """
+        if not _diag_enabled():
+            return
+        h = self._heartbeat
+        now = time.monotonic()
+        last_audio = self._diag_last_add_audio_at
+        elapsed_audio = (now - last_audio) if last_audio is not None else None
+        logger.info(
+            "[MOONSHINE_DIAG] periodic listener_id=%s stream_id=%s audio_frames=%d "
+            "last_add_audio_elapsed_s=%s state=%s last_event=%s last_event_age_s=%.1f "
+            "pending_rearm=%s",
+            id(self._local_stt_listener),
+            id(self._local_stt_stream),
+            h["audio_frames"],
+            f"{elapsed_audio:.2f}" if elapsed_audio is not None else "never",
+            h["state"],
+            h["last_event"],
+            now - h["last_event_at"],
+            self._pending_stream_rearm,
+        )
+
+    async def _moonshine_diag_periodic_loop(self) -> None:
+        """Periodically dump diag state every _DIAG_PERIODIC_LOG_INTERVAL_S.
+
+        Runs until the stream is torn down OR MOONSHINE_DIAG is cleared at
+        runtime. Operator-only — gated by _diag_enabled().
+        """
+        while self._local_stt_stream is not None and _diag_enabled():
+            try:
+                self._diag_log_periodic_state()
+            except Exception as e:  # pragma: no cover - defensive only
+                logger.debug("[MOONSHINE_DIAG] periodic dump failed: %s", e)
+            await asyncio.sleep(_DIAG_PERIODIC_LOG_INTERVAL_S)
+
     async def receive(self, frame: Tuple[int, NDArray[np.int16]]) -> None:
         """Feed microphone audio into the local STT stream."""
         # Moonshine has no public reset; after each `LineCompleted` the stream
@@ -626,12 +779,50 @@ class LocalSTTInputMixin:
                 audio_float,
                 int(len(audio_frame) * self.local_stt_sample_rate / input_sample_rate),
             ).astype(np.float32, copy=False)
+        audio_payload = audio_float.tolist()
+        # MOONSHINE_DIAG: log the first N add_audio calls in detail. This
+        # confirms (or rules out) #314 hypothesis 3 (sample-rate / shape /
+        # dtype mismatch silently dropped). We log BEFORE the call so an
+        # exception inside add_audio still leaves a trace.
+        if _diag_enabled() and self._diag_add_audio_logged < _DIAG_ADD_AUDIO_LOG_LIMIT:
+            try:
+                first_val: Any = audio_payload[0] if audio_payload else None
+            except Exception:  # pragma: no cover - defensive only
+                first_val = None
+            logger.info(
+                "[MOONSHINE_DIAG] add_audio call#%d stream_id=%s listener_id=%s "
+                "input_sample_rate=%s input_ndim=%d input_dtype=%s input_len=%d "
+                "resampled_len=%d resampled_dtype=%s payload_type=%s payload_len=%d "
+                "first_sample=%r sample_rate_arg=%d",
+                self._diag_add_audio_logged + 1,
+                id(self._local_stt_stream),
+                id(self._local_stt_listener),
+                input_sample_rate,
+                audio_frame.ndim,
+                str(audio_frame.dtype),
+                int(audio_frame.shape[0]) if audio_frame.ndim >= 1 else 0,
+                len(audio_float),
+                str(audio_float.dtype),
+                type(audio_payload).__name__,
+                len(audio_payload),
+                first_val,
+                self.local_stt_sample_rate,
+            )
+            self._diag_add_audio_logged += 1
         try:
-            self._local_stt_stream.add_audio(audio_float.tolist(), self.local_stt_sample_rate)
+            self._local_stt_stream.add_audio(audio_payload, self.local_stt_sample_rate)
             self._heartbeat["audio_frames"] += 1
+            self._diag_last_add_audio_at = time.monotonic()
             if self._heartbeat["first_audio_at"] is None:
                 self._heartbeat["first_audio_at"] = time.monotonic()
         except Exception as e:
+            if _diag_enabled():
+                logger.info(
+                    "[MOONSHINE_DIAG] add_audio raised stream_id=%s err_type=%s err=%s",
+                    id(self._local_stt_stream),
+                    type(e).__name__,
+                    e,
+                )
             logger.debug("Dropping local STT audio frame: %s", e)
 
     async def shutdown(self) -> None:
@@ -639,6 +830,9 @@ class LocalSTTInputMixin:
         if self._heartbeat_future is not None:
             self._heartbeat_future.cancel()
             self._heartbeat_future = None
+        if self._diag_periodic_future is not None:
+            self._diag_periodic_future.cancel()
+            self._diag_periodic_future = None
         await super().shutdown()  # type: ignore[misc]
         stream = self._local_stt_stream
         transcriber = self._local_stt_transcriber
