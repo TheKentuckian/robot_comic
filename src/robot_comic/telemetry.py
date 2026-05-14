@@ -66,6 +66,11 @@ _SPAN_ATTRS_TO_KEEP = frozenset(
         # (e.g. duration since process start for synthetic point events).
         "event.kind",
         "event.dur_ms",
+        # ``welcome.wav.completed`` (#324) — actual playback exit observed by
+        # the daemon wait thread, distinct from the ``welcome.wav.played``
+        # dispatch span.
+        "aplay.exit_code",
+        "aplay.command",
     }
 )
 
@@ -329,7 +334,11 @@ def emit_first_greeting_audio_once() -> None:
         pass
 
 
-def emit_supporting_event(name: str, dur_ms: Optional[float] = None) -> None:
+def emit_supporting_event(
+    name: str,
+    dur_ms: Optional[float] = None,
+    extra_attrs: Optional[dict[str, Any]] = None,
+) -> None:
     """Emit a synthetic boot-timeline span (``event.kind=supporting``).
 
     Opens and immediately closes a span carrying ``event.kind=supporting`` so
@@ -341,6 +350,10 @@ def emit_supporting_event(name: str, dur_ms: Optional[float] = None) -> None:
     emits the span's own ``dur_ms`` at the top level; the monitor prefers
     ``attrs["event.dur_ms"]`` when present.
 
+    *extra_attrs* lets callers attach event-specific metadata
+    (e.g. ``aplay.exit_code`` for ``welcome.wav.completed`` — #324). Only keys
+    present in :data:`_SPAN_ATTRS_TO_KEEP` will survive the compact exporter.
+
     Safe to call whether or not instrumentation is enabled — when OTel is not
     initialised this resolves to the no-op default tracer.
     """
@@ -348,5 +361,7 @@ def emit_supporting_event(name: str, dur_ms: Optional[float] = None) -> None:
     attrs: dict[str, Any] = {"event.kind": "supporting"}
     if dur_ms is not None:
         attrs["event.dur_ms"] = float(dur_ms)
+    if extra_attrs:
+        attrs.update(extra_attrs)
     with tracer.start_as_current_span(name, attributes=attrs):
         pass

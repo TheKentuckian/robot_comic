@@ -14,6 +14,7 @@
 # the app's first millisecond — no need to wait for any service to come up.
 import os  # noqa: E402 — stdlib-only, must precede the early-play block
 import sys  # noqa: E402
+import time  # noqa: E402
 import subprocess  # noqa: E402
 from pathlib import Path  # noqa: E402
 
@@ -25,6 +26,12 @@ def _play_welcome_early() -> None:
     ``REACHY_MINI_EARLY_WELCOME_PLAYED=1`` on successful dispatch so the later
     ``play_warmup_wav`` call in ``run()`` knows to skip and we don't double up.
     Honours ``REACHY_MINI_SKIP_EARLY_WELCOME=1`` to disable (sim/test use).
+
+    A daemon thread is spawned (via
+    :func:`robot_comic.warmup_audio._wait_and_emit_completion`) to wait on
+    the aplay subprocess and emit a ``welcome.wav.completed`` supporting-event
+    span on actual playback exit (#324). The thread is best-effort and never
+    blocks shutdown.
     """
     if os.environ.get("REACHY_MINI_SKIP_EARLY_WELCOME") == "1":
         return
@@ -43,9 +50,11 @@ def _play_welcome_early() -> None:
         return  # nothing to play — fail silent at boot
 
     device = os.environ.get("REACHY_MINI_ALSA_DEVICE", "plug:reachymini_audio_sink")
+    cmd = ["aplay", "-D", device, "-q", str(wav)]
+    started_at = time.monotonic()
     try:
-        subprocess.Popen(
-            ["aplay", "-D", device, "-q", str(wav)],
+        proc = subprocess.Popen(
+            cmd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -66,6 +75,18 @@ def _play_welcome_early() -> None:
     # and then start over again.
     os.environ["REACHY_MINI_EARLY_WELCOME_PLAYED"] = "1"
 
+    # Spawn a daemon thread that waits on the player and emits a
+    # ``welcome.wav.completed`` supporting-event span (#324). Lazy import so
+    # the early-dispatch path keeps its stdlib-only timing budget — by the
+    # time this line runs the Popen has already been spawned. Wrapped in
+    # try/except because telemetry must never block boot.
+    try:
+        from robot_comic.warmup_audio import _wait_and_emit_completion
+
+        _wait_and_emit_completion(proc, cmd, started_at=started_at)
+    except Exception:
+        pass
+
 
 _play_welcome_early()
 
@@ -83,7 +104,6 @@ warnings.filterwarnings(
     module="google.protobuf.symbol_database",
 )
 
-import time  # noqa: E402
 import signal  # noqa: E402
 import asyncio  # noqa: E402
 import argparse  # noqa: E402
