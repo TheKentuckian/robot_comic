@@ -33,6 +33,8 @@ from typing import TYPE_CHECKING, Any, Optional
 from robot_comic.config import (
     AUDIO_INPUT_HF,
     AUDIO_OUTPUT_HF,
+    LLM_BACKEND_ENV,
+    LLM_BACKEND_GEMINI,
     AUDIO_INPUT_MOONSHINE,
     AUDIO_INPUT_BACKEND_ENV,
     AUDIO_INPUT_GEMINI_LIVE,
@@ -43,6 +45,7 @@ from robot_comic.config import (
     AUDIO_OUTPUT_GEMINI_LIVE,
     AUDIO_INPUT_OPENAI_REALTIME,
     AUDIO_OUTPUT_OPENAI_REALTIME,
+    config,
 )
 
 
@@ -155,6 +158,46 @@ class HandlerFactory:
                 output_backend,
             )
             return GeminiLiveHandler(**handler_kwargs)
+
+        # ------------------------------------------------------------------
+        # Local STT (Moonshine) + TTS output pairs — Gemini text-LLM variants
+        # ------------------------------------------------------------------
+
+        if input_backend == AUDIO_INPUT_MOONSHINE:
+            _llm_backend = getattr(config, "LLM_BACKEND", "llama")
+            if _llm_backend == LLM_BACKEND_GEMINI:
+                if output_backend == AUDIO_OUTPUT_CHATTERBOX:
+                    from robot_comic.gemini_text_handlers import GeminiTextChatterboxHandler
+
+                    logger.info(
+                        "HandlerFactory: selecting GeminiTextChatterboxHandler (%s → %s, llm=%s)",
+                        input_backend,
+                        output_backend,
+                        LLM_BACKEND_GEMINI,
+                    )
+                    return GeminiTextChatterboxHandler(**handler_kwargs)
+
+                if output_backend == AUDIO_OUTPUT_ELEVENLABS:
+                    from robot_comic.gemini_text_handlers import GeminiTextElevenLabsHandler
+
+                    logger.info(
+                        "HandlerFactory: selecting GeminiTextElevenLabsHandler (%s → %s, llm=%s)",
+                        input_backend,
+                        output_backend,
+                        LLM_BACKEND_GEMINI,
+                    )
+                    return GeminiTextElevenLabsHandler(**handler_kwargs)
+
+                # Gemini TTS: already uses Gemini for LLM natively — fall through
+                # to the llama routing so LocalSTTGeminiTTSHandler is selected.
+                if output_backend != AUDIO_OUTPUT_GEMINI_TTS:
+                    raise NotImplementedError(
+                        f"{LLM_BACKEND_ENV}={LLM_BACKEND_GEMINI!r} is not yet implemented "
+                        f"for the output backend {AUDIO_OUTPUT_BACKEND_ENV}={output_backend!r}.\n"
+                        f"Supported Gemini-text output backends: "
+                        f"{AUDIO_OUTPUT_CHATTERBOX!r}, {AUDIO_OUTPUT_ELEVENLABS!r}.\n"
+                        f"Set {LLM_BACKEND_ENV}=llama to use the existing llama-server path."
+                    )
 
         # ------------------------------------------------------------------
         # Local STT (Moonshine) + TTS output pairs
