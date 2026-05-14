@@ -75,8 +75,13 @@ def test_dry_run_exits_zero_in_non_agent_repo(tmp_path: Path) -> None:
         cwd=str(tmp_path),
         check=True,
         capture_output=True,
-        env={**os.environ, "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "t@t.com",
-             "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "t@t.com"},
+        env={
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "t@t.com",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "t@t.com",
+        },
     )
 
     result = subprocess.run(
@@ -105,9 +110,7 @@ def test_unknown_flag_exits_nonzero() -> None:
         text=True,
         timeout=_TIMEOUT,
     )
-    assert result.returncode != 0, (
-        f"Expected non-zero exit for unknown flag, got 0.\nstdout: {result.stdout}"
-    )
+    assert result.returncode != 0, f"Expected non-zero exit for unknown flag, got 0.\nstdout: {result.stdout}"
     combined = result.stdout + result.stderr
     assert "unknown" in combined.lower() or "error" in combined.lower() or "bogus" in combined.lower(), (
         f"Expected error message for unknown flag.\nstdout: {result.stdout}\nstderr: {result.stderr}"
