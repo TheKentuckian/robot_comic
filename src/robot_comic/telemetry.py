@@ -50,6 +50,7 @@ _SPAN_ATTRS_TO_KEEP = frozenset(
         "turn.outcome",
         "turn.excerpt",
         "robot.mode",
+        "robot.persona",
         "gen_ai.system",
         "gen_ai.operation.name",
         "gen_ai.request.model",
@@ -59,6 +60,14 @@ _SPAN_ATTRS_TO_KEEP = frozenset(
         "tool.id",
         "vad.duration_ms",
         "stt.type",
+        # persona.switch supporting span (#303). ``event.kind`` lets the
+        # monitor route the span to a supporting-events lane (#321/#301);
+        # ``from_persona`` / ``to_persona`` / ``outcome`` carry the swap
+        # before/after/result triple.
+        "event.kind",
+        "from_persona",
+        "to_persona",
+        "outcome",
     }
 )
 
@@ -239,6 +248,22 @@ def _init_instruments() -> None:
 # ---------------------------------------------------------------------------
 # Helpers for recording metrics safely (no-op when instrument is None)
 # ---------------------------------------------------------------------------
+
+
+def current_persona() -> str:
+    """Return the active persona name for span/metric attribution (#303).
+
+    Resolves ``config.REACHY_MINI_CUSTOM_PROFILE`` and falls back to
+    ``"default"`` so the attribute is always a non-empty string, matching
+    the convention used for ``robot.mode``. Safe to call from any thread —
+    no IO is performed.
+    """
+    try:
+        from robot_comic.config import config as _config
+
+        return str(getattr(_config, "REACHY_MINI_CUSTOM_PROFILE", None) or "default")
+    except Exception:
+        return "default"
 
 
 def record_turn(duration_s: float, attrs: dict[str, Any]) -> None:

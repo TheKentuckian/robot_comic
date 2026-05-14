@@ -20,6 +20,7 @@ from .config import (
     get_default_voice_for_backend,
     get_available_voices_for_backend,
 )
+from robot_comic import telemetry
 from .conversation_handler import ConversationHandler
 from .headless_personality import (
     DEFAULT_OPTION,
@@ -220,62 +221,89 @@ def mount_personality_routes(
         name: str | None = None,
         persist: Optional[bool] = None,
     ) -> dict:  # type: ignore
-        if LOCKED_PROFILE is not None:
-            return JSONResponse(
-                {"ok": False, "error": "profile_locked", "locked_to": LOCKED_PROFILE},
-                status_code=403,
-            )  # type: ignore
-        loop = get_loop()
-        if loop is None:
-            return JSONResponse({"ok": False, "error": "loop_unavailable"}, status_code=503)  # type: ignore
+        # Capture the active persona *before* doing anything so the span attrs
+        # reflect the real before/after pair. ``_current_choice()`` reads the
+        # in-process config and falls back to DEFAULT_OPTION on error.
+        from_persona = _current_choice()
 
-        # Accept both JSON payload and query param for convenience
-        sel_name: Optional[str] = None
-        persist_flag = bool(persist) if persist is not None else False
-        if payload and getattr(payload, "name", None):
-            sel_name = payload.name
-            persist_flag = bool(getattr(payload, "persist", False))
-        elif name:
-            sel_name = name
-        else:
-            try:
-                body = await request.json()
-                if isinstance(body, dict) and body.get("name"):
-                    sel_name = str(body.get("name"))
-                if isinstance(body, dict) and "persist" in body:
-                    persist_flag = bool(body.get("persist"))
-            except Exception:
-                sel_name = None
-        try:
-            q_persist = request.query_params.get("persist")
-            if q_persist is not None:
-                persist_flag = str(q_persist).lower() in {"1", "true", "yes", "on"}
-        except Exception:
-            pass
-        if not sel_name:
-            sel_name = DEFAULT_OPTION
+        # Open a ``persona.switch`` span around the entire request so operators
+        # can see in the boot timeline / trace stream when a persona swap was
+        # requested, who initiated it, and how it resolved (#303). The span is
+        # tagged ``event.kind=supporting`` so the monitor TUI can render it on
+        # the same supporting-events lane introduced by #301/#321 once that
+        # plumbing lands on main.
+        tracer = telemetry.get_tracer()
+        with tracer.start_as_current_span(
+            "persona.switch",
+            attributes={
+                "event.kind": "supporting",
+                "from_persona": from_persona,
+            },
+        ) as _switch_span:
+            if LOCKED_PROFILE is not None:
+                _switch_span.set_attribute("to_persona", from_persona)
+                _switch_span.set_attribute("outcome", "locked")
+                return JSONResponse(
+                    {"ok": False, "error": "profile_locked", "locked_to": LOCKED_PROFILE},
+                    status_code=403,
+                )  # type: ignore
+            loop = get_loop()
+            if loop is None:
+                _switch_span.set_attribute("to_persona", from_persona)
+                _switch_span.set_attribute("outcome", "loop_unavailable")
+                return JSONResponse({"ok": False, "error": "loop_unavailable"}, status_code=503)  # type: ignore
 
-        async def _do_apply() -> tuple[str, Optional[str]]:
-            sel = None if sel_name == DEFAULT_OPTION else sel_name
-            status = await handler.apply_personality(sel)
-            get_current_voice = getattr(handler, "get_current_voice", None)
-            voice_override = get_current_voice() if callable(get_current_voice) else None
-            return status, voice_override
-
-        try:
-            logger.info("Headless apply: requested name=%r", sel_name)
-            fut = asyncio.run_coroutine_threadsafe(_do_apply(), loop)
-            status, voice_override = fut.result(timeout=10)
-            persisted_choice = _startup_choice()
-            if persist_flag and persist_personality is not None:
+            # Accept both JSON payload and query param for convenience
+            sel_name: Optional[str] = None
+            persist_flag = bool(persist) if persist is not None else False
+            if payload and getattr(payload, "name", None):
+                sel_name = payload.name
+                persist_flag = bool(getattr(payload, "persist", False))
+            elif name:
+                sel_name = name
+            else:
                 try:
-                    persist_personality(None if sel_name == DEFAULT_OPTION else sel_name, voice_override)
-                    persisted_choice = _startup_choice()
-                except Exception as e:
-                    logger.warning("Failed to persist startup personality: %s", e)
-            return {"ok": True, "status": status, "startup": persisted_choice}
-        except Exception as e:
-            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)  # type: ignore
+                    body = await request.json()
+                    if isinstance(body, dict) and body.get("name"):
+                        sel_name = str(body.get("name"))
+                    if isinstance(body, dict) and "persist" in body:
+                        persist_flag = bool(body.get("persist"))
+                except Exception:
+                    sel_name = None
+            try:
+                q_persist = request.query_params.get("persist")
+                if q_persist is not None:
+                    persist_flag = str(q_persist).lower() in {"1", "true", "yes", "on"}
+            except Exception:
+                pass
+            if not sel_name:
+                sel_name = DEFAULT_OPTION
+
+            _switch_span.set_attribute("to_persona", sel_name)
+
+            async def _do_apply() -> tuple[str, Optional[str]]:
+                sel = None if sel_name == DEFAULT_OPTION else sel_name
+                status = await handler.apply_personality(sel)
+                get_current_voice = getattr(handler, "get_current_voice", None)
+                voice_override = get_current_voice() if callable(get_current_voice) else None
+                return status, voice_override
+
+            try:
+                logger.info("Headless apply: requested name=%r", sel_name)
+                fut = asyncio.run_coroutine_threadsafe(_do_apply(), loop)
+                status, voice_override = fut.result(timeout=10)
+                persisted_choice = _startup_choice()
+                if persist_flag and persist_personality is not None:
+                    try:
+                        persist_personality(None if sel_name == DEFAULT_OPTION else sel_name, voice_override)
+                        persisted_choice = _startup_choice()
+                    except Exception as e:
+                        logger.warning("Failed to persist startup personality: %s", e)
+                _switch_span.set_attribute("outcome", "success")
+                return {"ok": True, "status": status, "startup": persisted_choice}
+            except Exception as e:
+                _switch_span.set_attribute("outcome", "error")
+                return JSONResponse({"ok": False, "error": str(e)}, status_code=500)  # type: ignore
 
     @app.get("/voices")
     async def _voices() -> list[str]:

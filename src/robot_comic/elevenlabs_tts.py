@@ -307,6 +307,7 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                 "session.id": self._session_id,
                 "turn.excerpt": "[conversation started]",
                 "robot.mode": self._BACKEND_LABEL,
+                "robot.persona": telemetry.current_persona(),
             },
         )
         self._turn_span = _turn_span
@@ -443,6 +444,7 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             try:
                 _outer_span.set_attribute("robot.mode", self._BACKEND_LABEL)
                 _outer_span.set_attribute("gen_ai.system", self._LLM_SYSTEM)
+                _outer_span.set_attribute("robot.persona", telemetry.current_persona())
             except Exception:
                 pass
             _reattach_token = _otel_context.attach(_otel_trace.set_span_in_context(_outer_span))

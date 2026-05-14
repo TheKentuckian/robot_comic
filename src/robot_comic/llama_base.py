@@ -466,9 +466,14 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         if outer_span is not None:
             outer_span.set_attribute("robot.mode", self._BACKEND_LABEL)
             outer_span.set_attribute("gen_ai.system", "llama_cpp")
+            outer_span.set_attribute("robot.persona", telemetry.current_persona())
         _turn_span = _tracer.start_span(
             "turn",
-            attributes={"robot.mode": self._BACKEND_LABEL, "gen_ai.system": "llama_cpp"},
+            attributes={
+                "robot.mode": self._BACKEND_LABEL,
+                "gen_ai.system": "llama_cpp",
+                "robot.persona": telemetry.current_persona(),
+            },
         )
         _turn_start = time.perf_counter()
         _turn_ctx_token = _otel_context.attach(_otel_trace.set_span_in_context(_turn_span))
