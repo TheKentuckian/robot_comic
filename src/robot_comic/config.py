@@ -198,6 +198,7 @@ CHATTERBOX_DEFAULT_TARGET_DBFS = -16.0
 LLAMA_CPP_URL_ENV = "LLAMA_CPP_URL"
 LLAMA_CPP_DEFAULT_URL = "http://astralplane.lan:11434"
 LLAMA_HEALTH_CHECK_ENV = "REACHY_MINI_LLAMA_HEALTH_CHECK"
+LANGUAGE_DISSECT_LLM_FALLBACK_ENV = "REACHY_MINI_LANGUAGE_DISSECT_LLM_FALLBACK"
 
 # Wake-on-LAN config env-var names and defaults.
 WOL_MAC_ENV = "REACHY_MINI_WOL_MAC"
@@ -852,6 +853,9 @@ class Config:
     REACHY_MINI_TTS_SLOW_WARN_S = float(os.getenv("REACHY_MINI_TTS_SLOW_WARN_S", "10.0"))
     LLAMA_CPP_URL = os.getenv(LLAMA_CPP_URL_ENV, LLAMA_CPP_DEFAULT_URL)
     LLAMA_HEALTH_CHECK_ENABLED = _env_flag(LLAMA_HEALTH_CHECK_ENV, default=True)
+    # When True, language_dissect will call llama-server as a fallback for phrases
+    # that score below the 60% decomposition threshold.  Default off — adds latency.
+    LANGUAGE_DISSECT_LLM_FALLBACK_ENABLED = _env_flag(LANGUAGE_DISSECT_LLM_FALLBACK_ENV, default=False)
     LLM_WARMUP_ENABLED = _env_flag("REACHY_MINI_LLM_WARMUP_ENABLED", default=True)
     LLM_BACKEND = (os.getenv(LLM_BACKEND_ENV) or LLM_BACKEND_LLAMA).strip().lower()
     GEMINI_LLM_MODEL = os.getenv(GEMINI_LLM_MODEL_ENV, _GEMINI_LLM_MODEL_DEFAULT)
@@ -1083,6 +1087,7 @@ def refresh_runtime_config_from_env() -> None:
     config.REACHY_MINI_TTS_SLOW_WARN_S = float(os.getenv("REACHY_MINI_TTS_SLOW_WARN_S", "10.0"))
     config.LLAMA_CPP_URL = os.getenv(LLAMA_CPP_URL_ENV, LLAMA_CPP_DEFAULT_URL)
     config.LLAMA_HEALTH_CHECK_ENABLED = _env_flag(LLAMA_HEALTH_CHECK_ENV, default=True)
+    config.LANGUAGE_DISSECT_LLM_FALLBACK_ENABLED = _env_flag(LANGUAGE_DISSECT_LLM_FALLBACK_ENV, default=False)
     config.LLM_BACKEND = (os.getenv(LLM_BACKEND_ENV) or LLM_BACKEND_LLAMA).strip().lower()
     config.GEMINI_LLM_MODEL = os.getenv(GEMINI_LLM_MODEL_ENV, _GEMINI_LLM_MODEL_DEFAULT)
     config.WOL_MAC = os.getenv(WOL_MAC_ENV) or None
