@@ -286,3 +286,147 @@ def test_idle_stall_warning_suppressed_when_no_audio_seen_yet(caplog, monkeypatc
 
     stall_records = [r for r in caplog.records if "thread-lock or model stall" in r.message]
     assert stall_records == []
+
+
+# -- #279: stream rearm after completion -----------------------------------
+
+
+def test_listener_on_line_completed_sets_pending_stream_rearm():
+    """on_line_completed must flag a stream rebuild so subsequent turns transcribe."""
+    from robot_comic.local_stt_realtime import _MoonshineListener
+
+    handler = MagicMock()
+    handler._heartbeat = {
+        "state": "idle",
+        "last_event": None,
+        "last_text": "",
+        "last_event_at": _time_mod.monotonic(),
+    }
+    handler._pending_stream_rearm = False
+    listener = _MoonshineListener(handler)
+
+    event = SimpleNamespace(line=SimpleNamespace(text="hello world"))
+    listener.on_line_completed(event)
+
+    assert handler._pending_stream_rearm is True
+    handler._schedule_local_stt_event.assert_called_once_with("completed", "hello world")
+
+
+def test_listener_on_error_also_sets_pending_stream_rearm():
+    """A stream-level error leaves the C handle wedged; rearm is the only recovery."""
+    from robot_comic.local_stt_realtime import _MoonshineListener
+
+    handler = MagicMock()
+    handler._pending_stream_rearm = False
+    listener = _MoonshineListener(handler)
+
+    listener.on_error(SimpleNamespace(error=RuntimeError("boom")))
+
+    assert handler._pending_stream_rearm is True
+
+
+def test_rearm_local_stt_stream_recreates_stream_on_same_transcriber():
+    """Rearm must stop+close the old stream and call create_stream on the transcriber."""
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = LocalSTTRealtimeHandler(deps)
+
+    old_stream = MagicMock()
+    new_stream = MagicMock()
+    transcriber = MagicMock()
+    transcriber.create_stream.return_value = new_stream
+
+    handler._local_stt_stream = old_stream
+    handler._local_stt_transcriber = transcriber
+    handler._local_stt_listener = MagicMock()
+    handler._local_stt_update_interval = 0.35
+
+    class _DummyBase:
+        def on_line_started(self, event):
+            pass
+
+        def on_line_updated(self, event):
+            pass
+
+        def on_line_text_changed(self, event):
+            pass
+
+        def on_line_completed(self, event):
+            pass
+
+        def on_error(self, event):
+            pass
+
+    handler._local_stt_listener_base_cls = _DummyBase
+    handler._pending_stream_rearm = True
+
+    handler._rearm_local_stt_stream()
+
+    old_stream.stop.assert_called_once()
+    old_stream.close.assert_called_once()
+    transcriber.create_stream.assert_called_once_with(update_interval=0.35)
+    new_stream.add_listener.assert_called_once()
+    new_stream.start.assert_called_once()
+    assert handler._local_stt_stream is new_stream
+    assert handler._local_stt_listener is not None
+    assert handler._pending_stream_rearm is False
+
+
+def test_rearm_local_stt_stream_noop_when_transcriber_already_gone():
+    """If shutdown already nulled the transcriber, rearm must not blow up."""
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = LocalSTTRealtimeHandler(deps)
+
+    old_stream = MagicMock()
+    handler._local_stt_stream = old_stream
+    handler._local_stt_transcriber = None
+    handler._local_stt_listener = MagicMock()
+    handler._pending_stream_rearm = True
+
+    handler._rearm_local_stt_stream()
+
+    old_stream.stop.assert_called_once()
+    old_stream.close.assert_called_once()
+    assert handler._local_stt_stream is None
+    assert handler._pending_stream_rearm is False
+
+
+@pytest.mark.asyncio
+async def test_receive_rearms_stream_before_pushing_audio_when_flag_set():
+    """When the rearm flag is set, the next receive() rebuilds before add_audio."""
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = LocalSTTRealtimeHandler(deps)
+
+    original_stream = MagicMock()
+    handler._local_stt_stream = original_stream
+    handler._pending_stream_rearm = True
+    rebuilt_stream = MagicMock()
+
+    def _fake_rearm():
+        handler._local_stt_stream = rebuilt_stream
+        handler._pending_stream_rearm = False
+
+    handler._rearm_local_stt_stream = _fake_rearm  # type: ignore[method-assign]
+
+    audio = np.zeros(160, dtype=np.int16)
+    await handler.receive((16000, audio))
+
+    original_stream.add_audio.assert_not_called()
+    rebuilt_stream.add_audio.assert_called_once()
+    assert handler._pending_stream_rearm is False
+
+
+@pytest.mark.asyncio
+async def test_receive_no_rearm_when_flag_clear():
+    """The fast path: no rebuild when no completion has happened."""
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = LocalSTTRealtimeHandler(deps)
+    stream = MagicMock()
+    handler._local_stt_stream = stream
+    handler._pending_stream_rearm = False
+    handler._rearm_local_stt_stream = MagicMock()  # type: ignore[method-assign]
+
+    audio = np.zeros(160, dtype=np.int16)
+    await handler.receive((16000, audio))
+
+    handler._rearm_local_stt_stream.assert_not_called()  # type: ignore[attr-defined]
+    stream.add_audio.assert_called_once()

@@ -149,9 +149,21 @@ class _MoonshineListener:  # base class is attached dynamically in _build_local_
             {"state": "completed", "last_event": "completed", "last_text": text, "last_event_at": time.monotonic()}
         )
         self.handler._schedule_local_stt_event("completed", text)
+        # Moonshine's streaming Stream keeps the completed line as its current
+        # state forever — there's no `reset()` / `start_new_line()` / `clear()`
+        # in the public API (only `start`/`stop`/`add_audio`/`update_transcription`
+        # in `moonshine_voice/transcriber.py`). Without rearming, the next
+        # utterance is fed into a stream that never emits another
+        # `started`/`partial`/`completed` event, silently dropping the turn (#279).
+        # Set a flag so the input pump rebuilds the stream before the next
+        # frame is pushed (see LocalSTTInputMixin.receive).
+        self.handler._pending_stream_rearm = True
 
     def on_error(self, event: Any) -> None:
         logger.warning("Local STT error: %s", getattr(event, "error", event))
+        # If the stream errored out we also need to rearm — the underlying
+        # C handle may be in a state where no further events will fire.
+        self.handler._pending_stream_rearm = True
 
     @staticmethod
     def _text_from_event(event: Any) -> str:
@@ -189,6 +201,13 @@ class LocalSTTInputMixin:
         self._local_stt_stream: Any = None
         self._local_stt_transcriber: Any = None
         self._local_stt_listener: Any = None
+        # Captured during _build_local_stt_stream() so _open_local_stt_stream()
+        # can rebuild the stream after a completion without reloading the model.
+        self._local_stt_update_interval: float = 0.0
+        self._local_stt_listener_base_cls: Any = None
+        # Set by _MoonshineListener.on_line_completed / on_error and consumed by
+        # receive() to tear down and recreate the streaming stream. See #279.
+        self._pending_stream_rearm: bool = False
         self._local_loop: asyncio.AbstractEventLoop | None = None
         self._last_completed_transcript: str = ""
         self._last_completed_at: float = 0.0
@@ -289,24 +308,70 @@ class LocalSTTInputMixin:
         transcriber = Transcriber(
             model_path=str(transcriber_path), model_arch=model_arch, update_interval=update_interval
         )
-        stream = transcriber.create_stream(update_interval=update_interval)
-        listener_cls = type(
-            "RobotComicMoonshineListener",
-            (_MoonshineListener, TranscriptEventListener),
-            {},
-        )
-        listener = listener_cls(self)
-        stream.add_listener(listener)
-        stream.start()
-
         self._local_stt_transcriber = transcriber
-        self._local_stt_stream = stream
-        self._local_stt_listener = listener
+        self._local_stt_update_interval = update_interval
+        self._local_stt_listener_base_cls = TranscriptEventListener
+        self._open_local_stt_stream()
 
         if config.MOONSHINE_HEARTBEAT and self._local_loop is not None:
             self._heartbeat_future = asyncio.run_coroutine_threadsafe(
                 self._moonshine_heartbeat_loop(), self._local_loop
             )
+
+    def _open_local_stt_stream(self) -> None:
+        """Create + start a fresh Moonshine stream on the current transcriber.
+
+        Called once from `_build_local_stt_stream` at startup and again from
+        `_rearm_local_stt_stream` after each completed utterance. Assumes
+        `_local_stt_transcriber`, `_local_stt_update_interval` and
+        `_local_stt_listener_base_cls` are already populated.
+        """
+        transcriber = self._local_stt_transcriber
+        base_cls = self._local_stt_listener_base_cls
+        stream = transcriber.create_stream(update_interval=self._local_stt_update_interval)
+        listener_cls = type(
+            "RobotComicMoonshineListener",
+            (_MoonshineListener, base_cls),
+            {},
+        )
+        listener = listener_cls(self)
+        stream.add_listener(listener)
+        stream.start()
+        self._local_stt_stream = stream
+        self._local_stt_listener = listener
+        self._pending_stream_rearm = False
+
+    def _rearm_local_stt_stream(self) -> None:
+        """Tear down the current Moonshine stream and start a fresh one.
+
+        Moonshine's streaming Stream has no public reset / clear / start-new-line
+        method (see `moonshine_voice/transcriber.py`: only start, stop, add_audio,
+        update_transcription, add/remove_listener, close). Once a line completes,
+        subsequent `add_audio` calls never emit another `started`/`partial`/
+        `completed` event — the conversation silently dies (#279). The only
+        recovery is to free the old stream handle and create a new one on the
+        same (expensive) transcriber.
+
+        Runs synchronously on the caller's thread. The transcriber is preserved
+        so the multi-hundred-millisecond ONNX model load is NOT repeated.
+        """
+        old_stream = self._local_stt_stream
+        self._local_stt_stream = None
+        self._local_stt_listener = None
+        if old_stream is not None:
+            for method_name in ("stop", "close"):
+                method = getattr(old_stream, method_name, None)
+                if callable(method):
+                    try:
+                        method()
+                    except Exception as e:
+                        logger.debug("Moonshine stream %s during rearm: %s", method_name, e)
+        if self._local_stt_transcriber is None:
+            # Shutdown raced with us; nothing to do.
+            self._pending_stream_rearm = False
+            return
+        self._open_local_stt_stream()
+        logger.debug("Moonshine stream rearmed after line completion")
 
     def _schedule_local_stt_event(self, kind: str, text: str) -> None:
         """Schedule a local STT event onto the handler event loop."""
@@ -523,6 +588,19 @@ class LocalSTTInputMixin:
 
     async def receive(self, frame: Tuple[int, NDArray[np.int16]]) -> None:
         """Feed microphone audio into the local STT stream."""
+        # Moonshine has no public reset; after each `LineCompleted` the stream
+        # silently stops emitting events, so the listener flags a rearm here
+        # (see #279). Rebuilding before the next frame keeps audio loss to one
+        # FastRTC chunk and avoids freeing a handle from inside a callback.
+        if self._pending_stream_rearm:
+            try:
+                await asyncio.to_thread(self._rearm_local_stt_stream)
+            except Exception as e:
+                logger.warning("Moonshine stream rearm failed: %s", e)
+                # Clear the flag so we don't tight-loop on the same failure;
+                # the next completion will retry.
+                self._pending_stream_rearm = False
+
         if self._local_stt_stream is None:
             return
 
