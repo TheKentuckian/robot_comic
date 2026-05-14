@@ -875,6 +875,12 @@ class Config:
     # profile, or 0/false to force-disable globally.
     GUARDRAIL_ENABLED = _env_flag("REACHY_MINI_GUARDRAIL_ENABLED", default=False)
 
+    # When True, EngagementMonitor.analyze() uses a one-shot LLM call
+    # (llama-server /completion) to score user discomfort instead of the
+    # keyword heuristic.  More accurate but incurs a local LLM round-trip.
+    # Falls back to heuristic on network/parse errors.  Default False.
+    GUARDRAIL_LLM_SCORING_ENABLED = _env_flag("REACHY_MINI_GUARDRAIL_LLM_SCORING", default=False)
+
     # Persist recent punchlines across sessions and inject a "don't repeat"
     # section into the system prompt.  Set to 0/false to disable.
     JOKE_HISTORY_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_ENABLED", default=True)
@@ -1086,6 +1092,7 @@ def refresh_runtime_config_from_env() -> None:
     config.WARMUP_WAV_ENABLED = _env_flag("ROBOT_COMIC_WARMUP_WAV_ENABLED", default=True)
     config.WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None
     config.WARMUP_BLIP_ENABLED = _env_flag("REACHY_MINI_WARMUP_BLIP_ENABLED", default=False)
+    config.GUARDRAIL_LLM_SCORING_ENABLED = _env_flag("REACHY_MINI_GUARDRAIL_LLM_SCORING", default=False)
     config.JOKE_HISTORY_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_ENABLED", default=True)
     config.JOKE_HISTORY_LLM_EXTRACT_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_LLM_EXTRACT_ENABLED", default=True)
     config.FORCE_DELIVERY_TAGS = _env_flag("REACHY_MINI_FORCE_DELIVERY_TAGS", default=False)
