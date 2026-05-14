@@ -228,6 +228,14 @@ class LocalStream:
         self._settings_initialized = False
         self._asyncio_loop = None
         self._active_backend_name = get_backend_choice()
+        # Dedup state for the role=user_partial INFO log. Many STT backends
+        # emit the same partial transcript repeatedly while waiting for the
+        # next token; we demote identical consecutive partials to DEBUG so
+        # the journal only shows INFO when the transcript text actually
+        # changes. Reset implicitly whenever any non-user_partial row is
+        # logged (e.g. the final role=user line that closes the utterance),
+        # so the first partial of the next utterance always re-INFOs.
+        self._last_logged_user_partial_text: Optional[str] = None
 
     # ---- Settings UI ----
     def _read_env_lines(self, env_path: Path) -> list[str]:
@@ -1193,6 +1201,30 @@ class LocalStream:
                 await self.handler.receive((input_sample_rate, audio_frame))
             await asyncio.sleep(0)  # avoid busy loop
 
+    def _log_handler_message(self, role: Any, content: str) -> None:
+        """Log one handler text message, deduping repeated user_partial lines.
+
+        STT backends emit ``role=user_partial`` once per intermediate
+        transcript update. While the recognizer is settling on a token, the
+        same partial text can repeat many times in a row — flooding the
+        journal with identical INFO lines. Demote consecutive duplicates to
+        DEBUG; emit INFO only when the partial text actually changes.
+
+        The tracker is reset whenever a non-``user_partial`` row is logged
+        (e.g. the final ``role=user`` line that closes the utterance), so
+        the first partial of the next utterance is always INFO regardless
+        of the prior utterance's last text.
+        """
+        rendered = content if len(content) < 500 else content[:500] + "…"
+        if role == "user_partial":
+            if rendered == self._last_logged_user_partial_text:
+                logger.debug("role=%s content=%s", role, rendered)
+                return
+            self._last_logged_user_partial_text = rendered
+        else:
+            self._last_logged_user_partial_text = None
+        logger.info("role=%s content=%s", role, rendered)
+
     async def play_loop(self) -> None:
         """Fetch outputs from the handler: log text and play audio frames."""
         from scipy.signal import resample
@@ -1205,11 +1237,7 @@ class LocalStream:
                 for msg in handler_output.args:
                     content = msg.get("content", "")
                     if isinstance(content, str):
-                        logger.info(
-                            "role=%s content=%s",
-                            msg.get("role"),
-                            content if len(content) < 500 else content[:500] + "…",
-                        )
+                        self._log_handler_message(msg.get("role"), content)
 
             elif isinstance(handler_output, tuple):
                 input_sample_rate, audio_data = handler_output

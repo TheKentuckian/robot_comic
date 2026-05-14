@@ -756,3 +756,102 @@ def test_local_stream_launch_waits_for_manual_openai_key_without_download(
     init_settings_ui.assert_called_once()
     media.start_recording.assert_not_called()
     media.start_playing.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# role=user_partial INFO-log dedup (#302)
+# ---------------------------------------------------------------------------
+
+
+def _new_stream_for_log_dedup() -> LocalStream:
+    """Construct a bare LocalStream suitable for poking ``_log_handler_message``."""
+    handler = MagicMock()
+    handler._clear_queue = None
+    robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
+    return LocalStream(handler, robot)
+
+
+def test_log_handler_message_dedups_identical_user_partials(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """5 identical user_partial rows -> 1 INFO + 4 DEBUG (issue #302)."""
+    stream = _new_stream_for_log_dedup()
+
+    with caplog.at_level("DEBUG", logger="robot_comic.console"):
+        for _ in range(5):
+            stream._log_handler_message("user_partial", "hello there")
+
+    partial_records = [
+        r for r in caplog.records if r.name == "robot_comic.console" and "user_partial" in r.getMessage()
+    ]
+    info_count = sum(1 for r in partial_records if r.levelname == "INFO")
+    debug_count = sum(1 for r in partial_records if r.levelname == "DEBUG")
+    assert info_count == 1, f"expected exactly 1 INFO, got {info_count}: {[r.getMessage() for r in partial_records]}"
+    assert debug_count == 4, f"expected exactly 4 DEBUG, got {debug_count}"
+
+
+def test_log_handler_message_emits_info_for_each_progressive_partial(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Each user_partial with new text re-INFOs (no dedup)."""
+    stream = _new_stream_for_log_dedup()
+    progressive = ["he", "hello", "hello th", "hello there", "hello there friend"]
+
+    with caplog.at_level("DEBUG", logger="robot_comic.console"):
+        for text in progressive:
+            stream._log_handler_message("user_partial", text)
+
+    partial_records = [
+        r for r in caplog.records if r.name == "robot_comic.console" and "user_partial" in r.getMessage()
+    ]
+    info_count = sum(1 for r in partial_records if r.levelname == "INFO")
+    debug_count = sum(1 for r in partial_records if r.levelname == "DEBUG")
+    assert info_count == 5
+    assert debug_count == 0
+
+
+def test_log_handler_message_resets_dedup_on_utterance_completion(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Final role=user row resets the tracker so the next utterance's first partial INFOs."""
+    stream = _new_stream_for_log_dedup()
+
+    with caplog.at_level("DEBUG", logger="robot_comic.console"):
+        # First utterance: identical partials collapse, then final user row closes it.
+        stream._log_handler_message("user_partial", "hello there")
+        stream._log_handler_message("user_partial", "hello there")
+        stream._log_handler_message("user", "hello there")
+        # New utterance: the *very first* partial happens to be the same text
+        # as the previous utterance's last partial — it must still INFO.
+        stream._log_handler_message("user_partial", "hello there")
+
+    msgs = [(r.levelname, r.getMessage()) for r in caplog.records if r.name == "robot_comic.console"]
+    partial_infos = [m for m in msgs if m[0] == "INFO" and "role=user_partial" in m[1]]
+    partial_debugs = [m for m in msgs if m[0] == "DEBUG" and "role=user_partial" in m[1]]
+    final_user = [m for m in msgs if m[0] == "INFO" and "role=user content" in m[1]]
+    assert len(partial_infos) == 2, f"first partial of each utterance should INFO, got: {partial_infos}"
+    assert len(partial_debugs) == 1, f"only the repeat within first utterance should DEBUG, got: {partial_debugs}"
+    assert len(final_user) == 1
+
+
+def test_log_handler_message_truncates_long_content_and_dedups_truncated(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Truncation must not break dedup: two long identical contents -> 1 INFO + 1 DEBUG."""
+    stream = _new_stream_for_log_dedup()
+    long_text = "a" * 2000
+
+    with caplog.at_level("DEBUG", logger="robot_comic.console"):
+        stream._log_handler_message("user_partial", long_text)
+        stream._log_handler_message("user_partial", long_text)
+
+    partial_records = [
+        r for r in caplog.records if r.name == "robot_comic.console" and "user_partial" in r.getMessage()
+    ]
+    info_count = sum(1 for r in partial_records if r.levelname == "INFO")
+    debug_count = sum(1 for r in partial_records if r.levelname == "DEBUG")
+    assert info_count == 1
+    assert debug_count == 1
+    # Sanity: the INFO line is truncated.
+    info_msg = next(r.getMessage() for r in partial_records if r.levelname == "INFO")
+    assert info_msg.endswith("…")
