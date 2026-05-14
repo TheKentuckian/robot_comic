@@ -1,0 +1,250 @@
+{
+  "thoughts and prayers": {
+    "literal_words": {
+      "thoughts": "mental activity; considering something",
+      "and": "conjunction joining two things",
+      "prayers": "requests addressed to a deity"
+    },
+    "euphemism_target": "doing nothing in response to a tragedy while appearing to care",
+    "dissection_suggestion": "Two things that require no action, combined into a phrase that substitutes for action. 'Thoughts' cost nothing. 'Prayers' cost nothing. Together they cost nothing twice."
+  },
+  "passed away": {
+    "literal_words": {
+      "passed": "moved past a point; transferred",
+      "away": "to a different place"
+    },
+    "euphemism_target": "died",
+    "dissection_suggestion": "Passed away. Where did they pass to? Nobody says. The word 'died' is four letters. 'Passed away' is ten letters — six extra letters of not saying the thing."
+  },
+  "human resources": {
+    "literal_words": {
+      "human": "of or relating to people",
+      "resources": "stocks of materials available for use"
+    },
+    "euphemism_target": "the department that hires and fires people, managing them as interchangeable assets",
+    "dissection_suggestion": "Resources. Like lumber. Like iron ore. They called the department 'Personnel' once — that at least had a person in the word. Human Resources upgraded the dehumanization while adding the word 'human' to disguise it."
+  },
+  "collateral damage": {
+    "literal_words": {
+      "collateral": "secondary; accompanying but subordinate",
+      "damage": "physical harm causing loss or injury"
+    },
+    "euphemism_target": "civilians killed in military operations",
+    "dissection_suggestion": "Collateral. Like a loan guarantee. When the bank says collateral they mean your house. When the military says it they mean your neighbor. The damage part is honest, at least."
+  },
+  "enhanced interrogation": {
+    "literal_words": {
+      "enhanced": "intensified; made greater",
+      "interrogation": "formal and systematic questioning"
+    },
+    "euphemism_target": "torture",
+    "dissection_suggestion": "Enhanced. Like enhanced coffee — it's just stronger coffee. Enhanced interrogation is just stronger questioning. Except the enhancement is pain, and the questioning is a man strapped to a board."
+  },
+  "downsizing": {
+    "literal_words": {
+      "down": "to a lower position",
+      "sizing": "adjusting to a particular size"
+    },
+    "euphemism_target": "firing large numbers of employees to cut costs",
+    "dissection_suggestion": "Downsizing. The company is getting smaller, sure. But notice what isn't in that word: people. Nobody is being let go. Nobody is losing health insurance. The company is just... adjusting its size."
+  },
+  "letting someone go": {
+    "literal_words": {
+      "letting": "allowing; permitting",
+      "someone": "an unspecified person",
+      "go": "to move away; to leave"
+    },
+    "euphemism_target": "firing an employee",
+    "dissection_suggestion": "Letting them go. As if you were holding them against their will and have now magnanimously released them. The person didn't want to go. You made them go. There's a word for that."
+  },
+  "passing gas": {
+    "literal_words": {
+      "passing": "causing to move through",
+      "gas": "matter in a gaseous state"
+    },
+    "euphemism_target": "farting",
+    "dissection_suggestion": "We cannot say the real word for this, apparently. We have to pass the gas somewhere, like a relay race. The word 'fart' is four letters and everybody knows exactly what it means. That's the problem."
+  },
+  "adult entertainment": {
+    "literal_words": {
+      "adult": "fully grown; mature",
+      "entertainment": "provision of enjoyment or amusement"
+    },
+    "euphemism_target": "pornography",
+    "dissection_suggestion": "Adult entertainment. As opposed to child entertainment — that's cartoons and birthday clowns. Adult entertainment sounds like jazz and cognac. It means something very specific that the phrase is working very hard not to say."
+  },
+  "correctional facility": {
+    "literal_words": {
+      "correctional": "intended to correct or rehabilitate",
+      "facility": "a place for a particular activity"
+    },
+    "euphemism_target": "prison",
+    "dissection_suggestion": "Correctional facility. Somebody decided 'prison' was too honest. So they renamed it after its stated purpose — correction — which it mostly doesn't achieve. The facility part makes it sound like a health club."
+  },
+  "pre-owned": {
+    "literal_words": {
+      "pre": "before",
+      "owned": "possessed as property"
+    },
+    "euphemism_target": "used; second-hand",
+    "dissection_suggestion": "Pre-owned. Before it was owned. It was owned. It has been owned. The prefix 'pre' makes the ownership sound like a phase that happened prior to ownership, not ownership itself."
+  },
+  "passed": {
+    "literal_words": {
+      "passed": "moved past a point; went by"
+    },
+    "euphemism_target": "died",
+    "dissection_suggestion": "Just 'passed.' Passed what? Passed where? The word hangs there, not wanting to finish its own sentence. The sentence is: died."
+  },
+  "between jobs": {
+    "literal_words": {
+      "between": "in the interval separating two things",
+      "jobs": "pieces of work; employment"
+    },
+    "euphemism_target": "unemployed",
+    "dissection_suggestion": "Between jobs. You're between them, like you're in the waiting room and the next job will call you any minute. Unemployed is a word that describes your situation. Between jobs is a word that describes your optimism."
+  },
+  "ethnic cleansing": {
+    "literal_words": {
+      "ethnic": "relating to a population subgroup with a common cultural tradition",
+      "cleansing": "making clean; removing dirt"
+    },
+    "euphemism_target": "genocide; systematic murder of a population based on ethnicity",
+    "dissection_suggestion": "Cleansing. They used the word for removing dirt from your face to describe removing people from the earth. The language borrowed from soap commercials to describe mass murder. That is not an accident."
+  },
+  "friendly fire": {
+    "literal_words": {
+      "friendly": "kind; on the same side",
+      "fire": "discharge of a weapon; gunfire"
+    },
+    "euphemism_target": "being shot or killed by your own side's forces",
+    "dissection_suggestion": "Friendly fire. The fire is friendly. The fire is not friendly. The fire is coming from people who were supposed to be on your side, which makes it worse, not friendlier. They put 'friendly' in front to make the shooting sound like an accident at a dinner party."
+  },
+  "sanitation engineer": {
+    "literal_words": {
+      "sanitation": "conditions relating to public health, especially sewage disposal",
+      "engineer": "a person who designs and builds engines, machines, or structures"
+    },
+    "euphemism_target": "garbage collector",
+    "dissection_suggestion": "Engineer. The word for the person who designs the bridge. Now also the word for the person who takes away what you threw in a bag this morning. The title got upgraded; the pay and the garbage stayed the same."
+  },
+  "substance abuse": {
+    "literal_words": {
+      "substance": "a particular kind of matter with uniform properties",
+      "abuse": "use in a wrong or harmful way"
+    },
+    "euphemism_target": "addiction to drugs or alcohol",
+    "dissection_suggestion": "Substance abuse. The substance is being abused. By whom? By the person who needs it. You abuse it, it wins. But calling it 'abuse' frames the relationship wrong — this is not power over a subordinate, this is a dependency."
+  },
+  "negative patient care outcome": {
+    "literal_words": {
+      "negative": "not desirable; bad",
+      "patient": "a person receiving medical treatment",
+      "care": "provision of what is needed for health",
+      "outcome": "the way a thing turns out; result"
+    },
+    "euphemism_target": "death of a patient; medical failure",
+    "dissection_suggestion": "Negative patient care outcome. The patient had an outcome that was negative. The care produced an outcome. The outcome was not positive. Nobody died. Nobody failed. Outcomes happened, and one of them was negative. The hospital keeps its dignity; the family buries a person."
+  },
+  "fiscally challenged": {
+    "literal_words": {
+      "fiscally": "relating to finances",
+      "challenged": "presented with difficulties"
+    },
+    "euphemism_target": "broke; poor",
+    "dissection_suggestion": "Challenged. They challenged-ified poverty. The word 'poor' has been around since before there was English. It has one syllable. It is precise. Fiscally challenged turns an economic condition into an obstacle course that the brave person will presumably overcome."
+  },
+  "comfort women": {
+    "literal_words": {
+      "comfort": "easing of grief; relief from distress",
+      "women": "adult female humans"
+    },
+    "euphemism_target": "women and girls enslaved for sexual services by military forces",
+    "dissection_suggestion": "Comfort. The word used for blankets and warm soup. Used here to describe coercion and slavery. The women provided comfort. Whose comfort? Not theirs."
+  },
+  "revenue enhancement": {
+    "literal_words": {
+      "revenue": "income generated, especially by a government",
+      "enhancement": "improvement; increasing"
+    },
+    "euphemism_target": "tax increase",
+    "dissection_suggestion": "Enhancement. Your revenue is being enhanced. The government is making your revenue better by taking more of it. Nobody voted for a revenue enhancement. You might vote against a tax increase. That's why they changed the words."
+  },
+  "strategic withdrawal": {
+    "literal_words": {
+      "strategic": "relating to long-term planning toward an advantage",
+      "withdrawal": "the action of taking away or removing"
+    },
+    "euphemism_target": "retreat; being defeated and forced to fall back",
+    "dissection_suggestion": "Strategic withdrawal. You lost ground and you're leaving. The word 'retreat' is honest — it means you went back. Strategic withdrawal implies you meant to. It implies there's a plan. Maybe there is. Maybe you just lost."
+  },
+  "make love": {
+    "literal_words": {
+      "make": "to form or produce by combining parts",
+      "love": "an intense feeling of deep affection"
+    },
+    "euphemism_target": "have sex",
+    "dissection_suggestion": "Make love. Manufacturing it, apparently, like furniture. Sex is a short word that means a specific thing. Love is a different word that means something else. Combining them doesn't make either one more dignified — it just makes both vague."
+  },
+  "pro-life": {
+    "literal_words": {
+      "pro": "in favor of",
+      "life": "the condition that distinguishes living organisms from dead matter"
+    },
+    "euphemism_target": "opposed to legal abortion; the political position that abortion should be illegal",
+    "dissection_suggestion": "Pro-life. Who is anti-life? Nobody claims to be anti-life. The phrase colonizes a positive word — life, the thing everybody agrees is good — and makes it mean one specific political position about one specific procedure. It's a language grab disguised as a moral stance."
+  },
+  "pro-choice": {
+    "literal_words": {
+      "pro": "in favor of",
+      "choice": "an act of selecting between two or more possibilities"
+    },
+    "euphemism_target": "in favor of legal abortion; the political position that abortion should remain legal",
+    "dissection_suggestion": "Pro-choice. Both sides grabbed a word nobody could be against. Life and choice — two words that test well. Neither side wanted to say what the argument was actually about. So both sides are officially for something nice, and the thing they're fighting over remains unnamed."
+  },
+  "job creator": {
+    "literal_words": {
+      "job": "a paid position of regular employment",
+      "creator": "a person who brings something into existence"
+    },
+    "euphemism_target": "wealthy individual or business owner; used to argue against taxing the wealthy",
+    "dissection_suggestion": "Job creators. The word for God is now also the word for a man with a factory. The phrase arrived around the time people started arguing about tax policy. It replaced 'the wealthy' or 'employers' because those words don't have a halo built in."
+  },
+  "departed": {
+    "literal_words": {
+      "departed": "having left; gone away"
+    },
+    "euphemism_target": "dead",
+    "dissection_suggestion": "The departed. They departed. For where? Nobody fills in that part. 'Dead' closes the sentence. 'Departed' leaves a door open that isn't there."
+  },
+  "motivated seller": {
+    "literal_words": {
+      "motivated": "having a reason to act; driven",
+      "seller": "a person who sells something"
+    },
+    "euphemism_target": "a homeowner forced to sell quickly due to financial distress, divorce, or other crisis",
+    "dissection_suggestion": "Motivated seller. Motivated by what? In real estate the motivation is usually a bank, or a marriage ending, or a job that disappeared. 'Motivated' sounds like ambition. It means desperation with the serial numbers filed off."
+  },
+  "at-risk youth": {
+    "literal_words": {
+      "at-risk": "in a situation where harm may occur",
+      "youth": "young people"
+    },
+    "euphemism_target": "poor children; children from disadvantaged backgrounds likely to face adverse outcomes",
+    "dissection_suggestion": "At-risk. The risk is already there; it's waiting for them. What's the risk? The phrase doesn't say. The risk is poverty. The risk is their neighborhood. 'At-risk youth' puts the category on the children without naming what they're at risk from, which would require naming who put the risk there."
+  },
+  "investment": {
+    "literal_words": {
+      "investment": "action of investing money for profit; putting resources toward a return"
+    },
+    "euphemism_target": "spending, especially on things the speaker wants to sound prudent about",
+    "dissection_suggestion": "Investment. Everything is an investment now. Your education is an investment. Your sneakers are an investment. Your vacation is an investment in your mental health. The word 'spending' has been almost completely replaced by a word that implies future returns. Most of these things do not return anything. They just cost money."
+  },
+  "wellness": {
+    "literal_words": {
+      "wellness": "the state of being in good health"
+    },
+    "euphemism_target": "health; sometimes used to market products or programs that substitute for actual medical care",
+    "dissection_suggestion": "Wellness. Health was already a word. Wellness is what you call health when you want to sell it. 'Health' implies a doctor. 'Wellness' implies a supplement. The industry around it is enormous. The word does a lot of work to make unproven things sound clinical."
+  }
+}
