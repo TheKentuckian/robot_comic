@@ -668,15 +668,13 @@ class Config:
     # local STT pipeline.  Default is False (gate disabled).
     WELCOME_GATE_ENABLED = _env_flag("REACHY_MINI_WELCOME_GATE_ENABLED", default=False)
 
-    # Echo-guard cooldown after assistant audio ends. Bumped via env var when
-    # speakers/mics have unusual latency. Used by emit() in both llama_base
-    # and elevenlabs_tts response handlers.
-    ECHO_COOLDOWN_MS = int(os.getenv(ECHO_COOLDOWN_MS_ENV, str(DEFAULT_ECHO_COOLDOWN_MS)))
-
-    # Kiosk-mode startup screen: when enabled, plays a short generic-voice
-    # intro + persona listing before the per-persona greeting begins.
-    STARTUP_SCREEN_ENABLED = _env_flag("REACHY_MINI_STARTUP_SCREEN", default=False)
-    STARTUP_SCREEN_PERSONA_ORDER = os.getenv("REACHY_MINI_STARTUP_SCREEN_PERSONA_ORDER", "")
+    # WebSocket Pi ↔ laptop channel (opt-in, default disabled).
+    # REACHY_MINI_WS_ENABLED: set to 1/true to enable the bidirectional channel.
+    # REACHY_MINI_WS_PORT: TCP port (server listens, client connects); default 8765.
+    # REACHY_MINI_WS_SERVER_HOST: hostname/IP of the laptop (Pi-side client only).
+    WS_ENABLED = _env_flag("REACHY_MINI_WS_ENABLED", default=False)
+    WS_PORT = int(os.getenv("REACHY_MINI_WS_PORT", "8765"))
+    WS_SERVER_HOST = os.getenv("REACHY_MINI_WS_SERVER_HOST", "localhost")
 
     logger.debug(
         "Backend provider: %s, Model: %s, HF mode: %s, HF session URL set: %s, HF direct URL set: %s, HF_HOME: %s, Vision Model: %s, Local STT: %s/%s/%s response=%s cache=%s",
@@ -829,9 +827,9 @@ def refresh_runtime_config_from_env() -> None:
     config.JOKE_HISTORY_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_ENABLED", default=True)
     config.FORCE_DELIVERY_TAGS = _env_flag("REACHY_MINI_FORCE_DELIVERY_TAGS", default=False)
     config.WELCOME_GATE_ENABLED = _env_flag("REACHY_MINI_WELCOME_GATE_ENABLED", default=False)
-    config.ECHO_COOLDOWN_MS = int(os.getenv(ECHO_COOLDOWN_MS_ENV, str(DEFAULT_ECHO_COOLDOWN_MS)))
-    config.STARTUP_SCREEN_ENABLED = _env_flag("REACHY_MINI_STARTUP_SCREEN", default=False)
-    config.STARTUP_SCREEN_PERSONA_ORDER = os.getenv("REACHY_MINI_STARTUP_SCREEN_PERSONA_ORDER", "")
+    config.WS_ENABLED = _env_flag("REACHY_MINI_WS_ENABLED", default=False)
+    config.WS_PORT = int(os.getenv("REACHY_MINI_WS_PORT", "8765"))
+    config.WS_SERVER_HOST = os.getenv("REACHY_MINI_WS_SERVER_HOST", "localhost")
 
 
 def get_backend_choice(model_name: str | None = None) -> str:
