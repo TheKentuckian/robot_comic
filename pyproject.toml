@@ -28,6 +28,9 @@ dependencies = [
     #Gemini
     "google-genai>=1.0.0",
 
+    #WebSocket Pi ↔ laptop channel
+    "websockets>=13.0",
+
     #OpenTelemetry (always installed; gated by ROBOT_INSTRUMENTATION at runtime)
     "opentelemetry-api>=1.24.0",
     "opentelemetry-sdk>=1.24.0",
