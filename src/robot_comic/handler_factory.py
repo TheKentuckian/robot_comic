@@ -18,12 +18,12 @@ Supported (input, output) → handler-class matrix
 Unsupported combinations raise ``NotImplementedError`` with a message that names
 the requested pair and points to docs/audio-backends.md.
 
-Out-of-scope (v2.5 work)
-------------------------
-Arbitrary cross-combinations (e.g. gemini_live_input + chatterbox) require a
-proper Mixin-based handler decomposition.  That refactor is tracked separately
-and is intentionally not attempted here.  This factory is strictly a routing
-layer over the *existing* handler classes.
+Out-of-scope
+------------
+Arbitrary cross-combinations beyond the supported set would require a proper
+Mixin-based handler decomposition.  This factory is strictly a routing layer
+over the *existing* handler classes; cross-combo work is intentionally not
+attempted here.
 """
 
 from __future__ import annotations
@@ -221,6 +221,6 @@ class HandlerFactory:
             f"{AUDIO_INPUT_BACKEND_ENV}={input_backend!r} ({in_label}) + "
             f"{AUDIO_OUTPUT_BACKEND_ENV}={output_backend!r} ({out_label}).\n"
             f"{_SUPPORTED_MATRIX_DOC}\n"
-            "Cross-combination handlers (e.g. gemini_live_input + chatterbox) are "
-            "planned as v2.5 work and require the mixin-based handler refactor."
+            "Arbitrary cross-combinations are not supported by the current "
+            "handler classes; see docs/audio-backends.md for the supported set."
         )
