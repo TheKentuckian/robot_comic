@@ -24,9 +24,18 @@ def _load_crowd_work():
     return mod.CrowdWork
 
 
-def make_deps() -> MagicMock:
-    """Return a minimal mock ToolDependencies."""
-    return MagicMock()
+def make_deps(recent_user_transcripts: list[str] | None = None) -> MagicMock:
+    """Return a minimal mock ToolDependencies.
+
+    Seeds ``recent_user_transcripts`` with the names used by existing tests so
+    the #287 hallucination guard on ``crowd_work update`` does not reject them.
+    Tests that exercise the guard pass their own list (typically empty).
+    """
+    deps = MagicMock()
+    if recent_user_transcripts is None:
+        recent_user_transcripts = ["I'm Tony", "Bob here", "Tony", "Bob"]
+    deps.recent_user_transcripts = recent_user_transcripts
+    return deps
 
 
 @pytest.fixture
@@ -284,3 +293,61 @@ async def test_load_does_not_resume_old_session(tmp_path, CrowdWork):
     os.utime(session_file, (old_time, old_time))
     cw = CrowdWork(session_dir=session_dir)
     assert cw._state["name"] is None
+
+
+# --- name-hallucination guard (#287) ---
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_name_not_in_recent_transcripts(crowd_work, caplog):
+    """A name never spoken by the user must NOT be stored on the session."""
+    import logging
+
+    deps = make_deps(recent_user_transcripts=["Hello", "What's up"])
+    with caplog.at_level(logging.WARNING):
+        result = await crowd_work(deps, action="update", name="John")
+    assert crowd_work._state["name"] is None
+    assert result["stored"]["name"] is None
+    assert result.get("name_rejected") == "John"
+    assert result.get("needs_name") is True
+    assert any("rejected name" in rec.message and "John" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_update_accepts_name_present_in_recent_transcripts(crowd_work):
+    """A name the user actually spoke is persisted as before."""
+    deps = make_deps(recent_user_transcripts=["My name is Tony"])
+    result = await crowd_work(deps, action="update", name="Tony")
+    assert crowd_work._state["name"] == "Tony"
+    assert result["stored"]["name"] == "Tony"
+    assert "name_rejected" not in result
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_name_but_still_stores_other_fields(crowd_work):
+    """Even when ``name`` is rejected, other fields on the same update still apply."""
+    deps = make_deps(recent_user_transcripts=["Hello"])
+    result = await crowd_work(deps, action="update", name="John", job="engineer", hometown="Pittsburgh")
+    assert crowd_work._state["name"] is None
+    assert crowd_work._state["job"] == "engineer"
+    assert crowd_work._state["hometown"] == "Pittsburgh"
+    assert result.get("name_rejected") == "John"
+    assert result["stored"]["job"] == "engineer"
+
+
+@pytest.mark.asyncio
+async def test_update_word_boundary_rejects_substring(crowd_work):
+    """User said 'Antonio', LLM passed 'Anton' — rejected (no word boundary)."""
+    deps = make_deps(recent_user_transcripts=["I'm Antonio from Rome"])
+    result = await crowd_work(deps, action="update", name="Anton")
+    assert crowd_work._state["name"] is None
+    assert result.get("name_rejected") == "Anton"
+
+
+@pytest.mark.asyncio
+async def test_update_case_insensitive_match(crowd_work):
+    """User said 'tony' (lowercase), LLM passed 'Tony' — accepted."""
+    deps = make_deps(recent_user_transcripts=["tony here"])
+    result = await crowd_work(deps, action="update", name="Tony")
+    assert crowd_work._state["name"] == "Tony"
+    assert "name_rejected" not in result

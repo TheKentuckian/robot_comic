@@ -55,6 +55,7 @@ from robot_comic.tools.core_tools import ToolDependencies, dispatch_tool_call, g
 from robot_comic.elevenlabs_voices import resolve_voice_id_by_name
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.conversation_handler import ConversationHandler
+from robot_comic.tools.name_validation import record_user_transcript
 from robot_comic.chatterbox_tag_translator import strip_gemini_tags
 
 
@@ -429,6 +430,8 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         self._response_audio_bytes = 0
         self._response_start_ts = 0.0
         self._conversation_history.append({"role": "user", "parts": [{"text": transcript}]})
+        # Record for tool-side name-validation guard (#287).
+        record_user_transcript(self.deps.recent_user_transcripts, transcript)
         trim_history_in_place(self._conversation_history, role_key="role")
 
         # Capture the outer turn span NOW — the mixin can overwrite self._turn_span

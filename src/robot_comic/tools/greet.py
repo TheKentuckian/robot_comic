@@ -17,6 +17,7 @@ from robot_comic import config as _config
 from robot_comic.tools.move_head import MoveHead
 from robot_comic.tools.core_tools import Tool, ToolDependencies
 from robot_comic.tools.crowd_work import resolve_session_dir
+from robot_comic.tools.name_validation import validate_name_or_warn
 
 
 logger = logging.getLogger(__name__)
@@ -325,6 +326,25 @@ class Greet(Tool):
                         "The person has not spoken their name yet. "
                         "Greet them and ask for their name first — do NOT invent or guess a name."
                     )
+                }
+            # Hallucination guard (#287): the LLM occasionally invents a name
+            # the user never spoke.  Reject any name that does not appear
+            # (word-boundary, case-insensitive) in the recent user transcripts
+            # and tell the LLM to ask for the name instead of persisting a
+            # fabricated one.
+            if not validate_name_or_warn(
+                name,
+                deps.recent_user_transcripts,
+                tool_name="greet.identify",
+            ):
+                return {
+                    "returning": False,
+                    "name_received": None,
+                    "needs_name": True,
+                    "note": (
+                        "The provided name was not heard in recent user speech. "
+                        "Ask the visitor for their name before calling identify again."
+                    ),
                 }
             return await self._identify(deps, name)
 

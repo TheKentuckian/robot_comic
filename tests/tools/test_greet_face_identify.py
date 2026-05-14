@@ -198,6 +198,9 @@ async def test_identify_disabled_name_path_returns_not_found(Greet, greet_mod, t
     session_dir.mkdir()
 
     deps = _make_deps(face_recognition_enabled=False, face_embedder=None, face_db=None)
+    # Seed the #287 name guard: the LLM is only allowed to pass a name the
+    # user actually spoke.
+    deps.recent_user_transcripts = ["Hi I'm Tony"]
 
     with _patch_config(greet_mod, enabled=False):
         result = await Greet(session_dir=session_dir)(deps, action="identify", name="Tony")
@@ -217,6 +220,9 @@ async def test_identify_enabled_but_deps_none_falls_back_to_name(Greet, greet_mo
     session_dir.mkdir()
 
     deps = _make_deps(face_recognition_enabled=True, face_embedder=None, face_db=None)
+    # Seed the #287 name guard: the LLM is only allowed to pass a name the
+    # user actually spoke.
+    deps.recent_user_transcripts = ["My name is Bob"]
 
     with _patch_config(greet_mod, enabled=True):
         # face_embedder is None → face path returns None → name-based fallback

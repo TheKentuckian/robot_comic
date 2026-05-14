@@ -52,6 +52,7 @@ from robot_comic.tools.core_tools import (
 )
 from robot_comic.conversation_handler import ConversationHandler
 from robot_comic.camera_frame_encoding import encode_bgr_frame_as_jpeg
+from robot_comic.tools.name_validation import record_user_transcript
 from robot_comic.tools.background_tool_manager import (
     ToolCallRoutine,
     ToolNotification,
@@ -521,6 +522,9 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
             return
 
         if role == "user":
+            # Record for tool-side name-validation guard (#287).
+            record_user_transcript(self.deps.recent_user_transcripts, transcript)
+
             if self._turn_span is not None:
                 try:
                     self._turn_span.set_attribute("turn.excerpt", transcript[:200])
