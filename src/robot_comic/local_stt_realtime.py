@@ -10,7 +10,6 @@ from pathlib import Path
 from concurrent.futures import Future as ConcurrentFuture
 
 import numpy as np
-from fastrtc import AdditionalOutputs, audio_to_float32
 from numpy.typing import NDArray
 from scipy.signal import resample
 from opentelemetry import trace
@@ -384,6 +383,8 @@ class LocalSTTInputMixin:
         """Handle local STT lifecycle events inside the asyncio loop."""
         import uuid as _uuid
 
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
+
         transcript = (text or "").strip()
         if kind == "started":
             self._mark_activity("local_stt_speech_started")  # type: ignore[attr-defined]
@@ -588,6 +589,8 @@ class LocalSTTInputMixin:
 
     async def receive(self, frame: Tuple[int, NDArray[np.int16]]) -> None:
         """Feed microphone audio into the local STT stream."""
+        from fastrtc import audio_to_float32  # deferred: fastrtc pulls gradio at boot
+
         # Moonshine has no public reset; after each `LineCompleted` the stream
         # silently stops emitting events, so the listener flags a rearm here
         # (see #279). Rebuilding before the next frame keeps audio loss to one

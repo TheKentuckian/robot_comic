@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 import numpy as np
-from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item
+from fastrtc import AsyncStreamHandler
 
 
 if TYPE_CHECKING:
@@ -276,6 +276,8 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def emit(self) -> Any:
         """Yield the next audio frame or status message from the output queue."""
+        from fastrtc import wait_for_item  # deferred: fastrtc pulls gradio at boot
+
         return await wait_for_item(self.output_queue)
 
     async def apply_personality(self, profile: str | None) -> str:
@@ -310,6 +312,8 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _dispatch_completed_transcript(self, transcript: str) -> None:
         """Gemini-native response cycle: LLM → tools → TTS → audio frames."""
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
+
         self._conversation_history.append({"role": "user", "parts": [{"text": transcript}]})
         # Trim BEFORE building the next request so long sessions don't blow the
         # model's context window or rack up token cost.
@@ -413,6 +417,7 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _run_llm_with_tools(self) -> str:
         """Call Gemini Flash with conversation history, handling tool round-trips."""
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
         from google.genai import types  # deferred: google.genai.types costs ~5.5 s at boot
 
         assert self._client is not None, "Client not initialised"

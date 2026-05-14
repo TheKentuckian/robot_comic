@@ -18,8 +18,6 @@ import logging
 from typing import Any, List, Optional, cast
 from pathlib import Path
 
-from fastrtc import AdditionalOutputs, audio_to_float32
-
 from reachy_mini import ReachyMini
 from reachy_mini.media.media_manager import MediaBackend
 from robot_comic.config import (
@@ -1195,6 +1193,7 @@ class LocalStream:
 
     async def play_loop(self) -> None:
         """Fetch outputs from the handler: log text and play audio frames."""
+        from fastrtc import AdditionalOutputs, audio_to_float32  # deferred: fastrtc pulls gradio at boot
         from scipy.signal import resample
 
         assert self._robot is not None and self.handler is not None

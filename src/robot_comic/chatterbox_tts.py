@@ -13,7 +13,6 @@ import logging
 from typing import Any
 
 import numpy as np
-from fastrtc import AdditionalOutputs
 
 from robot_comic.config import (
     CHATTERBOX_OUTPUT,
@@ -339,6 +338,8 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
         """Translate response_text to TTS segments and enqueue PCM frames."""
         if not response_text:
             return
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
+
         from robot_comic import telemetry
 
         persona = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None) or "default"

@@ -15,8 +15,6 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
-from fastrtc import AdditionalOutputs
-
 
 if TYPE_CHECKING:
     from google import genai
@@ -145,6 +143,8 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
     ) -> None:
         if not response_text:
             return
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
+
         base_instruction = load_profile_tts_instruction()
         sentences = split_sentences(response_text) or [response_text]
         any_audio = False

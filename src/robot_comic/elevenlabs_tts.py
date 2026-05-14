@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 import numpy as np
-from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item
+from fastrtc import AsyncStreamHandler
 from opentelemetry import trace as _otel_trace
 from opentelemetry import context as _otel_context
 
@@ -339,6 +339,8 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def emit(self) -> Any:
         """Yield the next audio frame or status message from the output queue."""
+        from fastrtc import wait_for_item  # deferred: fastrtc pulls gradio at boot
+
         item = await wait_for_item(self.output_queue)
         if isinstance(item, tuple):
             # Update the speaking deadline using total bytes enqueued so far.
@@ -425,6 +427,8 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             self._is_responding = False
 
     async def _dispatch_completed_transcript_impl(self, transcript: str) -> None:
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
+
         # Reset byte-count echo-guard accumulators for this new response turn.
         self._response_audio_bytes = 0
         self._response_start_ts = 0.0
@@ -571,6 +575,7 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _run_llm_with_tools(self) -> str:
         """Call Gemini Flash with conversation history, handling tool round-trips."""
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
         from google.genai import types  # deferred: google.genai.types costs ~5.5 s at boot
 
         assert self._client is not None, "Client not initialised"
