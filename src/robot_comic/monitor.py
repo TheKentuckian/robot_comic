@@ -8,6 +8,11 @@ Usage:
     robot-comic-monitor                          # tail reachy-app-autostart unit
     robot-comic-monitor --unit my-service        # different systemd unit
     robot-comic-monitor --file /path/to/app.log  # tail a file instead
+
+Keyboard shortcuts (while the monitor is running):
+    S     Open the persona-switcher overlay (choose a persona with 1-N,
+          confirm with Enter, cancel with Esc).
+    Ctrl-C  Quit.
 """
 
 import sys
@@ -20,13 +25,14 @@ from typing import Any, Iterator, Optional
 from datetime import datetime
 from collections import defaultdict
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 try:
     from rich import box
     from rich.live import Live
     from rich.text import Text
+    from rich.align import Align
     from rich.panel import Panel
     from rich.table import Table
     from rich.console import Console
@@ -355,6 +361,141 @@ def _parse_span(line: str) -> Optional[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Persona-switcher overlay
+# ---------------------------------------------------------------------------
+
+_ADMIN_BASE_URL = "http://localhost:8000"
+
+
+def _fetch_personas(base_url: str) -> tuple[list[str], str]:
+    """Return ``(choices, current)`` from the admin API.
+
+    Fetches ``GET <base_url>/personalities``.  On error returns empty lists so
+    the caller can display a meaningful message rather than crashing.
+    """
+    try:
+        url = f"{base_url}/personalities"
+        with urlopen(url, timeout=3.0) as resp:  # noqa: S310
+            data: dict[str, Any] = json.loads(resp.read().decode())
+        choices: list[str] = list(data.get("choices", []))
+        current: str = str(data.get("current", ""))
+        return choices, current
+    except Exception:
+        return [], ""
+
+
+def _apply_persona(base_url: str, name: str) -> tuple[bool, str]:
+    """POST ``{"name": <name>}`` to ``<base_url>/personalities/apply``.
+
+    Returns ``(ok, message)`` where *message* is a short human-readable string.
+    """
+    try:
+        url = f"{base_url}/personalities/apply"
+        payload = json.dumps({"name": name}).encode()
+        req = Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")  # noqa: S310
+        with urlopen(req, timeout=10.0) as resp:  # noqa: S310
+            data = json.loads(resp.read().decode())
+        if data.get("ok"):
+            return True, f"Switched to {name!r}"
+        return False, str(data.get("error", "unknown error"))
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _build_picker_panel(choices: list[str], current: str, selected_idx: Optional[int], status_line: str = "") -> Panel:
+    """Build the Rich ``Panel`` for the persona-switcher overlay."""
+    t = Table(box=None, show_header=False, show_edge=False, pad_edge=False)
+    t.add_column("row", no_wrap=True)
+
+    for i, name in enumerate(choices):
+        number = i + 1
+        is_active = name == current
+        is_selected = selected_idx is not None and i == selected_idx
+
+        if is_selected:
+            prefix = Text(f"  {number}. ", style="bold cyan")
+        elif is_active:
+            prefix = Text(f"▶ {number}. ", style="bold green")
+        else:
+            prefix = Text(f"  {number}. ", style="dim")
+
+        label = Text(name)
+        if is_active:
+            label.stylize("bold green")
+            label.append("  (active)", style="dim green")
+        elif is_selected:
+            label.stylize("bold cyan")
+
+        row = Text()
+        row.append_text(prefix)
+        row.append_text(label)
+        t.add_row(row)
+
+    n = len(choices)
+    hint_line = Text(f"[1-{n}] choose  ·  [Enter] confirm  ·  [Esc] cancel", style="dim")
+    if status_line:
+        hint_line = Text(status_line, style="yellow")
+
+    body = Align(t, align="left")
+    return Panel(body, title="[bold]Switch persona[/bold]", subtitle=hint_line, border_style="cyan")
+
+
+class PersonaSwitcher:
+    """Overlay state machine for the persona picker.
+
+    Feed key events one at a time via :meth:`handle_key`.  Check
+    :attr:`done` to know when to exit overlay mode.  After ``done`` is
+    ``True``, read :attr:`apply_name` — it is ``None`` if the user
+    cancelled, or the persona name to switch to if the user confirmed.
+
+    Example usage in the render loop::
+
+        switcher = PersonaSwitcher(choices, current)
+        while not switcher.done:
+            key = inp.poll_key(0.1)
+            if key:
+                switcher.handle_key(key)
+            live.update(switcher.render())
+    """
+
+    def __init__(self, choices: list[str], current: str) -> None:
+        """Initialise with the available persona names and the active one."""
+        self.choices = choices
+        self.current = current
+        self.selected_idx: Optional[int] = None
+        self.done: bool = False
+        self.apply_name: Optional[str] = None
+        self._status: str = ""
+
+    def handle_key(self, key: str) -> None:
+        """Process a single normalised key string from ``MonitorInput.poll_key``."""
+        if key == "<esc>":
+            self.done = True
+            self.apply_name = None
+            return
+        if key == "<interrupt>":
+            self.done = True
+            self.apply_name = None
+            return
+        if key == "<enter>":
+            if self.selected_idx is not None and 0 <= self.selected_idx < len(self.choices):
+                self.apply_name = self.choices[self.selected_idx]
+            self.done = True
+            return
+        # Digit 1-9 selects a row (0-based index = digit - 1)
+        if key.isdigit():
+            idx = int(key) - 1
+            if 0 <= idx < len(self.choices):
+                self.selected_idx = idx
+            # Out-of-range digits are silently ignored.
+            return
+
+    def render(self, status_line: str = "") -> Panel:
+        """Render the picker overlay as a Rich ``Panel``."""
+        return _build_picker_panel(self.choices, self.current, self.selected_idx, status_line or self._status)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -460,26 +601,93 @@ def main() -> None:
 
     stop_event = threading.Event()
 
+    # Overlay mode flag — set/cleared by _auto_refresh; the main thread only
+    # reads it to suppress its own live.update() calls while the overlay is up.
+    _overlay_active: list[bool] = [False]
+
     def _auto_refresh() -> None:
-        while not stop_event.is_set():
-            now = time.time()
-            # Re-check service status every ~3 s.
-            if watch_unit is not None:
-                if now - _svc_last_check[0] >= 3.0:
-                    _svc_active[0] = _service_active(watch_unit)
-                    _svc_last_check[0] = now
-            # Poll battery status every ~30 s.
-            if now - _battery_last_check[0] >= 30.0:
-                try:
-                    url = f"{_battery_base_url}/api/battery"
-                    with urlopen(url, timeout=2.0) as resp:  # noqa: S310
-                        raw = resp.read().decode()
-                    _battery[0] = json.loads(raw)
-                except (URLError, OSError, ValueError):
-                    pass  # no admin server running — silently skip
-                _battery_last_check[0] = now
-            live.update(_render())
-            stop_event.wait(0.15)  # ~6 fps for smooth spinner
+        """Background thread: refresh render + handle keyboard input."""
+        from robot_comic.monitor_input import MonitorInput
+
+        inp = MonitorInput()
+        try:
+            while not stop_event.is_set():
+                now = time.time()
+                # Re-check service status every ~3 s.
+                if watch_unit is not None:
+                    if now - _svc_last_check[0] >= 3.0:
+                        _svc_active[0] = _service_active(watch_unit)
+                        _svc_last_check[0] = now
+                # Poll battery status every ~30 s.
+                if now - _battery_last_check[0] >= 30.0:
+                    try:
+                        url = f"{_battery_base_url}/api/battery"
+                        with urlopen(url, timeout=2.0) as resp:  # noqa: S310
+                            raw_battery = resp.read().decode()
+                        _battery[0] = json.loads(raw_battery)
+                    except (URLError, OSError, ValueError):
+                        pass  # no admin server running — silently skip
+                    _battery_last_check[0] = now
+
+                # Poll for a keystroke (short timeout to maintain ~6 fps render).
+                key = inp.poll_key(timeout=0.1)
+
+                if key == "s":
+                    # Enter persona-switcher overlay.
+                    _overlay_active[0] = True
+                    _run_persona_overlay(live, inp, stop_event)
+                    _overlay_active[0] = False
+                elif key == "<interrupt>":
+                    stop_event.set()
+                    break
+
+                if not _overlay_active[0]:
+                    live.update(_render())
+        finally:
+            inp.close()
+
+    def _run_persona_overlay(
+        live: Live,
+        inp: Any,
+        stop_ev: threading.Event,
+    ) -> None:
+        """Run the persona-switcher overlay until the user confirms or cancels."""
+        choices, current = _fetch_personas(_battery_base_url)
+        if not choices:
+            # Show a brief error and return immediately.
+            err_panel = Panel(
+                Text("Could not reach admin API — is the app running?", style="red"),
+                title="[bold]Switch persona[/bold]",
+                border_style="red",
+            )
+            live.update(err_panel)
+            time.sleep(2.0)
+            return
+
+        switcher = PersonaSwitcher(choices, current)
+
+        while not switcher.done and not stop_ev.is_set():
+            live.update(switcher.render())
+            key = inp.poll_key(timeout=0.1)
+            if key is not None:
+                switcher.handle_key(key)
+
+        if switcher.apply_name is None or stop_ev.is_set():
+            # Cancelled — just return.
+            return
+
+        # Show "Switching…" while the POST is in-flight.
+        live.update(switcher.render(status_line=f"Switching to {switcher.apply_name!r}…"))
+        ok, msg = _apply_persona(_battery_base_url, switcher.apply_name)
+
+        result_style = "green" if ok else "red"
+        result_panel = Panel(
+            Text(msg, style=result_style),
+            title="[bold]Switch persona[/bold]",
+            border_style=result_style,
+        )
+        live.update(result_panel)
+        time.sleep(1.5)
 
     try:
         with Live(_render(), console=console, refresh_per_second=4, screen=True) as live:
