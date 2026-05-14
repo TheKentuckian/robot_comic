@@ -95,7 +95,11 @@ class TestDetectPlayer:
             from robot_comic.warmup_audio import _detect_player
 
             result = _detect_player()
-            assert result == ["/usr/bin/aplay", "-q"]
+            # aplay is routed through `plug:reachymini_audio_sink` so the dmix
+            # mixer can mediate access to /dev/snd/pcmC0D0p while the daemon
+            # also has it mmap'd. See _detect_player() in warmup_audio.py for
+            # the full rationale.
+            assert result == ["/usr/bin/aplay", "-q", "-D", "plug:reachymini_audio_sink"]
 
     def test_linux_no_player_returns_none(self) -> None:
         with patch.object(sys, "platform", "linux"), patch("shutil.which", return_value=None):
