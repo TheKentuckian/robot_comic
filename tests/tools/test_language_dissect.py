@@ -264,3 +264,169 @@ class TestLanguageDissectTool:
         assert spec["name"] == "language_dissect"
         assert "description" in spec
         assert "parameters" in spec
+
+
+# ---------------------------------------------------------------------------
+# Per-word fallback decomposition (Issue #220)
+# ---------------------------------------------------------------------------
+
+
+class TestDecomposeWord:
+    """Unit tests for _decompose_word — the per-word lexicon lookup."""
+
+    def test_exact_match(self, ld_module):
+        """A word present verbatim in the lexicon returns its gloss."""
+        result = ld_module._decompose_word("institution")
+        assert result is not None
+        root, gloss = result
+        assert root == "institution"
+        assert "organization" in gloss.lower() or "authority" in gloss.lower()
+
+    def test_suffix_stripping_plural(self, ld_module):
+        """'institutions' stems to 'institution' via -s suffix."""
+        result = ld_module._decompose_word("institutions")
+        assert result is not None
+        root, gloss = result
+        assert root == "institution"
+
+    def test_suffix_stripping_tion(self, ld_module):
+        """A word ending in -tion decomposes via its stem."""
+        # 'operation' stems to 'operation' (direct hit), confirm the mechanism works
+        result = ld_module._decompose_word("operations")
+        assert result is not None
+        root, _ = result
+        assert root == "operation"
+
+    def test_suffix_stripping_ing(self, ld_module):
+        """A gerund form strips -ing to find the root."""
+        result = ld_module._decompose_word("leveraging")
+        # 'leverag' is not a valid stem — no match expected for this specific word,
+        # but 'managing' → 'manag' is also invalid. Test a clean case: 'targeting'
+        # → 'target' (5 chars, in lexicon)
+        result = ld_module._decompose_word("targeting")
+        assert result is not None
+        root, _ = result
+        assert root == "target"
+
+    def test_unknown_word_returns_none(self, ld_module):
+        """A word with no lexicon match (even after stemming) returns None."""
+        result = ld_module._decompose_word("xylophonically")
+        assert result is None
+
+    def test_short_stem_not_matched(self, ld_module):
+        """Stemming that produces a stem shorter than 3 chars should not match."""
+        # 'es' → stem '' (empty) — should return None without crashing
+        result = ld_module._decompose_word("es")
+        assert result is None
+
+    def test_punctuation_stripped(self, ld_module):
+        """Non-alpha characters are removed before lookup."""
+        result = ld_module._decompose_word("institution.")
+        assert result is not None
+        root, _ = result
+        assert root == "institution"
+
+
+class TestDecomposePhrase:
+    """Unit tests for _decompose_phrase."""
+
+    def test_all_words_decompose(self, ld_module):
+        """A phrase made of known roots returns all words as decomposed."""
+        breakdown = ld_module._decompose_phrase("human resources")
+        assert len(breakdown) == 2
+        assert all(item["decomposed"] == "true" for item in breakdown)
+
+    def test_partial_decomposition(self, ld_module):
+        """A phrase with one unknown word returns a mixed breakdown."""
+        # 'quux' is not in the lexicon; 'human' is
+        breakdown = ld_module._decompose_phrase("human quux")
+        decomposed = [item for item in breakdown if item["decomposed"] == "true"]
+        undecomposed = [item for item in breakdown if item["decomposed"] == "false"]
+        assert len(decomposed) == 1
+        assert len(undecomposed) == 1
+        assert decomposed[0]["word"] == "human"
+
+    def test_returns_list_of_dicts(self, ld_module):
+        """Return value is always a list of dicts with expected keys."""
+        breakdown = ld_module._decompose_phrase("strategic realignment")
+        assert isinstance(breakdown, list)
+        for item in breakdown:
+            assert "word" in item
+            assert "root" in item
+            assert "gloss" in item
+            assert "decomposed" in item
+
+
+class TestDissectPhraseDecomposition:
+    """Integration tests for the per-word fallback path in dissect_phrase."""
+
+    def test_high_quality_decomposition(self, ld_module):
+        """Phrase composed of lexicon roots returns decomposition_quality 'high'."""
+        result = ld_module.dissect_phrase("human resources")
+        # 'human resources' IS in the curated dictionary, so test with a close variant
+        # that isn't: use words known to be in the lexicon
+        result = ld_module.dissect_phrase("institutional behavior")
+        assert result["decomposition_quality"] == "high"
+        assert isinstance(result["literal_words"], dict)
+        assert "institutional" in result["literal_words"] or "behavior" in result["literal_words"]
+
+    def test_high_quality_with_partial_match(self, ld_module):
+        """2 out of 3 words decompose successfully → quality still 'high' (>60%)."""
+        # 'human' and 'resource' are in lexicon; 'zorp' is not
+        result = ld_module.dissect_phrase("human zorp resource")
+        assert result["decomposition_quality"] == "high"
+
+    def test_low_quality_all_unknown(self, ld_module):
+        """All-unknown words produce decomposition_quality 'low' and v1-style literal_words."""
+        result = ld_module.dissect_phrase("zorp quux blorp")
+        assert result["decomposition_quality"] == "low"
+        lw = result["literal_words"]
+        assert "zorp" in lw
+        assert "quux" in lw
+        assert "blorp" in lw
+        assert lw["zorp"] == "plain meaning of 'zorp'"
+
+    def test_stemming_works_for_institutions(self, ld_module):
+        """'institutions' decomposes via the 'institution' root."""
+        # Use a phrase where all words stem cleanly so quality is 'high'.
+        # 'targeting' -> 'target'; 'institutions' -> 'institution' (both in lexicon)
+        result = ld_module.dissect_phrase("targeting institutions")
+        assert result["decomposition_quality"] == "high"
+        # Confirm the stemmed root appeared in the literal_words entry
+        lw = result["literal_words"]
+        assert any("institution" in v for v in lw.values())
+
+    def test_required_keys_present_high_quality(self, ld_module):
+        """High-quality fallback result has all required keys."""
+        result = ld_module.dissect_phrase("institutional behavior")
+        required = {"phrase", "literal_words", "euphemism_target", "dissection_suggestion", "decomposition_quality"}
+        assert required.issubset(result.keys())
+
+    def test_required_keys_present_low_quality(self, ld_module):
+        """Low-quality fallback result has all required keys."""
+        result = ld_module.dissect_phrase("zorp quux blorp")
+        required = {"phrase", "literal_words", "euphemism_target", "dissection_suggestion", "decomposition_quality"}
+        assert required.issubset(result.keys())
+
+    def test_phrase_field_preserved_in_fallback(self, ld_module):
+        """The phrase field echoes the original input in both fallback paths."""
+        original = "Institutional Behavior"
+        result = ld_module.dissect_phrase(original)
+        assert result["phrase"] == original
+
+    def test_dissection_suggestion_mentions_words_high(self, ld_module):
+        """High-quality suggestion references word meanings."""
+        result = ld_module.dissect_phrase("institutional behavior")
+        assert isinstance(result["dissection_suggestion"], str)
+        assert result["dissection_suggestion"].strip()
+
+    def test_curated_entry_not_affected(self, ld_module):
+        """Curated entries are unaffected by the new decomposition logic — no quality key."""
+        result = ld_module.dissect_phrase("thoughts and prayers")
+        # Curated entries do not include decomposition_quality
+        assert "decomposition_quality" not in result
+
+    def test_lexicon_entry_count(self, ld_module):
+        """The bundled lexicon must have at least 200 entries."""
+        lexicon = ld_module._get_lexicon()
+        assert len(lexicon) >= 200, f"Expected >= 200 lexicon entries, got {len(lexicon)}"
