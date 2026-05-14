@@ -187,6 +187,7 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         )
         _diamond_init = getattr(self, "deps", None) is not None
         if not _diamond_init:
+            assert deps is not None, "deps required for non-diamond instantiation"
             self.deps = deps
             self.sim_mode = sim_mode
             self.instance_path = instance_path
@@ -368,9 +369,7 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         except _LLMToolCallLimitExceeded as exc:
             logger.warning("%s", exc)
             await self.output_queue.put(
-                AdditionalOutputs(
-                    {"role": "assistant", "content": "[Skipped TTS: tool-call limit reached]"}
-                )
+                AdditionalOutputs({"role": "assistant", "content": "[Skipped TTS: tool-call limit reached]"})
             )
             return
         except Exception as exc:
