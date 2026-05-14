@@ -169,6 +169,7 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
                 from robot_comic.startup_timer import log_once
 
                 log_once("first TTS audio frame", logger)
+                telemetry.emit_first_greeting_audio_once()
                 await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
             any_audio = True
 
