@@ -110,14 +110,21 @@ def test_resolve_voice_id_falls_back_to_named_voice_map(monkeypatch: pytest.Monk
     assert handler._resolve_voice_id() == "21m00Tcm4ijWNoXd58YU"
 
 
-def test_resolve_voice_id_returns_none_for_unknown_voice(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An unrecognised voice name resolves to None (caller surfaces an error)."""
+def test_resolve_voice_id_unknown_voice_falls_through_to_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unrecognised voice name now falls through to the Adam fallback rather than None.
+
+    The resolver in elevenlabs_voices guarantees a voice ID as long as the
+    catalog is non-empty — exact match → prefix match → case-insensitive →
+    fallback ("Adam") → first premade. The legacy contract of returning None
+    for unknown names led to the production "[TTS error]" outage (issue #263).
+    """
     from robot_comic import elevenlabs_tts as mod
 
     monkeypatch.setattr(mod, "load_profile_elevenlabs_config", lambda: {})
     handler = _make_handler()
     handler._voice_override = "NoSuchVoice"
-    assert handler._resolve_voice_id() is None
+    # Falls through to the "Adam" fallback in the hardcoded catalog.
+    assert handler._resolve_voice_id() == "pNInz6obpgDQGcFmaJgB"
 
 
 # ---------------------------------------------------------------------------
@@ -242,11 +249,18 @@ async def test_stream_missing_api_key_returns_false_no_request(monkeypatch: pyte
 
 @pytest.mark.asyncio
 async def test_stream_missing_voice_id_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When the voice can't be resolved to an ElevenLabs ID, the stream call returns False."""
+    """When the voice can't be resolved to an ElevenLabs ID, the stream call returns False.
+
+    Post-#263 the resolver always returns *something* as long as the catalog is
+    non-empty, so we have to force the empty-catalog edge here (e.g. API
+    unreachable AND the hardcoded fallback also wiped) to exercise this
+    defensive path in ``_stream_tts_to_queue``.
+    """
     from robot_comic import elevenlabs_tts as mod
 
     monkeypatch.setattr(mod.config, "ELEVENLABS_API_KEY", "k", raising=False)
     monkeypatch.setattr(mod, "load_profile_elevenlabs_config", lambda: {})
+    monkeypatch.setattr(mod, "resolve_voice_id_by_name", lambda *a, **kw: None)
     handler = _make_handler()
     handler._voice_override = "NoSuchVoice"
 
