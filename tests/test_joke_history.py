@@ -3,10 +3,12 @@
 from __future__ import annotations
 import os
 import json
+import math
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 
-from robot_comic.joke_history import JokeHistory, last_sentence_of, default_history_path
+from robot_comic.joke_history import _DECAY_TAU_DAYS, JokeHistory, last_sentence_of, default_history_path
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +98,12 @@ def test_add_with_topic(tmp_path: Path) -> None:
     history = JokeHistory(tmp_path / "history.json")
     history.add("Great haircut!", topic="appearance")
     assert history._entries[0]["topic"] == "appearance"
+
+
+def test_add_with_persona(tmp_path: Path) -> None:
+    history = JokeHistory(tmp_path / "history.json")
+    history.add("Hockey puck!", topic="sports", persona="don_rickles")
+    assert history._entries[0]["persona"] == "don_rickles"
 
 
 def test_add_truncates_beyond_max(tmp_path: Path) -> None:
@@ -247,3 +255,117 @@ def test_default_history_path_returns_path_under_home(tmp_path: Path) -> None:
         path = default_history_path()
     assert path.name == "joke-history.json"
     assert (tmp_path / ".robot-comic").is_dir()
+
+
+# ---------------------------------------------------------------------------
+# Cross-persona dedup in format_for_prompt
+# ---------------------------------------------------------------------------
+
+
+def _make_entry(punchline: str, topic: str = "", persona: str = "", age_hours: float = 0.0) -> dict:
+    """Helper: build a history entry dict with controlled timestamp."""
+    ts = (datetime.now(timezone.utc) - timedelta(hours=age_hours)).isoformat()
+    return {"ts": ts, "punchline": punchline, "topic": topic, "persona": persona}
+
+
+def test_format_for_prompt_cross_persona(tmp_path: Path) -> None:
+    """format_for_prompt must include entries from multiple personas."""
+    path = tmp_path / "history.json"
+    entries = [
+        _make_entry("Hockey puck!", topic="sports", persona="don_rickles", age_hours=1),
+        _make_entry("Why so serious?", topic="mood", persona="joker", age_hours=2),
+        _make_entry("You're the best audience I've had all week!", persona="carlin", age_hours=3),
+    ]
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    history = JokeHistory(path)
+    result = history.format_for_prompt()
+    assert "[don_rickles] Hockey puck!" in result
+    assert "[joker] Why so serious?" in result
+    assert "You're the best audience" in result
+
+
+def test_format_for_prompt_cross_persona_persona_prefix(tmp_path: Path) -> None:
+    """Entries with a persona should be prefixed with [persona] in the output."""
+    path = tmp_path / "history.json"
+    entries = [_make_entry("Nice tie!", persona="don_rickles", age_hours=0.1)]
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    history = JokeHistory(path)
+    result = history.format_for_prompt()
+    assert "- [don_rickles] Nice tie!" in result
+
+
+def test_format_for_prompt_no_persona_prefix_when_empty(tmp_path: Path) -> None:
+    """Entries with no persona should not have a prefix in the output."""
+    path = tmp_path / "history.json"
+    entries = [_make_entry("Timeless joke.", persona="", age_hours=0.1)]
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    history = JokeHistory(path)
+    result = history.format_for_prompt()
+    # Should appear without prefix brackets
+    assert "- Timeless joke." in result
+    assert "[" not in result.split("Timeless")[0].split("\n")[-1]
+
+
+def test_format_for_prompt_topic_suffix(tmp_path: Path) -> None:
+    """Entries with a topic should include (topic: ...) suffix."""
+    path = tmp_path / "history.json"
+    entries = [_make_entry("Hockey puck!", topic="sports", persona="don_rickles", age_hours=0.1)]
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    history = JokeHistory(path)
+    result = history.format_for_prompt()
+    assert "(topic: sports)" in result
+
+
+# ---------------------------------------------------------------------------
+# Time-decay weighting in format_for_prompt
+# ---------------------------------------------------------------------------
+
+
+def test_format_for_prompt_time_decay_excludes_old_entries(tmp_path: Path) -> None:
+    """An entry older than ~17 days (weight < 0.1 at τ=7d) must be excluded."""
+    path = tmp_path / "history.json"
+    # At τ=7 days, age=14 days → weight = exp(-14/7) ≈ 0.135 (above threshold).
+    # At age=17.03 days → weight = exp(-17.03/7) ≈ 0.0999 (just below 0.1).
+    # Use 20 days to be safely below the threshold.
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=20)).isoformat()
+    entries = [
+        {"ts": old_ts, "punchline": "Stale joke from 3 weeks ago.", "topic": "", "persona": ""},
+        _make_entry("Fresh joke.", age_hours=1),
+    ]
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    history = JokeHistory(path)
+    result = history.format_for_prompt(min_weight_threshold=0.1)
+    assert "Stale joke" not in result
+    assert "Fresh joke." in result
+
+
+def test_format_for_prompt_time_decay_includes_recent_entries(tmp_path: Path) -> None:
+    """An entry 14 days old (weight ≈ 0.135) must be included with default threshold=0.1."""
+    path = tmp_path / "history.json"
+    ts_14d = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+    entries = [{"ts": ts_14d, "punchline": "Two-week-old zinger.", "topic": "", "persona": ""}]
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    history = JokeHistory(path)
+    result = history.format_for_prompt(min_weight_threshold=0.1)
+    # exp(-14/7) ≈ 0.135 > 0.1 — should be included.
+    assert "Two-week-old zinger." in result
+
+
+def test_format_for_prompt_time_decay_weight_formula(tmp_path: Path) -> None:
+    """Verify the decay weight formula: exp(-age_days / tau)."""
+    age_days = 7.0
+    expected_weight = math.exp(-age_days / _DECAY_TAU_DAYS)
+    # At exactly one τ (7 days) weight should be ~0.368
+    assert abs(expected_weight - math.exp(-1.0)) < 1e-9
+
+
+def test_format_for_prompt_decay_n_limits_output(tmp_path: Path) -> None:
+    """format_for_prompt(n=2) returns at most 2 entries even if more qualify."""
+    path = tmp_path / "history.json"
+    entries = [_make_entry(f"joke {i}", age_hours=i) for i in range(5)]
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    history = JokeHistory(path)
+    result = history.format_for_prompt(n=2)
+    # Count bullet lines
+    bullets = [line for line in result.splitlines() if line.startswith("- ")]
+    assert len(bullets) == 2

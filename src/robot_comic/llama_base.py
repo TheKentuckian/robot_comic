@@ -23,7 +23,7 @@ from robot_comic import telemetry
 from robot_comic.config import config
 from robot_comic.prompts import get_session_instructions
 from robot_comic.history_trim import trim_history_in_place
-from robot_comic.joke_history import JokeHistory, last_sentence_of, default_history_path
+from robot_comic.joke_history import JokeHistory, default_history_path, extract_punchline_via_llm
 from robot_comic.tools.core_tools import ToolDependencies, get_active_tool_specs
 from robot_comic.conversation_handler import ConversationHandler
 from robot_comic.tools.background_tool_manager import (
@@ -497,7 +497,18 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
             # Capture punchline for avoid-repeat history (best-effort).
             if response_text and getattr(config, "JOKE_HISTORY_ENABLED", True):
                 try:
-                    JokeHistory(default_history_path()).add(last_sentence_of(response_text))
+                    _persona = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", "") or ""
+                    assert self._http is not None  # always set by _prepare_startup_credentials
+                    _extracted = await extract_punchline_via_llm(
+                        response_text, self._http, llama_url=self._llama_cpp_url
+                    )
+                    _punchline = _extracted.get("punchline") if _extracted is not None else None
+                    if _punchline and _extracted is not None:
+                        JokeHistory(default_history_path()).add(
+                            _punchline,
+                            topic=_extracted.get("topic", "") or "",
+                            persona=_persona,
+                        )
                 except Exception as _jh_exc:
                     logger.debug("joke_history capture failed: %s", _jh_exc)
 
