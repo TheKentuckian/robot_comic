@@ -10,6 +10,7 @@ Audio output: 24 kHz, mono, 16-bit PCM — matches the existing pipeline.
 import os
 import json
 import time
+import random
 import asyncio
 import logging
 from typing import Any, Optional
@@ -69,6 +70,21 @@ class _LLMToolCallLimitExceeded(Exception):
     of TTS — the caller logs a quiet assistant note instead of speaking a status
     string aloud.
     """
+
+
+# Sampled when the LLM returns an empty response (finish_reason=STOP with no
+# parts is the most common case for short user inputs + tools-configured
+# Gemini calls — see #267). Intent: short Hicks-flavoured lines so the
+# operator gets audible feedback instead of perceiving a hang. The persona
+# can still drive a real reply on the next turn.
+_EMPTY_RESPONSE_FILLERS: tuple[str, ...] = (
+    "Yeah. I'm here.",
+    "Try that again, friend.",
+    "You still with me?",
+    "Mhm. Go on.",
+    "I caught that. Hold on.",
+    "Hmm. Say more.",
+)
 # _ECHO_COOLDOWN_S is now read from config.ECHO_COOLDOWN_MS at runtime.
 # This module-level constant is kept for backward compatibility with imports.
 _ECHO_COOLDOWN_S: float = 0.3
@@ -362,15 +378,16 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             return
 
         if not response_text.strip():
-            # _run_llm_with_tools returned empty (e.g. Gemini sent a response
-            # with no parts after a tool round). Don't push empty text into
-            # TTS — ElevenLabs rejects empty input and we'd surface a spurious
-            # "[TTS error]" to the UI. Quietly drop the turn instead.
-            logger.warning("LLM returned empty response_text; skipping TTS for this turn")
-            await self.output_queue.put(
-                AdditionalOutputs({"role": "assistant", "content": "[Skipped TTS: empty LLM response]"})
+            # _run_llm_with_tools returned empty (Gemini emitted a candidate
+            # with no parts — typically finish_reason=STOP for short inputs
+            # with tools configured; safety blocks are also possible). Speak
+            # a short canned line so the operator gets audible feedback
+            # instead of perceiving the robot as hung. Tracked in #267.
+            response_text = random.choice(_EMPTY_RESPONSE_FILLERS)
+            logger.warning(
+                "LLM returned empty response_text; substituting canned filler %r",
+                response_text,
             )
-            return
 
         self._conversation_history.append({"role": "model", "parts": [{"text": response_text}]})
         await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": response_text}))
