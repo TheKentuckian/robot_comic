@@ -879,6 +879,12 @@ class Config:
     # section into the system prompt.  Set to 0/false to disable.
     JOKE_HISTORY_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_ENABLED", default=True)
 
+    # When True, use a one-shot LLM call to extract the punchline and topic
+    # from each completed turn instead of the last-sentence heuristic.
+    # Falls back to the heuristic on timeout / network error.
+    # Set to 0/false to disable and always use the heuristic.
+    JOKE_HISTORY_LLM_EXTRACT_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_LLM_EXTRACT_ENABLED", default=True)
+
     # When set to 1/true, forces the GEMINI TTS DELIVERY TAGS section to be
     # included in the assembled system prompt regardless of the active backend.
     # Useful for debugging or testing delivery-tag behaviour on any backend.
@@ -1081,6 +1087,7 @@ def refresh_runtime_config_from_env() -> None:
     config.WARMUP_WAV_PATH = os.getenv("ROBOT_COMIC_WARMUP_WAV") or None
     config.WARMUP_BLIP_ENABLED = _env_flag("REACHY_MINI_WARMUP_BLIP_ENABLED", default=False)
     config.JOKE_HISTORY_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_ENABLED", default=True)
+    config.JOKE_HISTORY_LLM_EXTRACT_ENABLED = _env_flag("REACHY_MINI_JOKE_HISTORY_LLM_EXTRACT_ENABLED", default=True)
     config.FORCE_DELIVERY_TAGS = _env_flag("REACHY_MINI_FORCE_DELIVERY_TAGS", default=False)
     config.WELCOME_GATE_ENABLED = _env_flag("REACHY_MINI_WELCOME_GATE_ENABLED", default=False)
     config.ECHO_COOLDOWN_MS = int(os.getenv(ECHO_COOLDOWN_MS_ENV, str(DEFAULT_ECHO_COOLDOWN_MS)))

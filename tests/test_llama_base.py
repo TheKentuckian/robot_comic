@@ -210,7 +210,9 @@ async def test_split_text_disabled_in_tts_payload() -> None:
     fake_tts_response.content = wav_bytes
 
     async def capturing_post(url, *, json=None, **kwargs):
-        captured_payloads.append(json or {})
+        # Only capture TTS-related POSTs; skip the joke-history LLM extraction call.
+        if json and "split_text" in (json or {}):
+            captured_payloads.append(json)
         return fake_tts_response
 
     # Mock LLM streaming path and TTS POST path separately

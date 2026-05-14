@@ -14,6 +14,7 @@ import asyncio
 import logging
 from typing import Any, Optional
 
+import httpx
 import numpy as np
 from google import genai
 from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item
@@ -27,7 +28,7 @@ from robot_comic.config import (
     set_custom_profile,
 )
 from robot_comic.llama_base import split_sentences
-from robot_comic.joke_history import JokeHistory, last_sentence_of, default_history_path
+from robot_comic.joke_history import JokeHistory, default_history_path, extract_punchline_via_llm
 from robot_comic.chatterbox_tag_translator import strip_gemini_tags
 
 
@@ -318,7 +319,16 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         # Capture punchline for avoid-repeat history (best-effort).
         if getattr(config, "JOKE_HISTORY_ENABLED", True):
             try:
-                JokeHistory(default_history_path()).add(last_sentence_of(response_text))
+                _persona = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", "") or ""
+                async with httpx.AsyncClient() as _jh_http:
+                    _extracted = await extract_punchline_via_llm(response_text, _jh_http)
+                _punchline = _extracted.get("punchline") if _extracted is not None else None
+                if _punchline and _extracted is not None:
+                    JokeHistory(default_history_path()).add(
+                        _punchline,
+                        topic=_extracted.get("topic", "") or "",
+                        persona=_persona,
+                    )
             except Exception as _jh_exc:
                 logger.debug("joke_history capture failed: %s", _jh_exc)
 
