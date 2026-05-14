@@ -7,18 +7,22 @@ audio with gemini-3.1-flash-tts-preview (voice: Algenib by default).
 Audio output: 24 kHz, mono, 16-bit PCM — matches the existing pipeline.
 """
 
+from __future__ import annotations
 import re
 import json
 import base64
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 import numpy as np
-from google import genai
 from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item
-from google.genai import types
+
+
+if TYPE_CHECKING:
+    from google import genai
+    from google.genai import types
 
 from robot_comic.config import (
     GEMINI_AVAILABLE_VOICES,
@@ -147,6 +151,8 @@ def _build_tts_config(
     ``system_instruction`` is omitted for models in
     ``_TTS_NO_SYSTEM_INSTRUCTION_MODELS`` to avoid 400 INVALID_ARGUMENT errors.
     """
+    from google.genai import types  # deferred: google.genai.types costs ~5.5 s at boot
+
     speech_config = types.SpeechConfig(
         voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name))
     )
@@ -234,6 +240,8 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _prepare_startup_credentials(self) -> None:
         """Initialise the Gemini client. Called via MRO by LocalSTTInputMixin."""
+        from google import genai  # deferred: google.genai.types costs ~5.5 s at boot
+
         api_key = config.GEMINI_API_KEY or "DUMMY"
         self._client = genai.Client(api_key=api_key)
         logger.info(
@@ -405,6 +413,8 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _run_llm_with_tools(self) -> str:
         """Call Gemini Flash with conversation history, handling tool round-trips."""
+        from google.genai import types  # deferred: google.genai.types costs ~5.5 s at boot
+
         assert self._client is not None, "Client not initialised"
 
         tool_specs = get_active_tool_specs(self.deps)
