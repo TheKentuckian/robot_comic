@@ -22,9 +22,6 @@ import asyncio
 import logging
 from typing import Any, AsyncIterator
 
-from google import genai
-from google.genai import types
-
 from robot_comic.gemini_live import _openai_tool_specs_to_gemini
 from robot_comic.gemini_retry import (
     compute_backoff,
@@ -52,6 +49,8 @@ def _openai_messages_to_gemini(
     Tool-result messages (role="tool") are converted to function-response
     parts attached to a "user" role Content, matching the Gemini convention.
     """
+    from google.genai import types  # deferred: google.genai.types costs ~5.5 s at boot
+
     system_instruction: str | None = None
     contents: list[Any] = []
 
@@ -134,6 +133,8 @@ class GeminiLLMClient:
 
     def __init__(self, api_key: str, model: str = _DEFAULT_MODEL) -> None:
         """Initialise the client with *api_key* and the target *model*."""
+        from google import genai  # deferred: google.genai.types costs ~5.5 s at boot
+
         self._api_key = api_key
         self._model = model
         self._client = genai.Client(api_key=api_key)
@@ -167,6 +168,8 @@ class GeminiLLMClient:
             *messages* is used (or no system instruction if none is present).
 
         """
+        from google.genai import types  # deferred: google.genai.types costs ~5.5 s at boot
+
         # Convert format
         _sys_from_msgs, contents = _openai_messages_to_gemini(messages)
         effective_system = system_instruction if system_instruction is not None else _sys_from_msgs

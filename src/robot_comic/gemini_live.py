@@ -8,6 +8,7 @@ Audio formats (per Gemini Live API spec):
   Output: 16-bit PCM, 24 kHz, mono
 """
 
+from __future__ import annotations
 import re
 import json
 import time
@@ -15,18 +16,20 @@ import uuid
 import base64
 import asyncio
 import logging
-from typing import Any, Dict, List, Final, Tuple, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Final, Tuple, Optional
 from datetime import datetime
 
 import numpy as np
 import gradio as gr
-from google import genai
 from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item, audio_to_int16
-from google.genai import types
 from numpy.typing import NDArray
 from scipy.signal import resample
 from opentelemetry import trace
 from opentelemetry import context as otel_context
+
+
+if TYPE_CHECKING:
+    from google.genai import types
 
 from robot_comic import telemetry
 from robot_comic.config import (
@@ -72,19 +75,8 @@ GEMINI_LIVE_AUDIO_OUTPUT_COST_PER_1M: Final[float] = 12.0
 GEMINI_LIVE_TEXT_INPUT_COST_PER_1M: Final[float] = 0.75
 GEMINI_LIVE_TEXT_OUTPUT_COST_PER_1M: Final[float] = 4.50
 
-_START_SENSITIVITY_MAP: Final[Dict[str, "types.StartSensitivity"]] = {
-    "HIGH": types.StartSensitivity.START_SENSITIVITY_HIGH,
-    "LOW": types.StartSensitivity.START_SENSITIVITY_LOW,
-    "UNSPECIFIED": types.StartSensitivity.START_SENSITIVITY_UNSPECIFIED,
-}
-_END_SENSITIVITY_MAP: Final[Dict[str, "types.EndSensitivity"]] = {
-    "HIGH": types.EndSensitivity.END_SENSITIVITY_HIGH,
-    "LOW": types.EndSensitivity.END_SENSITIVITY_LOW,
-    "UNSPECIFIED": types.EndSensitivity.END_SENSITIVITY_UNSPECIFIED,
-}
 
-
-def _build_realtime_input_config() -> types.RealtimeInputConfig:
+def _build_realtime_input_config() -> "types.RealtimeInputConfig":
     """Build a RealtimeInputConfig with our tuned activity-detection knobs.
 
     The SDK defaults are eager: short pauses, breaths, and even the assistant's
@@ -92,11 +84,23 @@ def _build_realtime_input_config() -> types.RealtimeInputConfig:
     LOW sensitivity and longer silence so brief user pauses don't preempt the
     model mid-response. All four knobs are env-overridable for tuning.
     """
-    start_sens = _START_SENSITIVITY_MAP.get(
+    from google.genai import types  # deferred: google.genai.types costs ~5.5 s at boot
+
+    _start_sensitivity_map: Dict[str, Any] = {
+        "HIGH": types.StartSensitivity.START_SENSITIVITY_HIGH,
+        "LOW": types.StartSensitivity.START_SENSITIVITY_LOW,
+        "UNSPECIFIED": types.StartSensitivity.START_SENSITIVITY_UNSPECIFIED,
+    }
+    _end_sensitivity_map: Dict[str, Any] = {
+        "HIGH": types.EndSensitivity.END_SENSITIVITY_HIGH,
+        "LOW": types.EndSensitivity.END_SENSITIVITY_LOW,
+        "UNSPECIFIED": types.EndSensitivity.END_SENSITIVITY_UNSPECIFIED,
+    }
+    start_sens = _start_sensitivity_map.get(
         config.GEMINI_LIVE_VAD_START_SENSITIVITY,
         types.StartSensitivity.START_SENSITIVITY_LOW,
     )
-    end_sens = _END_SENSITIVITY_MAP.get(
+    end_sens = _end_sensitivity_map.get(
         config.GEMINI_LIVE_VAD_END_SENSITIVITY,
         types.EndSensitivity.END_SENSITIVITY_LOW,
     )
@@ -238,6 +242,8 @@ async def _send_b64_tool_image_to_gemini(
     tool_result: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Send base64 JPEG tool payloads as video input and return compact JSON."""
+    from google.genai import types  # deferred: google.genai.types costs ~5.5 s at boot
+
     compact_result = dict(tool_result)
     image_key = next(
         (key for key in _B64_IMAGE_RESULT_KEYS if isinstance(compact_result.get(key), str | bytes | bytearray)),
@@ -640,6 +646,8 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
                 logger.warning("GEMINI_API_KEY missing. Proceeding with a placeholder (tests/offline).")
                 gemini_api_key = "DUMMY"
 
+        from google import genai  # deferred: google.genai.types costs ~5.5 s at boot
+
         self.client = genai.Client(api_key=gemini_api_key)
 
         max_attempts = 3
@@ -719,8 +727,10 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
         except Exception as e:
             logger.warning("_restart_session failed: %s", e)
 
-    def _build_live_config(self) -> types.LiveConnectConfig:
+    def _build_live_config(self) -> "types.LiveConnectConfig":
         """Build the LiveConnectConfig for a Gemini Live session."""
+        from google.genai import types  # deferred: google.genai.types costs ~5.5 s at boot
+
         instructions = _strip_tts_delivery_tags(get_session_instructions())
 
         # Append any profile-specific delivery guidance (Brooklyn rapid-fire
@@ -817,6 +827,8 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _handle_tool_result(self, bg_tool: ToolNotification) -> None:
         """Process the result of a completed tool and send it back to Gemini."""
+        from google.genai import types  # deferred: google.genai.types costs ~5.5 s at boot
+
         if bg_tool.error is not None:
             logger.error("Tool '%s' (id=%s) failed: %s", bg_tool.tool_name, bg_tool.id, bg_tool.error)
             tool_result = {"error": bg_tool.error}
@@ -887,6 +899,8 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
         Only runs when a camera_worker is available. Frames are JPEG-encoded
         and sent via send_realtime_input(video=...).
         """
+        from google.genai import types  # deferred: google.genai.types costs ~5.5 s at boot
+
         logger.info("Video sender loop started (1 FPS)")
         while not self._stop_event.is_set():
             try:
@@ -1089,6 +1103,8 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
 
     async def receive(self, frame: Tuple[int, NDArray[np.int16]]) -> None:
         """Receive audio frame from microphone and send to Gemini."""
+        from google.genai import types  # deferred: google.genai.types costs ~5.5 s at boot
+
         if not self.session:
             return
 

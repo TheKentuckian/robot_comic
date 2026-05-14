@@ -8,14 +8,18 @@ Select via:
     LOCAL_STT_RESPONSE_BACKEND=llama_gemini_tts
 """
 
+from __future__ import annotations
 import time
 import base64
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from google import genai
 from fastrtc import AdditionalOutputs
+
+
+if TYPE_CHECKING:
+    from google import genai
 
 from robot_comic import telemetry
 from robot_comic.config import (
@@ -85,6 +89,8 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
         )
 
     async def _prepare_startup_credentials(self) -> None:
+        from google import genai  # deferred: google.genai.types costs ~5.5 s at boot
+
         await super()._prepare_startup_credentials()
         api_key = config.GEMINI_API_KEY or "DUMMY"
         self._client = genai.Client(api_key=api_key)

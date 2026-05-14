@@ -7,6 +7,7 @@ audio with ElevenLabs TTS API.
 Audio output: 24 kHz, mono, 16-bit PCM — matches the existing pipeline.
 """
 
+from __future__ import annotations
 import os
 import json
 import time
@@ -14,15 +15,18 @@ import uuid
 import random
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 import numpy as np
-from google import genai
 from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item
-from google.genai import types
 from opentelemetry import trace as _otel_trace
 from opentelemetry import context as _otel_context
+
+
+if TYPE_CHECKING:
+    from google import genai
+    from google.genai import types
 
 from robot_comic import telemetry
 from robot_comic.config import (
@@ -259,6 +263,8 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _prepare_startup_credentials(self) -> None:
         """Initialise Gemini and HTTP clients."""
+        from google import genai  # deferred: google.genai.types costs ~5.5 s at boot
+
         api_key = config.GEMINI_API_KEY or "DUMMY"
         self._client = genai.Client(api_key=api_key)
         self._http = httpx.AsyncClient(timeout=30.0)
@@ -556,6 +562,8 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _run_llm_with_tools(self) -> str:
         """Call Gemini Flash with conversation history, handling tool round-trips."""
+        from google.genai import types  # deferred: google.genai.types costs ~5.5 s at boot
+
         assert self._client is not None, "Client not initialised"
 
         tool_specs = get_active_tool_specs(self.deps)
