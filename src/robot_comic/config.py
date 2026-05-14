@@ -605,7 +605,13 @@ class Config:
     # Gemini Live server-side VAD tuning. Defaults raise the end-of-speech bar
     # well above the SDK's eager defaults so brief pauses / breaths during the
     # user's reply don't fire a fresh turn while the model is still responding.
-    GEMINI_LIVE_VAD_SILENCE_MS = int(os.getenv("GEMINI_LIVE_VAD_SILENCE_MS", "800"))
+    #
+    # 2026-05-14 field-tune (issue #140): original 800 ms silence threshold made
+    # turns feel sluggish during natural conversation on the robot.  Dropping to
+    # 600 ms (the candidate value from #140 field observation) restores
+    # responsiveness while still preventing premature barge-in.  prefix_ms and
+    # sensitivity levels left at their PR #136 values — no field complaint there.
+    GEMINI_LIVE_VAD_SILENCE_MS = int(os.getenv("GEMINI_LIVE_VAD_SILENCE_MS", "600"))
     GEMINI_LIVE_VAD_PREFIX_MS = int(os.getenv("GEMINI_LIVE_VAD_PREFIX_MS", "200"))
     # One of: HIGH | LOW | UNSPECIFIED. LOW = harder to trigger (fewer false positives).
     GEMINI_LIVE_VAD_START_SENSITIVITY = os.getenv("GEMINI_LIVE_VAD_START_SENSITIVITY", "LOW").upper()
@@ -785,7 +791,7 @@ def refresh_runtime_config_from_env() -> None:
     config.GEMINI_LIVE_PRESENCE_FIRST_S = float(os.getenv("GEMINI_LIVE_PRESENCE_FIRST_S", "10"))
     config.GEMINI_LIVE_PRESENCE_MAX_ATTEMPTS = int(os.getenv("GEMINI_LIVE_PRESENCE_MAX_ATTEMPTS", "3"))
     config.GEMINI_LIVE_PRESENCE_BACKOFF_FACTOR = float(os.getenv("GEMINI_LIVE_PRESENCE_BACKOFF_FACTOR", "2.0"))
-    config.GEMINI_LIVE_VAD_SILENCE_MS = int(os.getenv("GEMINI_LIVE_VAD_SILENCE_MS", "800"))
+    config.GEMINI_LIVE_VAD_SILENCE_MS = int(os.getenv("GEMINI_LIVE_VAD_SILENCE_MS", "600"))
     config.GEMINI_LIVE_VAD_PREFIX_MS = int(os.getenv("GEMINI_LIVE_VAD_PREFIX_MS", "200"))
     config.GEMINI_LIVE_VAD_START_SENSITIVITY = os.getenv("GEMINI_LIVE_VAD_START_SENSITIVITY", "LOW").upper()
     config.GEMINI_LIVE_VAD_END_SENSITIVITY = os.getenv("GEMINI_LIVE_VAD_END_SENSITIVITY", "LOW").upper()
