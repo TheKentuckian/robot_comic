@@ -187,17 +187,26 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         startup_voice: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
-        # In the GeminiTextElevenLabsResponseHandler diamond, BaseLlamaResponseHandler
-        # appears earlier in the MRO and calls super().__init__(expected_layout=...).
-        # That super() lands here. Absorb the audio kwargs without clobbering BaseLlama's
-        # already-set shared state.
+        # Detect whether we are being called as a cooperative super() in the
+        # GeminiTextElevenLabsResponseHandler diamond MRO (where
+        # BaseLlamaResponseHandler.__init__ calls super().__init__(expected_layout=…)
+        # BEFORE setting self.deps) or as a standalone direct instantiation.
+        #
+        # The previous heuristic (getattr(self, "deps", None) is not None) was
+        # wrong: BaseLlama's super() call arrives here BEFORE self.deps is set, so
+        # the guard always produced False in the diamond case and the assert fired.
+        #
+        # Instead, detect by inspecting the incoming kwargs: the only callers that
+        # pass audio-layout kwargs (expected_layout / output_sample_rate /
+        # input_sample_rate) are cooperative super() chains from the diamond.
+        # Direct (standalone) instantiation never passes these kwargs.
+        _is_diamond_super = any(k in kwargs for k in ("expected_layout", "output_sample_rate", "input_sample_rate"))
         super().__init__(
-            expected_layout="mono",
-            output_sample_rate=ELEVENLABS_OUTPUT_SAMPLE_RATE,
-            input_sample_rate=16000,
+            expected_layout=kwargs.pop("expected_layout", "mono"),
+            output_sample_rate=kwargs.pop("output_sample_rate", ELEVENLABS_OUTPUT_SAMPLE_RATE),
+            input_sample_rate=kwargs.pop("input_sample_rate", 16000),
         )
-        _diamond_init = getattr(self, "deps", None) is not None
-        if not _diamond_init:
+        if not _is_diamond_super:
             assert deps is not None, "deps required for non-diamond instantiation"
             self.deps = deps
             self.sim_mode = sim_mode

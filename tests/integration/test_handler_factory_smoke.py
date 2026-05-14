@@ -77,19 +77,6 @@ from robot_comic.handler_factory import HandlerFactory
 _MOONSHINE_OUTPUTS_BRANCHING_ON_LLM = (AUDIO_OUTPUT_CHATTERBOX, AUDIO_OUTPUT_ELEVENLABS)
 
 
-def _gemini_text_elevenlabs_diamond_xfail(input_b: str, output_b: str, llm_backend: str) -> bool:
-    """Return True for the known-broken Gemini-text + ElevenLabs MRO path.
-
-    ``GeminiTextElevenLabsHandler`` triggers an ``AssertionError`` deep inside
-    the diamond MRO on construction.  The bug exists on ``main`` today; the
-    fix is out of scope for #261 (which only adds the smoke harness).  We mark
-    this combo xfail so the rest of the matrix can still run.
-    """
-    return bool(
-        input_b == AUDIO_INPUT_MOONSHINE and output_b == AUDIO_OUTPUT_ELEVENLABS and llm_backend == LLM_BACKEND_GEMINI
-    )
-
-
 def _expected_handler_name(input_b: str, output_b: str, llm_backend: str) -> str:
     """Map a (input, output, llm) tuple to the handler class name selected by HandlerFactory."""
     if input_b == AUDIO_INPUT_HF and output_b == AUDIO_OUTPUT_HF:
@@ -148,12 +135,6 @@ class TestFactoryInstantiationMatrix:
         output_b: str,
         llm_backend: str,
     ) -> None:
-        if _gemini_text_elevenlabs_diamond_xfail(input_b, output_b, llm_backend):
-            pytest.xfail(
-                "Known bug: GeminiTextElevenLabsHandler MRO diamond raises "
-                "AssertionError on construction; out of scope for #261 (test-only PR)."
-            )
-
         deps = make_tool_deps()
         with patch("robot_comic.handler_factory.config") as mock_cfg:
             mock_cfg.LLM_BACKEND = llm_backend
@@ -272,12 +253,6 @@ class TestLifecycleSmoke:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        if _gemini_text_elevenlabs_diamond_xfail(input_b, output_b, llm_backend):
-            pytest.xfail(
-                "Known bug: GeminiTextElevenLabsHandler MRO diamond raises "
-                "AssertionError on construction; lifecycle smoke cannot run."
-            )
-
         handler, transcriber_mock = _build_handler_with_mocks(input_b, output_b, llm_backend, monkeypatch, tmp_path)
 
         if not hasattr(handler, "_prepare_startup_credentials"):
@@ -322,12 +297,6 @@ class TestLifecycleSmoke:
         NotImplementedError) was found before ElevenLabsTTSResponseHandler.get_current_voice
         in the MRO.
         """
-        if _gemini_text_elevenlabs_diamond_xfail(input_b, output_b, llm_backend):
-            pytest.xfail(
-                "Known bug: GeminiTextElevenLabsHandler MRO diamond raises "
-                "AssertionError on construction; voice check cannot run."
-            )
-
         handler, _ = _build_handler_with_mocks(input_b, output_b, llm_backend, monkeypatch, tmp_path)
         # _prepare_startup_credentials needs to run for some handlers (e.g.
         # ElevenLabs sets _client before voice resolution).  But for the voice
