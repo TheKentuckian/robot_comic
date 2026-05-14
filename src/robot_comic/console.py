@@ -692,6 +692,45 @@ class LocalStream:
                 logger.warning("Failed to fetch ElevenLabs voices: %s", e)
                 return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
+        # GET /api/voices/catalog -> richer ElevenLabs voice catalog (name +
+        # voice_id + category) for the admin UI table (#304). Returns 503 when
+        # ElevenLabs is not configured so the UI can render a "not configured"
+        # placeholder instead of treating it as a transient error.
+        @self._settings_app.get("/api/voices/catalog")
+        async def _voice_catalog() -> JSONResponse:
+            if not config.ELEVENLABS_API_KEY:
+                return JSONResponse(
+                    {"error": "elevenlabs not configured"},
+                    status_code=503,
+                )
+            try:
+                from robot_comic.elevenlabs_voices import (
+                    fetch_elevenlabs_voices,
+                    get_elevenlabs_voice_records,
+                )
+
+                # Populate the cache on first call (no-op if already cached).
+                await fetch_elevenlabs_voices()
+                records = get_elevenlabs_voice_records()
+                return JSONResponse(
+                    {
+                        "voices": [
+                            {
+                                "voice_id": rec["voice_id"],
+                                "name": rec["name"],
+                                "category": rec.get("category", ""),
+                            }
+                            for rec in records
+                        ],
+                    }
+                )
+            except Exception as e:
+                logger.warning("Failed to fetch ElevenLabs voice catalog: %s", e)
+                return JSONResponse(
+                    {"error": f"catalog fetch failed: {e}"},
+                    status_code=500,
+                )
+
         # GET /ready -> whether backend finished loading tools
         @self._settings_app.get("/ready")
         def _ready() -> JSONResponse:
