@@ -64,7 +64,10 @@ def make_deps() -> MagicMock:
 async def test_scan_face_found_immediately(Greet):
     """Face detected on first frame — no sweep triggered."""
     deps = make_deps()
-    with patch("don_rickles_greet.MP_AVAILABLE", True), patch("don_rickles_greet._detect_face", return_value=True):
+    with (
+        patch("don_rickles_greet.MP_AVAILABLE", True),
+        patch("don_rickles_greet._detect_face_with_scores", return_value=(True, [0.9])),
+    ):
         result = await Greet()(deps, action="scan")
     assert result == {"face_detected": True}
     deps.movement_manager.queue_move.assert_not_called()
@@ -80,7 +83,10 @@ async def test_scan_face_found_during_sweep(Greet):
     # Initial frame: no face. Second call (left sweep position): no face. Third call (up): face found.
     with (
         patch("don_rickles_greet.MP_AVAILABLE", True),
-        patch("don_rickles_greet._detect_face", side_effect=[False, False, True]),
+        patch(
+            "don_rickles_greet._detect_face_with_scores",
+            side_effect=[(False, []), (False, []), (True, [0.9])],
+        ),
         patch("asyncio.sleep"),
     ):
         result = await Greet()(deps, action="scan")
@@ -96,7 +102,7 @@ async def test_scan_no_face_after_full_sweep(Greet):
     deps = make_deps()
     with (
         patch("don_rickles_greet.MP_AVAILABLE", True),
-        patch("don_rickles_greet._detect_face", return_value=False),
+        patch("don_rickles_greet._detect_face_with_scores", return_value=(False, [])),
         patch("asyncio.sleep"),
     ):
         result = await Greet()(deps, action="scan")

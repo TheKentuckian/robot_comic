@@ -50,6 +50,44 @@ def _detect_face(frame: Any) -> bool:
         return bool(results.detections)
 
 
+def _detect_face_with_scores(frame: Any) -> Tuple[bool, List[float]]:
+    """Return (face_detected, confidence_scores) for diagnostic logging.
+
+    Mirrors `_detect_face` but exposes the per-detection confidence scores so
+    callers can log how MediaPipe scored the frame even when it ultimately
+    returned no detections (empty list).
+    """
+    if not MP_AVAILABLE or _mp_face_detection is None:
+        return False, []
+    rgb = frame[..., ::-1].copy()
+    with _mp_face_detection.FaceDetection(min_detection_confidence=0.3) as detector:
+        results = detector.process(rgb)
+        detections = results.detections or []
+        scores: List[float] = []
+        for det in detections:
+            # `det.score` is a RepeatedScalarContainer of floats; take the first.
+            try:
+                scores.append(float(det.score[0]))
+            except (IndexError, TypeError, AttributeError):
+                continue
+        return bool(detections), scores
+
+
+def _frame_stats(frame: Any) -> Tuple[Tuple[int, ...], str, float, float, float]:
+    """Compute (shape, dtype, mean, min, max) for a numpy frame; safe for empty."""
+    try:
+        shape = tuple(frame.shape)
+        dtype = str(frame.dtype)
+        mean = float(np.mean(frame))
+        fmin = float(np.min(frame))
+        fmax = float(np.max(frame))
+    except Exception:
+        shape = ()
+        dtype = "unknown"
+        mean = fmin = fmax = float("nan")
+    return shape, dtype, mean, fmin, fmax
+
+
 def _build_callbacks(state: Dict[str, Any]) -> List[str]:
     """Build callback hints from session state — mirrors CrowdWork._build_callbacks."""
     hints: List[str] = []
@@ -186,10 +224,20 @@ class Greet(Tool):
 
         frame = deps.camera_worker.get_latest_frame()
         if frame is None:
+            logger.debug("greet._scan: camera_worker.get_latest_frame() returned None on initial guard")
             return {"error": "No frame available"}
 
         if not MP_AVAILABLE:
             return {"face_detected": True, "note": "MediaPipe unavailable, assuming face present"}
+
+        # Track the latest stats so the no_subject summary line can name them.
+        last_shape: Tuple[int, ...] = ()
+        last_dtype: str = "unknown"
+        last_mean: float = float("nan")
+        last_min: float = float("nan")
+        last_max: float = float("nan")
+        last_detection_count: int = 0
+        last_highest_confidence: float = 0.0
 
         # Poll for up to REACHY_MINI_GREET_SCAN_WAIT_S seconds before sweeping.
         # On fresh startup the camera / tracker needs a moment to latch onto a
@@ -199,8 +247,28 @@ class Greet(Tool):
         deadline = time.monotonic() + scan_wait_s
         while True:
             frame = deps.camera_worker.get_latest_frame()
-            if frame is not None and _detect_face(frame):
-                return {"face_detected": True}
+            if frame is None:
+                logger.debug("greet._scan: camera_worker.get_latest_frame() returned None during poll")
+            else:
+                last_shape, last_dtype, last_mean, last_min, last_max = _frame_stats(frame)
+                logger.debug(
+                    "greet._scan: frame shape=%s dtype=%s mean=%.2f min=%.2f max=%.2f",
+                    last_shape,
+                    last_dtype,
+                    last_mean,
+                    last_min,
+                    last_max,
+                )
+                detected, scores = _detect_face_with_scores(frame)
+                last_detection_count = len(scores)
+                last_highest_confidence = max(scores) if scores else 0.0
+                logger.debug(
+                    "greet._scan: mediapipe detections count=%d scores=%s",
+                    last_detection_count,
+                    [round(s, 3) for s in scores],
+                )
+                if detected:
+                    return {"face_detected": True}
             if time.monotonic() >= deadline:
                 break
             await asyncio.sleep(_SCAN_POLL_INTERVAL_S)
@@ -212,6 +280,13 @@ class Greet(Tool):
         # is opt-in via env until the proper velocity-clamped path lands.
         if os.environ.get("REACHY_MINI_GREET_SWEEP_DISABLED", "").lower() in ("1", "true", "yes"):
             logger.info("greet: sweep disabled by REACHY_MINI_GREET_SWEEP_DISABLED; returning no_subject")
+            self._log_no_subject_summary(
+                last_shape,
+                last_mean,
+                last_detection_count,
+                last_highest_confidence,
+                deps,
+            )
             return {"no_subject": True}
 
         for direction in SWEEP_POSITIONS:
@@ -220,10 +295,84 @@ class Greet(Tool):
                 logger.warning("move_head failed during sweep (%s): %s", direction, move_result["error"])
             await asyncio.sleep(deps.motion_duration_s + 0.2)
             sweep_frame = deps.camera_worker.get_latest_frame()
-            if sweep_frame is not None and _detect_face(sweep_frame):
+            if sweep_frame is None:
+                logger.debug(
+                    "greet._scan: camera_worker.get_latest_frame() returned None after sweep step %s",
+                    direction,
+                )
+                continue
+            last_shape, last_dtype, last_mean, last_min, last_max = _frame_stats(sweep_frame)
+            logger.debug(
+                "greet._scan: sweep[%s] frame shape=%s dtype=%s mean=%.2f min=%.2f max=%.2f",
+                direction,
+                last_shape,
+                last_dtype,
+                last_mean,
+                last_min,
+                last_max,
+            )
+            detected, scores = _detect_face_with_scores(sweep_frame)
+            last_detection_count = len(scores)
+            last_highest_confidence = max(scores) if scores else 0.0
+            logger.debug(
+                "greet._scan: sweep[%s] mediapipe detections count=%d scores=%s",
+                direction,
+                last_detection_count,
+                [round(s, 3) for s in scores],
+            )
+            if detected:
                 return {"face_detected": True}
 
+        self._log_no_subject_summary(
+            last_shape,
+            last_mean,
+            last_detection_count,
+            last_highest_confidence,
+            deps,
+        )
         return {"no_subject": True}
+
+    def _log_no_subject_summary(
+        self,
+        frame_shape: Tuple[int, ...],
+        frame_mean: float,
+        detection_count: int,
+        highest_confidence: float,
+        deps: ToolDependencies,
+    ) -> None:
+        """Emit the no_subject INFO summary and optionally dump a diag frame.
+
+        When REACHY_MINI_GREET_DIAG=1 (or true/yes) we attempt a one-shot dump
+        of the latest frame to ``~/.robot_comic/diag/greet_no_subject_<ts>.png``
+        so the operator can eyeball what the camera was actually seeing. The
+        dump is best-effort: any error is swallowed with a warning so we never
+        break the scan path.
+        """
+        logger.info(
+            "greet._scan: no_subject frame_shape=%s mean=%.2f detection_count=%d highest_confidence=%.3f",
+            frame_shape,
+            frame_mean,
+            detection_count,
+            highest_confidence,
+        )
+        diag_flag = os.environ.get("REACHY_MINI_GREET_DIAG", "").lower()
+        if diag_flag not in ("1", "true", "yes"):
+            return
+        try:
+            if deps.camera_worker is None:
+                return
+            frame = deps.camera_worker.get_latest_frame()
+            if frame is None:
+                return
+            diag_dir = Path.home() / ".robot_comic" / "diag"
+            diag_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_path = diag_dir / f"greet_no_subject_{ts}.npy"
+            # Use np.save (always available) — avoids a hard cv2 dependency.
+            np.save(out_path, frame)
+            logger.info("greet._scan: dumped diag frame to %s", out_path)
+        except Exception as exc:  # pragma: no cover - best-effort dump
+            logger.warning("greet._scan: failed to dump diag frame: %s", exc)
 
     async def _identify_by_face(self, deps: ToolDependencies) -> Dict[str, Any] | None:
         """Attempt face-embedding based identification.

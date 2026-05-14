@@ -83,8 +83,8 @@ async def test_scan_returns_face_when_tracker_latches_after_initial_miss(
     camera = _FrameSource(blank_count=2)
     deps = _make_deps(camera)
 
-    # Patch _detect_face to always return True once a frame is present
-    with patch.object(greet_mod, "_detect_face", return_value=True):
+    # Patch _detect_face_with_scores to always return True once a frame is present
+    with patch.object(greet_mod, "_detect_face_with_scores", return_value=(True, [0.9])):
         result = await Greet()._scan(deps)
 
     assert result == {"face_detected": True}, f"Unexpected result: {result}"
@@ -111,7 +111,7 @@ async def test_scan_waits_up_to_configured_window_before_giving_up(
 
     # face never detected, sweep also finds nothing
     with (
-        patch.object(greet_mod, "_detect_face", return_value=False),
+        patch.object(greet_mod, "_detect_face_with_scores", return_value=(False, [])),
         patch("robot_comic.tools.greet.MoveHead") as MockMoveHead,
     ):
         # MoveHead()(deps, direction=...) must be awaitable
@@ -144,7 +144,7 @@ async def test_scan_returns_face_on_very_first_poll(
     camera.get_latest_frame.return_value = _blank_frame()
     deps = _make_deps(camera)
 
-    with patch.object(greet_mod, "_detect_face", return_value=True):
+    with patch.object(greet_mod, "_detect_face_with_scores", return_value=(True, [0.9])):
         result = await Greet()._scan(deps)
 
     assert result == {"face_detected": True}
