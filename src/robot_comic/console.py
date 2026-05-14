@@ -27,11 +27,14 @@ from robot_comic.config import (
     GEMINI_BACKEND,
     LOCKED_PROFILE,
     OPENAI_BACKEND,
+    LLM_BACKEND_ENV,
     CHATTERBOX_OUTPUT,
     ELEVENLABS_OUTPUT,
     GEMINI_TTS_OUTPUT,
+    LLM_BACKEND_LLAMA,
     LOCAL_STT_BACKEND,
     CHATTERBOX_URL_ENV,
+    LLM_BACKEND_GEMINI,
     LOCAL_STT_MODEL_ENV,
     CHATTERBOX_VOICE_ENV,
     CHATTERBOX_DEFAULT_URL,
@@ -426,6 +429,7 @@ class LocalStream:
         update_interval: float,
         chatterbox_url: Optional[str] = None,
         chatterbox_voice: Optional[str] = None,
+        llm_backend: Optional[str] = None,
     ) -> None:
         """Persist local STT settings to environment and instance `.env`."""
         values: dict[str, str] = {
@@ -436,6 +440,9 @@ class LocalStream:
             LOCAL_STT_MODEL_ENV: model,
             LOCAL_STT_UPDATE_INTERVAL_ENV: f"{update_interval:.2f}",
         }
+        if llm_backend is not None:
+            values[LLM_BACKEND_ENV] = llm_backend
+            config.LLM_BACKEND = llm_backend
         if chatterbox_url is not None:
             values[CHATTERBOX_URL_ENV] = chatterbox_url
         if chatterbox_voice is not None:
@@ -583,6 +590,8 @@ class LocalStream:
             chatterbox_voice: Optional[str] = None
             elevenlabs_api_key: Optional[str] = None
             elevenlabs_voice: Optional[str] = None
+            # LLM axis from the 3-column pipeline picker (#245)
+            llm_backend: Optional[str] = None
 
         def _status_payload() -> dict[str, object]:
             backend_provider = get_backend_choice()
@@ -621,6 +630,7 @@ class LocalStream:
                 "local_stt_provider": getattr(config, "LOCAL_STT_PROVIDER", "moonshine"),
                 "local_stt_response_backend": getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND),
                 "local_stt_response_backend_choices": list(LOCAL_STT_RESPONSE_BACKEND_CHOICES),
+                "llm_backend": getattr(config, "LLM_BACKEND", LLM_BACKEND_LLAMA),
                 "local_stt_cache_dir": getattr(config, "LOCAL_STT_CACHE_DIR", "./cache/moonshine_voice"),
                 "local_stt_language": getattr(config, "LOCAL_STT_LANGUAGE", "en"),
                 "local_stt_model": getattr(config, "LOCAL_STT_MODEL", "tiny_streaming"),
@@ -725,6 +735,27 @@ class LocalStream:
             )
             if backend == LOCAL_STT_BACKEND and local_stt_response_backend not in LOCAL_STT_RESPONSE_BACKEND_CHOICES:
                 return JSONResponse({"ok": False, "error": "invalid_local_stt_response_backend"}, status_code=400)
+
+            # LLM backend axis from the 3-column pipeline picker (#245).
+            # Defaults to "llama" for back-compat when field is absent.
+            _llm_backend_raw = (payload.llm_backend or "").strip().lower() or LLM_BACKEND_LLAMA
+            if backend == LOCAL_STT_BACKEND and _llm_backend_raw not in {LLM_BACKEND_LLAMA, LLM_BACKEND_GEMINI}:
+                return JSONResponse({"ok": False, "error": "invalid_llm_backend"}, status_code=400)
+            # Validate (output, llm) combination.
+            # Bundled handlers (openai realtime, huggingface realtime) bundle their
+            # own LLM — they cannot be combined with an explicit LLM backend (gemini).
+            # Gemini Flash TTS also implies Gemini for LLM, so it's redundant with
+            # the gemini LLM axis.
+            _GEMINI_LLM_UNSUPPORTED_OUTPUTS = {GEMINI_TTS_OUTPUT, OPENAI_BACKEND, HF_BACKEND}
+            if (
+                backend == LOCAL_STT_BACKEND
+                and _llm_backend_raw == LLM_BACKEND_GEMINI
+                and local_stt_response_backend in _GEMINI_LLM_UNSUPPORTED_OUTPUTS
+            ):
+                return JSONResponse(
+                    {"ok": False, "error": "unsupported_pipeline_combination"},
+                    status_code=400,
+                )
             if (
                 backend == LOCAL_STT_BACKEND
                 and local_stt_response_backend == OPENAI_BACKEND
@@ -811,6 +842,7 @@ class LocalStream:
                     update_interval=update_interval,
                     chatterbox_url=chatterbox_url_val if local_stt_response_backend == CHATTERBOX_OUTPUT else None,
                     chatterbox_voice=chatterbox_voice_val if local_stt_response_backend == CHATTERBOX_OUTPUT else None,
+                    llm_backend=_llm_backend_raw,
                 )
             if backend == HF_BACKEND or (backend == LOCAL_STT_BACKEND and local_stt_response_backend == HF_BACKEND):
                 hf_selection = get_hf_connection_selection()

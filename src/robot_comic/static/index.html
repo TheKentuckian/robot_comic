@@ -257,51 +257,94 @@
             </div>
           </div>
 
-          <label>Audio output backend</label>
-          <div class="output-choice-grid" role="radiogroup" aria-label="Local STT audio output backend">
-            <label class="output-choice" data-output-card="openai">
-              <input type="radio" name="local-stt-output" value="openai" />
-              <span>
-                <strong>OpenAI Realtime voice</strong>
-                <small>Uses OpenAI text-in, audio-out response generation.</small>
-              </span>
-            </label>
-            <label class="output-choice" data-output-card="huggingface">
-              <input type="radio" name="local-stt-output" value="huggingface" />
-              <span>
-                <strong>Hugging Face voice</strong>
-                <small>Uses the configured Hugging Face realtime endpoint.</small>
-              </span>
-            </label>
-            <label class="output-choice" data-output-card="gemini_tts">
-              <input type="radio" name="local-stt-output" value="gemini_tts" />
-              <span>
-                <strong>Gemini Flash 3.1 TTS</strong>
-                <small>On-device Moonshine STT → Gemini text response → Gemini 3.1 Flash TTS. Requires <code>GEMINI_API_KEY</code>.</small>
-              </span>
-            </label>
-            <label class="output-choice" data-output-card="chatterbox">
-              <input type="radio" name="local-stt-output" value="chatterbox" />
-              <span>
-                <strong>Chatterbox TTS</strong>
-                <small>On-device Moonshine STT → Ollama LLM → Chatterbox voice-clone TTS. No API key needed.</small>
-              </span>
-            </label>
-            <label class="output-choice" data-output-card="elevenlabs">
-              <input type="radio" name="local-stt-output" value="elevenlabs" />
-              <span>
-                <strong>ElevenLabs TTS</strong>
-                <small>On-device Moonshine STT → Gemini Flash response → ElevenLabs voice. Requires <code>ELEVENLABS_API_KEY</code>.</small>
-              </span>
-            </label>
-            <label class="output-choice" data-output-card="llama_elevenlabs_tts">
-              <input type="radio" name="local-stt-output" value="llama_elevenlabs_tts" />
-              <span>
-                <strong>llama.cpp + ElevenLabs TTS</strong>
-                <small>On-device Moonshine STT → local llama.cpp LLM → ElevenLabs voice. Requires <code>ELEVENLABS_API_KEY</code> + <code>LLAMA_CPP_URL</code>.</small>
-              </span>
-            </label>
+          <label>Audio pipeline</label>
+          <div class="pipeline-axis-grid">
+            <!-- Column 1: Input (STT) -->
+            <fieldset class="pipeline-axis">
+              <legend>Input (STT)</legend>
+              <label class="pipeline-cell">
+                <input type="radio" name="pipeline-input" value="moonshine" checked disabled />
+                <span>
+                  <strong>Moonshine</strong>
+                  <small>On-device streaming STT</small>
+                </span>
+              </label>
+            </fieldset>
+
+            <!-- Column 2: LLM -->
+            <fieldset class="pipeline-axis">
+              <legend>LLM</legend>
+              <label class="pipeline-cell" data-llm-cell="llama">
+                <input type="radio" name="pipeline-llm" value="llama" />
+                <span>
+                  <strong>llama.cpp local</strong>
+                  <small>Local LAN inference. Requires <code>LLAMA_CPP_URL</code>.</small>
+                </span>
+              </label>
+              <label class="pipeline-cell" data-llm-cell="gemini">
+                <input type="radio" name="pipeline-llm" value="gemini" />
+                <span>
+                  <strong>Gemini Flash text</strong>
+                  <small>Cloud text generation. Requires <code>GEMINI_API_KEY</code>.</small>
+                </span>
+              </label>
+              <label class="pipeline-cell" data-llm-cell="openai" title="OpenAI Realtime bundles LLM + TTS — select in Output column">
+                <input type="radio" name="pipeline-llm" value="openai" disabled />
+                <span>
+                  <strong>OpenAI Realtime</strong>
+                  <small>Bundled with OpenAI Realtime output.</small>
+                </span>
+              </label>
+              <label class="pipeline-cell" data-llm-cell="huggingface" title="HuggingFace Realtime bundles LLM + TTS — select in Output column">
+                <input type="radio" name="pipeline-llm" value="huggingface" disabled />
+                <span>
+                  <strong>HuggingFace Realtime</strong>
+                  <small>Bundled with HuggingFace Realtime output.</small>
+                </span>
+              </label>
+            </fieldset>
+
+            <!-- Column 3: Output (TTS) -->
+            <fieldset class="pipeline-axis">
+              <legend>Output (TTS)</legend>
+              <label class="pipeline-cell" data-output-cell="chatterbox" data-output-card="chatterbox">
+                <input type="radio" name="local-stt-output" value="chatterbox" />
+                <span>
+                  <strong>Chatterbox TTS</strong>
+                  <small>Local voice-clone TTS. No API key needed.</small>
+                </span>
+              </label>
+              <label class="pipeline-cell" data-output-cell="elevenlabs" data-output-card="elevenlabs">
+                <input type="radio" name="local-stt-output" value="elevenlabs" />
+                <span>
+                  <strong>ElevenLabs TTS</strong>
+                  <small>Cloud voice synthesis. Requires <code>ELEVENLABS_API_KEY</code>.</small>
+                </span>
+              </label>
+              <label class="pipeline-cell" data-output-cell="gemini_tts" data-output-card="gemini_tts">
+                <input type="radio" name="local-stt-output" value="gemini_tts" />
+                <span>
+                  <strong>Gemini Flash 3.1 TTS</strong>
+                  <small>Cloud TTS. Requires <code>GEMINI_API_KEY</code>. Uses Gemini for LLM.</small>
+                </span>
+              </label>
+              <label class="pipeline-cell" data-output-cell="openai" data-output-card="openai" title="Bundles LLM + TTS — auto-selects OpenAI LLM">
+                <input type="radio" name="local-stt-output" value="openai" />
+                <span>
+                  <strong>OpenAI Realtime</strong>
+                  <small>Bundled realtime voice. Requires <code>OPENAI_API_KEY</code>.</small>
+                </span>
+              </label>
+              <label class="pipeline-cell" data-output-cell="huggingface" data-output-card="huggingface" title="Bundles LLM + TTS — auto-selects HuggingFace LLM">
+                <input type="radio" name="local-stt-output" value="huggingface" />
+                <span>
+                  <strong>HuggingFace Realtime</strong>
+                  <small>Bundled realtime voice. Requires HF connection.</small>
+                </span>
+              </label>
+            </fieldset>
           </div>
+          <!-- Hidden select kept for back-compat with the server save path -->
           <select id="local-stt-response" class="sr-only" aria-hidden="true" tabindex="-1">
             <option value="openai">OpenAI Realtime</option>
             <option value="huggingface">Hugging Face</option>
@@ -310,6 +353,8 @@
             <option value="elevenlabs">ElevenLabs TTS</option>
             <option value="llama_elevenlabs_tts">llama.cpp + ElevenLabs TTS</option>
           </select>
+          <!-- Hidden input for the LLM backend axis -->
+          <input type="hidden" id="local-stt-llm-backend" value="llama" />
 
           <div id="chatterbox-fields" style="display:none">
             <label for="chatterbox-url">Chatterbox server URL</label>
