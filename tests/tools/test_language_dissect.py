@@ -5,7 +5,7 @@ import sys
 import json
 import importlib.util
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -430,3 +430,316 @@ class TestDissectPhraseDecomposition:
         """The bundled lexicon must have at least 200 entries."""
         lexicon = ld_module._get_lexicon()
         assert len(lexicon) >= 200, f"Expected >= 200 lexicon entries, got {len(lexicon)}"
+
+
+# ---------------------------------------------------------------------------
+# LLM-assisted fallback (Issue #236)
+# ---------------------------------------------------------------------------
+
+_NOVEL_PHRASE = "zorp quux blorp"  # Gibberish — guaranteed low-quality decomposition.
+
+# Canonical well-formed LLM response payload.
+_GOOD_LLM_RESPONSE = {
+    "literal_words": [
+        "zorp (nonsense filler word)",
+        "quux (placeholder jargon)",
+        "blorp (empty buzzword)",
+    ],
+    "euphemism_target": "meaningless corporate noise",
+    "dissection_suggestion": "Strip the syllables away and you're left with nothing.",
+}
+
+
+def _make_http_mock(response_json: dict | None = None, *, raise_exc: Exception | None = None) -> AsyncMock:
+    """Build an AsyncMock httpx.AsyncClient whose .post() returns *response_json*."""
+    mock_client = MagicMock()
+    if raise_exc is not None:
+        mock_client.post = AsyncMock(side_effect=raise_exc)
+    else:
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": json.dumps(response_json or _GOOD_LLM_RESPONSE)}}]
+        }
+        mock_client.post = AsyncMock(return_value=mock_response)
+    return mock_client
+
+
+def _make_deps(http_client=None, llama_url: str | None = "http://llama.lan:11434") -> MagicMock:
+    """Build a MagicMock ToolDependencies with optional http_client and llama_url."""
+    deps = MagicMock()
+    deps.http_client = http_client
+    deps.llama_url = llama_url
+    return deps
+
+
+class TestLLMFallbackDisabled:
+    """When LANGUAGE_DISSECT_LLM_FALLBACK_ENABLED is False, LLM must never be called."""
+
+    @pytest.mark.asyncio
+    async def test_env_var_false_no_llm_call(self, ld_module):
+        """LLM is never called when the feature flag is off."""
+        http_mock = _make_http_mock()
+        with patch.dict("os.environ", {"REACHY_MINI_LANGUAGE_DISSECT_LLM_FALLBACK": "0"}):
+            # Re-read config via the module's internal import.
+            from robot_comic.config import refresh_runtime_config_from_env
+
+            refresh_runtime_config_from_env()
+            result = await ld_module.dissect_phrase_async(
+                _NOVEL_PHRASE,
+                http_client=http_mock,
+                llama_url="http://llama.lan:11434",
+            )
+        http_mock.post.assert_not_called()
+        assert result["decomposition_quality"] == "low"
+
+    @pytest.mark.asyncio
+    async def test_default_no_llm_call_no_http_client(self, ld_module):
+        """With no http_client, the LLM path is skipped and quality stays 'low'."""
+        result = await ld_module.dissect_phrase_async(_NOVEL_PHRASE, http_client=None, llama_url=None)
+        assert result["decomposition_quality"] == "low"
+
+    @pytest.mark.asyncio
+    async def test_curated_path_unaffected(self, ld_module):
+        """Curated entries are never sent to the LLM regardless of flag state."""
+        http_mock = _make_http_mock()
+        with patch.dict("os.environ", {"REACHY_MINI_LANGUAGE_DISSECT_LLM_FALLBACK": "1"}):
+            from robot_comic.config import refresh_runtime_config_from_env
+
+            refresh_runtime_config_from_env()
+            result = await ld_module.dissect_phrase_async(
+                "thoughts and prayers",
+                http_client=http_mock,
+                llama_url="http://llama.lan:11434",
+            )
+        http_mock.post.assert_not_called()
+        assert "decomposition_quality" not in result
+
+    @pytest.mark.asyncio
+    async def test_high_quality_decomposition_unaffected(self, ld_module):
+        """High-quality decompositions don't hit the LLM even when flag is on."""
+        http_mock = _make_http_mock()
+        with patch.dict("os.environ", {"REACHY_MINI_LANGUAGE_DISSECT_LLM_FALLBACK": "1"}):
+            from robot_comic.config import refresh_runtime_config_from_env
+
+            refresh_runtime_config_from_env()
+            result = await ld_module.dissect_phrase_async(
+                "institutional behavior",
+                http_client=http_mock,
+                llama_url="http://llama.lan:11434",
+            )
+        http_mock.post.assert_not_called()
+        assert result["decomposition_quality"] == "high"
+
+
+class TestLLMFallbackEnabled:
+    """Behaviour when REACHY_MINI_LANGUAGE_DISSECT_LLM_FALLBACK=1."""
+
+    @pytest.fixture(autouse=True)
+    def enable_flag(self):
+        with patch.dict("os.environ", {"REACHY_MINI_LANGUAGE_DISSECT_LLM_FALLBACK": "1"}):
+            from robot_comic.config import refresh_runtime_config_from_env
+
+            refresh_runtime_config_from_env()
+            yield
+        # Restore default (disabled) after each test.
+        with patch.dict("os.environ", {"REACHY_MINI_LANGUAGE_DISSECT_LLM_FALLBACK": "0"}):
+            from robot_comic.config import refresh_runtime_config_from_env
+
+            refresh_runtime_config_from_env()
+
+    @pytest.mark.asyncio
+    async def test_llm_success_returns_quality_llm(self, ld_module):
+        """Successful LLM call returns decomposition_quality 'llm'."""
+        http_mock = _make_http_mock(_GOOD_LLM_RESPONSE)
+        with patch.object(ld_module, "_cache_llm_result"):
+            result = await ld_module.dissect_phrase_async(
+                _NOVEL_PHRASE,
+                http_client=http_mock,
+                llama_url="http://llama.lan:11434",
+            )
+        assert result["decomposition_quality"] == "llm"
+        assert result["phrase"] == _NOVEL_PHRASE
+        assert isinstance(result["literal_words"], dict)
+        assert result["euphemism_target"] == _GOOD_LLM_RESPONSE["euphemism_target"]
+
+    @pytest.mark.asyncio
+    async def test_llm_success_contains_all_required_keys(self, ld_module):
+        """LLM result includes all standard dissection keys."""
+        http_mock = _make_http_mock(_GOOD_LLM_RESPONSE)
+        with patch.object(ld_module, "_cache_llm_result"):
+            result = await ld_module.dissect_phrase_async(
+                _NOVEL_PHRASE,
+                http_client=http_mock,
+                llama_url="http://llama.lan:11434",
+            )
+        required = {"phrase", "literal_words", "euphemism_target", "dissection_suggestion", "decomposition_quality"}
+        assert required.issubset(result.keys())
+
+    @pytest.mark.asyncio
+    async def test_llm_parse_error_falls_back_to_low(self, ld_module):
+        """Non-JSON LLM response falls back to 'low' quality without raising."""
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"choices": [{"message": {"content": "not valid json {"}}]}
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        result = await ld_module.dissect_phrase_async(
+            _NOVEL_PHRASE,
+            http_client=mock_client,
+            llama_url="http://llama.lan:11434",
+        )
+        assert result["decomposition_quality"] == "low"
+
+    @pytest.mark.asyncio
+    async def test_llm_network_error_falls_back_to_low(self, ld_module):
+        """Network error during LLM call falls back to 'low' without raising."""
+        import httpx
+
+        http_mock = _make_http_mock(raise_exc=httpx.ConnectError("refused"))
+        result = await ld_module.dissect_phrase_async(
+            _NOVEL_PHRASE,
+            http_client=http_mock,
+            llama_url="http://llama.lan:11434",
+        )
+        assert result["decomposition_quality"] == "low"
+
+    @pytest.mark.asyncio
+    async def test_llm_timeout_falls_back_to_low(self, ld_module):
+        """Timeout during LLM call falls back to 'low' without raising."""
+        import httpx
+
+        http_mock = _make_http_mock(raise_exc=httpx.TimeoutException("timed out"))
+        result = await ld_module.dissect_phrase_async(
+            _NOVEL_PHRASE,
+            http_client=http_mock,
+            llama_url="http://llama.lan:11434",
+        )
+        assert result["decomposition_quality"] == "low"
+
+    @pytest.mark.asyncio
+    async def test_llm_empty_literal_words_falls_back_to_low(self, ld_module):
+        """Degenerate LLM response (empty literal_words) falls back to 'low'."""
+        bad_response = {
+            "literal_words": [],  # empty — sanity check should reject this
+            "euphemism_target": "nothing",
+            "dissection_suggestion": "nothing",
+        }
+        http_mock = _make_http_mock(bad_response)
+        result = await ld_module.dissect_phrase_async(
+            _NOVEL_PHRASE,
+            http_client=http_mock,
+            llama_url="http://llama.lan:11434",
+        )
+        assert result["decomposition_quality"] == "low"
+
+    @pytest.mark.asyncio
+    async def test_llm_result_cached_to_lexicon(self, ld_module, tmp_path):
+        """Successful LLM result is written atomically to the lexicon JSON.
+
+        Two sub-checks:
+        1. ``dissect_phrase_async`` calls ``_cache_llm_result`` with the right data.
+        2. ``_cache_llm_result`` itself writes the expected JSON structure.
+        """
+        lexicon_file = tmp_path / "language_lexicon.json"
+        http_mock = _make_http_mock(_GOOD_LLM_RESPONSE)
+        captured_cache_calls: list[tuple] = []
+
+        # Intercept cache writes to avoid touching the real lexicon file.
+        def _spy_cache(phrase: str, result: dict, **kwargs) -> None:
+            captured_cache_calls.append((phrase, result))
+
+        with patch.object(ld_module, "_cache_llm_result", side_effect=_spy_cache):
+            result = await ld_module.dissect_phrase_async(
+                _NOVEL_PHRASE,
+                http_client=http_mock,
+                llama_url="http://llama.lan:11434",
+            )
+
+        assert result["decomposition_quality"] == "llm"
+        # Verify the cache was called once with the phrase and LLM payload.
+        assert len(captured_cache_calls) == 1
+        assert captured_cache_calls[0][0] == _NOVEL_PHRASE
+        captured_result = captured_cache_calls[0][1]
+        assert captured_result.get("euphemism_target") == _GOOD_LLM_RESPONSE["euphemism_target"]
+        assert isinstance(captured_result.get("literal_words"), list)
+
+        # Verify the write mechanism directly using the real function.
+        ld_module._cache_llm_result(_NOVEL_PHRASE, _GOOD_LLM_RESPONSE, lexicon_path=lexicon_file)
+        assert lexicon_file.exists(), "Lexicon file should have been created"
+        with lexicon_file.open(encoding="utf-8") as fh:
+            cached = json.load(fh)
+        assert _NOVEL_PHRASE.strip().lower() in cached
+        entry = cached[_NOVEL_PHRASE.strip().lower()]
+        assert entry.get("source") == "llm-cached"
+        assert isinstance(entry.get("literal_words"), dict)
+        assert entry.get("euphemism_target") == _GOOD_LLM_RESPONSE["euphemism_target"]
+
+    @pytest.mark.asyncio
+    async def test_cache_degenerate_result_not_written(self, ld_module, tmp_path):
+        """Degenerate LLM result (empty literal_words) is NOT cached."""
+        lexicon_file = tmp_path / "language_lexicon.json"
+        bad_result = {"literal_words": [], "euphemism_target": "x", "dissection_suggestion": "x"}
+        ld_module._cache_llm_result(_NOVEL_PHRASE, bad_result, lexicon_path=lexicon_file)
+        assert not lexicon_file.exists(), "Degenerate result should not be cached"
+
+    @pytest.mark.asyncio
+    async def test_cache_source_tag_is_llm_cached(self, ld_module, tmp_path):
+        """Cached entries carry source='llm-cached' to distinguish from curated."""
+        lexicon_file = tmp_path / "language_lexicon.json"
+        ld_module._cache_llm_result(_NOVEL_PHRASE, _GOOD_LLM_RESPONSE, lexicon_path=lexicon_file)
+        with lexicon_file.open(encoding="utf-8") as fh:
+            cached = json.load(fh)
+        assert cached[_NOVEL_PHRASE.strip().lower()]["source"] == "llm-cached"
+
+    @pytest.mark.asyncio
+    async def test_cache_write_is_atomic(self, ld_module, tmp_path):
+        """Cache write uses tmp+rename so existing file is not left corrupt."""
+        lexicon_file = tmp_path / "language_lexicon.json"
+        # Pre-populate so we can verify the file is replaced, not truncated.
+        existing = {"existing_entry": {"literal_words": {}, "euphemism_target": "old", "dissection_suggestion": ""}}
+        with lexicon_file.open("w", encoding="utf-8") as fh:
+            json.dump(existing, fh)
+
+        ld_module._cache_llm_result(_NOVEL_PHRASE, _GOOD_LLM_RESPONSE, lexicon_path=lexicon_file)
+
+        with lexicon_file.open(encoding="utf-8") as fh:
+            cached = json.load(fh)
+        # Both old and new entries should be present.
+        assert "existing_entry" in cached
+        assert _NOVEL_PHRASE.strip().lower() in cached
+
+
+class TestLanguageDissectToolLLMWiring:
+    """Verify the LanguageDissect Tool class wires deps.http_client + deps.llama_url."""
+
+    @pytest.fixture
+    def tool(self, ld_module):
+        return ld_module.LanguageDissect()
+
+    @pytest.mark.asyncio
+    async def test_tool_passes_http_client_from_deps(self, tool, ld_module):
+        """Tool.__call__ forwards deps.http_client to the async dissect path."""
+        http_mock = _make_http_mock(_GOOD_LLM_RESPONSE)
+        deps = _make_deps(http_client=http_mock, llama_url="http://llama.lan:11434")
+        with patch.dict("os.environ", {"REACHY_MINI_LANGUAGE_DISSECT_LLM_FALLBACK": "1"}):
+            from robot_comic.config import refresh_runtime_config_from_env
+
+            refresh_runtime_config_from_env()
+            with patch.object(ld_module, "_cache_llm_result"):
+                result = await tool(deps, phrase=_NOVEL_PHRASE)
+        # LLM should have been called via the injected http_client.
+        assert result["decomposition_quality"] == "llm"
+        http_mock.post.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_tool_no_http_client_skips_llm(self, tool):
+        """Tool.__call__ skips LLM when deps.http_client is None."""
+        deps = _make_deps(http_client=None, llama_url=None)
+        with patch.dict("os.environ", {"REACHY_MINI_LANGUAGE_DISSECT_LLM_FALLBACK": "1"}):
+            from robot_comic.config import refresh_runtime_config_from_env
+
+            refresh_runtime_config_from_env()
+            result = await tool(deps, phrase=_NOVEL_PHRASE)
+        assert result["decomposition_quality"] == "low"

@@ -69,6 +69,11 @@ class ToolDependencies:
     # is available; otherwise left as None to keep the path inert.
     face_db: Any | None = None  # FaceDatabase from vision/face_db.py
     face_embedder: Any | None = None  # FaceEmbedder implementor from vision/
+    # HTTP client and llama-server URL for tools that need to make LLM calls
+    # (e.g. language_dissect LLM fallback).  Injected by handlers that own an
+    # httpx.AsyncClient; None in sim/dev mode or handlers without a local LLM.
+    http_client: Any | None = None  # httpx.AsyncClient
+    llama_url: str | None = None  # base URL of the llama-server instance
 
 
 # Tool base class

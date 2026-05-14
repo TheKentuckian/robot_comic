@@ -135,6 +135,11 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         call super() then add their own credential / client setup.
         """
         self._http = httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0))
+        # Expose the shared HTTP client and llama URL via deps so tools that
+        # need to make LLM calls (e.g. language_dissect LLM fallback) can
+        # access them without importing the handler.
+        self.deps.http_client = self._http
+        self.deps.llama_url = self._llama_cpp_url
         self.tool_manager.start_up(tool_callbacks=[self._handle_tool_notification])
 
     async def start_up(self) -> None:
