@@ -792,6 +792,7 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
                                 "turn.id": self._turn_id,
                                 "session.id": self._session_id,
                                 "robot.mode": self.BACKEND_PROVIDER,
+                                "robot.persona": telemetry.current_persona(),
                             },
                         )
                         self._turn_ctx_token = otel_context.attach(trace.set_span_in_context(self._turn_span))

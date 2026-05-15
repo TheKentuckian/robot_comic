@@ -522,6 +522,7 @@ class LocalSTTInputMixin:
                     "turn.id": _turn_id,
                     "session.id": _session_id,
                     "robot.mode": "local_stt",
+                    "robot.persona": telemetry.current_persona(),
                 },
             )
             if hasattr(self, "_turn_span"):

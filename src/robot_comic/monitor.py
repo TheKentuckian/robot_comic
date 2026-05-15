@@ -541,6 +541,12 @@ def main() -> None:
     _battery_last_check: list[float] = [0.0]
     _battery_base_url: str = _ADMIN_BASE_URL
 
+    # Current persona — polled every ~30 s from the same admin API used by the
+    # S-key overlay. Stored as a single string so the header can render it
+    # cheaply alongside battery in the panel subtitle (#303).
+    _current_persona: list[Optional[str]] = [None]
+    _persona_last_check: list[float] = [0.0]
+
     def _battery_footer() -> Text:
         """Render a compact battery status line for the panel subtitle."""
         batt = _battery[0]
@@ -564,6 +570,13 @@ def main() -> None:
         charge_mark = " ⚡" if charging else ""
         t = Text(f"  battery: {percent}%{charge_mark}", style=style)
         return t
+
+    def _persona_footer() -> Text:
+        """Render a compact current-persona indicator for the panel subtitle."""
+        name = _current_persona[0]
+        if not name:
+            return Text("")
+        return Text(f"  persona: {name}", style="cyan")
 
     def _render() -> Panel:
         pending = buffer.latest_pending
@@ -591,7 +604,10 @@ def main() -> None:
         n = len(turns)
         title_parts = "[bold]robot-comic-monitor[/bold]" + title_suffix
         batt_text = _battery_footer()
+        persona_text = _persona_footer()
         subtitle_text = Text(f"{n} turn{'s' if n != 1 else ''} recorded", style="dim")
+        if persona_text.plain:
+            subtitle_text.append_text(persona_text)
         if batt_text.plain:
             subtitle_text.append_text(batt_text)
         subtitle = subtitle_text
@@ -637,6 +653,18 @@ def main() -> None:
                     except (URLError, OSError, ValueError):
                         pass  # no admin server running — silently skip
                     _battery_last_check[0] = now
+
+                # Poll current persona every ~30 s from the same admin API
+                # that powers the S-key overlay (#303). Failures are silent
+                # so a stopped app does not spam the header.
+                if now - _persona_last_check[0] >= 30.0:
+                    try:
+                        _choices, _current = _fetch_personas(_battery_base_url)
+                        if _current:
+                            _current_persona[0] = _current
+                    except Exception:
+                        pass
+                    _persona_last_check[0] = now
 
                 # Poll for a keystroke (short timeout to maintain ~6 fps render).
                 key = inp.poll_key(timeout=0.1)

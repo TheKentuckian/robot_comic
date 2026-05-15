@@ -1055,6 +1055,7 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
                                                 "turn.id": self._turn_id,
                                                 "session.id": self._session_id,
                                                 "robot.mode": "gemini",
+                                                "robot.persona": telemetry.current_persona(),
                                             },
                                         )
                                         self._turn_ctx_token = otel_context.attach(
