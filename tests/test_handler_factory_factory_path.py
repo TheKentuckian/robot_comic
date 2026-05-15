@@ -597,11 +597,12 @@ def test_composable_path_copy_constructs_fresh_legacy_for_gemini_elevenlabs(
 @pytest.mark.parametrize(
     "output_backend, target_module, target_class",
     [
-        # NOTE: chatterbox is migrated as of Phase 4c.1 — its composable
-        # routing is pinned by ``test_composable_path_*_for_llama_chatterbox``
-        # above. The rows below cover the moonshine triples that remain on
-        # the legacy concrete handlers until Phase 4c.2 onwards.
-        (AUDIO_OUTPUT_GEMINI_TTS, "robot_comic.gemini_tts", "LocalSTTGeminiTTSHandler"),
+        # NOTE: chatterbox is migrated as of Phase 4c.1; gemini_tts is
+        # migrated as of Phase 4c.5 — their composable routing is pinned
+        # by ``test_composable_path_*_for_llama_chatterbox`` and
+        # ``test_composable_path_*_for_gemini_tts`` respectively. The rows
+        # below cover the moonshine triples that remain on the legacy
+        # concrete handlers until 4c-tris (``LocalSTT*RealtimeHandler``).
         (AUDIO_OUTPUT_OPENAI_REALTIME, "robot_comic.local_stt_realtime", "LocalSTTOpenAIRealtimeHandler"),
         (AUDIO_OUTPUT_HF, "robot_comic.local_stt_realtime", "LocalSTTHuggingFaceRealtimeHandler"),
     ],
@@ -823,6 +824,143 @@ def test_composable_path_copy_constructs_fresh_legacy_for_gemini_fallback_eleven
         original = HandlerFactory.build(
             AUDIO_INPUT_MOONSHINE,
             AUDIO_OUTPUT_ELEVENLABS,
+            mock_deps,
+            pipeline_mode=PIPELINE_MODE_COMPOSABLE,
+        )
+        copy = original.copy()
+
+    assert copy is not original
+    assert copy._tts_handler is not original._tts_handler
+    assert copy.pipeline is not original.pipeline
+
+
+# ---------------------------------------------------------------------------
+# Phase 4c.5 — (moonshine, gemini_tts) composable path
+# ---------------------------------------------------------------------------
+#
+# Last 4c triple. The bundled Gemini LLM+TTS handler ``LocalSTTGeminiTTSHandler``
+# is wrapped by three adapters that share one ``genai.Client`` instance:
+# ``MoonshineSTTAdapter``, ``GeminiBundledLLMAdapter``, ``GeminiTTSAdapter``.
+# The bundled-LLM adapter is a 4c.5-specific adapter (NOT the 4c.2
+# ``GeminiLLMAdapter``) because the handler exposes ``_run_llm_with_tools``
+# rather than ``_call_llm``; see Phase 4c.5 spec Q1 for the rationale.
+
+
+def test_legacy_path_returns_legacy_handler_for_gemini_tts(
+    monkeypatch: pytest.MonkeyPatch, mock_deps: MagicMock
+) -> None:
+    """``FACTORY_PATH=legacy`` (default) keeps today's LocalSTTGeminiTTSHandler."""
+    from robot_comic import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_LEGACY)
+
+    fake = _fake_cls("LocalSTTGeminiTTSHandler")
+    with patch("robot_comic.gemini_tts.LocalSTTGeminiTTSHandler", fake):
+        result = HandlerFactory.build(
+            AUDIO_INPUT_MOONSHINE,
+            AUDIO_OUTPUT_GEMINI_TTS,
+            mock_deps,
+            pipeline_mode=PIPELINE_MODE_COMPOSABLE,
+        )
+
+    assert isinstance(result, fake)
+
+
+def test_composable_path_returns_wrapper_for_gemini_tts(monkeypatch: pytest.MonkeyPatch, mock_deps: MagicMock) -> None:
+    """``FACTORY_PATH=composable`` + (moonshine, gemini_tts) → ComposableConversationHandler."""
+    from robot_comic import config as cfg_mod
+    from robot_comic.composable_pipeline import ComposablePipeline
+    from robot_comic.composable_conversation_handler import ComposableConversationHandler
+
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_COMPOSABLE)
+
+    fake_legacy = _fake_cls("LocalSTTGeminiTTSHandler")
+    with patch("robot_comic.gemini_tts.LocalSTTGeminiTTSHandler", fake_legacy):
+        result = HandlerFactory.build(
+            AUDIO_INPUT_MOONSHINE,
+            AUDIO_OUTPUT_GEMINI_TTS,
+            mock_deps,
+            pipeline_mode=PIPELINE_MODE_COMPOSABLE,
+        )
+
+    assert isinstance(result, ComposableConversationHandler)
+    assert isinstance(result.pipeline, ComposablePipeline)
+    assert isinstance(result._tts_handler, fake_legacy)
+
+
+def test_composable_path_wires_three_adapters_for_gemini_tts(
+    monkeypatch: pytest.MonkeyPatch, mock_deps: MagicMock
+) -> None:
+    """All three adapters wrap the same single LocalSTTGeminiTTSHandler instance."""
+    from robot_comic import config as cfg_mod
+    from robot_comic.adapters import (
+        GeminiTTSAdapter,
+        MoonshineSTTAdapter,
+        GeminiBundledLLMAdapter,
+    )
+
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_COMPOSABLE)
+
+    fake_legacy = _fake_cls("LocalSTTGeminiTTSHandler")
+    with patch("robot_comic.gemini_tts.LocalSTTGeminiTTSHandler", fake_legacy):
+        result = HandlerFactory.build(
+            AUDIO_INPUT_MOONSHINE,
+            AUDIO_OUTPUT_GEMINI_TTS,
+            mock_deps,
+            pipeline_mode=PIPELINE_MODE_COMPOSABLE,
+        )
+
+    pipe = result.pipeline
+    assert isinstance(pipe.stt, MoonshineSTTAdapter)
+    assert isinstance(pipe.llm, GeminiBundledLLMAdapter)
+    assert isinstance(pipe.tts, GeminiTTSAdapter)
+    # All three adapters share the same legacy handler instance — one
+    # ``genai.Client`` backs both LLM and TTS calls.
+    assert pipe.stt._handler is pipe.llm._handler
+    assert pipe.llm._handler is pipe.tts._handler
+    assert pipe.stt._handler is result._tts_handler
+
+
+def test_composable_path_seeds_system_prompt_for_gemini_tts(
+    monkeypatch: pytest.MonkeyPatch, mock_deps: MagicMock
+) -> None:
+    """The pipeline's system prompt is sourced from prompts.get_session_instructions."""
+    from robot_comic import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_COMPOSABLE)
+    monkeypatch.setattr(
+        "robot_comic.prompts.get_session_instructions",
+        lambda: "TEST INSTRUCTIONS",
+    )
+
+    fake_legacy = _fake_cls("LocalSTTGeminiTTSHandler")
+    with patch("robot_comic.gemini_tts.LocalSTTGeminiTTSHandler", fake_legacy):
+        result = HandlerFactory.build(
+            AUDIO_INPUT_MOONSHINE,
+            AUDIO_OUTPUT_GEMINI_TTS,
+            mock_deps,
+            pipeline_mode=PIPELINE_MODE_COMPOSABLE,
+        )
+
+    assert result.pipeline._conversation_history[0] == {
+        "role": "system",
+        "content": "TEST INSTRUCTIONS",
+    }
+
+
+def test_composable_path_copy_constructs_fresh_legacy_for_gemini_tts(
+    monkeypatch: pytest.MonkeyPatch, mock_deps: MagicMock
+) -> None:
+    """copy() must produce an independent wrapper + fresh LocalSTTGeminiTTSHandler."""
+    from robot_comic import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_COMPOSABLE)
+
+    fake_legacy = _fake_cls("LocalSTTGeminiTTSHandler")
+    with patch("robot_comic.gemini_tts.LocalSTTGeminiTTSHandler", fake_legacy):
+        original = HandlerFactory.build(
+            AUDIO_INPUT_MOONSHINE,
+            AUDIO_OUTPUT_GEMINI_TTS,
             mock_deps,
             pipeline_mode=PIPELINE_MODE_COMPOSABLE,
         )
