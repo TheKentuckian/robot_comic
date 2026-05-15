@@ -18,7 +18,8 @@ that don't depend on the legacy classes; the adapter API stays stable so
 """
 
 from robot_comic.adapters.llama_llm_adapter import LlamaLLMAdapter
+from robot_comic.adapters.moonshine_stt_adapter import MoonshineSTTAdapter
 from robot_comic.adapters.elevenlabs_tts_adapter import ElevenLabsTTSAdapter
 
 
-__all__ = ["ElevenLabsTTSAdapter", "LlamaLLMAdapter"]
+__all__ = ["ElevenLabsTTSAdapter", "LlamaLLMAdapter", "MoonshineSTTAdapter"]
