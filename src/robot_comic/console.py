@@ -15,7 +15,7 @@ import sys
 import time
 import asyncio
 import logging
-from typing import Any, List, Optional, cast
+from typing import Any, List, Optional, Protocol, cast
 from pathlib import Path
 
 from reachy_mini import ReachyMini
@@ -43,6 +43,7 @@ from robot_comic.config import (
     LOCAL_STT_MODEL_CHOICES,
     CHATTERBOX_DEFAULT_VOICE,
     HF_LOCAL_CONNECTION_MODE,
+    AUDIO_CAPTURE_PATH_ALSA_RW,
     HF_DEPLOYED_CONNECTION_MODE,
     LLAMA_ELEVENLABS_TTS_OUTPUT,
     LOCAL_STT_UPDATE_INTERVAL_ENV,
@@ -176,6 +177,46 @@ def _read_battery(robot: Optional[ReachyMini]) -> dict[str, Any]:
     return result
 
 
+class _AudioSource(Protocol):
+    """Uniform shape for record_loop's audio producer.
+
+    Both _DaemonAudioSource (legacy path via r.media) and AlsaRwCapture
+    (direct arecord) conform to this Protocol so record_loop is agnostic.
+    """
+
+    @property
+    def sample_rate(self) -> int: ...
+
+    def start(self) -> None: ...
+
+    def stop(self) -> None: ...
+
+    def get_audio_sample(self) -> Any: ...
+
+
+class _DaemonAudioSource:
+    """Adapter that exposes r.media.get_audio_sample as the _AudioSource shape."""
+
+    def __init__(self, robot: Any) -> None:
+        self._robot = robot
+        self._sample_rate = int(robot.media.get_input_audio_samplerate())
+
+    @property
+    def sample_rate(self) -> int:
+        return self._sample_rate
+
+    def start(self) -> None:
+        # Daemon's media.start_recording() is called separately in launch().
+        # No additional work needed here.
+        return None
+
+    def stop(self) -> None:
+        return None
+
+    def get_audio_sample(self) -> Any:
+        return self._robot.media.get_audio_sample()
+
+
 class LocalStream:
     """LocalStream using Reachy Mini's recorder/player."""
 
@@ -214,6 +255,7 @@ class LocalStream:
         self._robot = robot
         self._stop_event = asyncio.Event()
         self._tasks: List[asyncio.Task[None]] = []
+        self._audio_source: Optional[_AudioSource] = None
         # Allow the handler to flush the player queue when appropriate.
         if self.handler is not None:
             self.handler._clear_queue = self.clear_audio_queue
@@ -1230,6 +1272,22 @@ class LocalStream:
             elif hasattr(audio, "clear_player") and callable(audio.clear_player):
                 audio.clear_player()
         self.handler.output_queue = asyncio.Queue()
+
+    def _build_audio_source(self) -> Optional[_AudioSource]:
+        """Select the audio source per config.AUDIO_CAPTURE_PATH.
+
+        Returns None when self._robot is None (sim mode) — record_loop
+        never runs in that case, but __init__ may still call this to set
+        the field.
+        """
+        if self._robot is None:
+            return None
+        path = getattr(config, "AUDIO_CAPTURE_PATH", "daemon")
+        if path == AUDIO_CAPTURE_PATH_ALSA_RW:
+            from robot_comic.audio_input import AlsaRwCapture
+
+            return AlsaRwCapture()
+        return _DaemonAudioSource(self._robot)
 
     async def record_loop(self) -> None:
         """Read mic frames from the recorder and forward them to the handler."""
