@@ -31,19 +31,39 @@ SWEEP_POSITIONS = ["left", "up", "right", "front"]
 _DEFAULT_SCAN_WAIT_S = 1.5
 _SCAN_POLL_INTERVAL_S = 0.1
 
-try:
-    import mediapipe as mp
+# MediaPipe is deferred to first use — ``import mediapipe`` costs ~1.2s on
+# the Pi and is the dominant chunk of greet.py's ~3s boot import (#323
+# lever 2). The first ``_scan`` call pays the cost; subsequent calls reuse
+# the cached detector module reference. ``MP_AVAILABLE`` stays a module-level
+# attribute (initialized to ``None`` = "not yet checked") so tests that
+# ``monkeypatch.setattr(greet_mod, "MP_AVAILABLE", True/False)`` keep working.
+_mp_face_detection: Any = None
+MP_AVAILABLE: Optional[bool] = None
 
+
+def _check_mp_available() -> bool:
+    """Return whether MediaPipe is importable, lazy-loading on first call.
+
+    Tests that monkey-patch ``MP_AVAILABLE`` directly short-circuit the lazy
+    load: this function returns the patched value without re-importing.
+    """
+    global _mp_face_detection, MP_AVAILABLE
+    if MP_AVAILABLE is not None:
+        return bool(MP_AVAILABLE)
+    try:
+        import mediapipe as mp  # noqa: PLC0415 — deferred from boot
+    except ImportError:
+        _mp_face_detection = None
+        MP_AVAILABLE = False
+        return False
     _mp_face_detection = mp.solutions.face_detection
     MP_AVAILABLE = True
-except ImportError:
-    _mp_face_detection = None
-    MP_AVAILABLE = False
+    return True
 
 
 def _detect_face(frame: Any) -> bool:
     """Return True if MediaPipe detects at least one face in the BGR frame."""
-    if not MP_AVAILABLE or _mp_face_detection is None:
+    if not _check_mp_available() or _mp_face_detection is None:
         return False
     rgb = frame[..., ::-1].copy()
     with _mp_face_detection.FaceDetection(min_detection_confidence=0.3) as detector:
@@ -58,7 +78,7 @@ def _detect_face_with_scores(frame: Any) -> Tuple[bool, List[float]]:
     callers can log how MediaPipe scored the frame even when it ultimately
     returned no detections (empty list).
     """
-    if not MP_AVAILABLE or _mp_face_detection is None:
+    if not _check_mp_available() or _mp_face_detection is None:
         return False, []
     rgb = frame[..., ::-1].copy()
     with _mp_face_detection.FaceDetection(min_detection_confidence=0.3) as detector:
@@ -228,7 +248,7 @@ class Greet(Tool):
             logger.debug("greet._scan: camera_worker.get_latest_frame() returned None on initial guard")
             return {"error": "No frame available"}
 
-        if not MP_AVAILABLE:
+        if not _check_mp_available():
             return {"face_detected": True, "note": "MediaPipe unavailable, assuming face present"}
 
         # Track the latest stats so the no_subject summary line can name them.
