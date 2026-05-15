@@ -681,3 +681,37 @@ def test_composable_path_ignored_in_bundled_realtime_modes(
         )
 
     assert isinstance(result, fake)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4c.4 — (moonshine, elevenlabs, gemini-fallback) composable path
+# ---------------------------------------------------------------------------
+#
+# The "gemini-fallback" arm is the outer ``input_backend == AUDIO_INPUT_MOONSHINE``
+# fallthrough in handler_factory.py (the ``output_backend == AUDIO_OUTPUT_ELEVENLABS``
+# block below the ``LLM_BACKEND in {llama, gemini}`` arms). It is reached when
+# LLM_BACKEND is neither "llama" nor "gemini" — i.e. a typo, an unrecognised
+# value, or an empty string after .strip().lower(). In production this path
+# is effectively unreachable because the default LLM_BACKEND is "llama"; the
+# tests below use the sentinel "unknown" to deliberately trigger fallthrough.
+
+
+def test_legacy_path_returns_legacy_handler_for_gemini_fallback_elevenlabs(
+    monkeypatch: pytest.MonkeyPatch, mock_deps: MagicMock
+) -> None:
+    """``FACTORY_PATH=legacy`` + unknown LLM_BACKEND keeps LocalSTTGeminiElevenLabsHandler."""
+    from robot_comic import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod.config, "LLM_BACKEND", "unknown")
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_LEGACY)
+
+    fake = _fake_cls("LocalSTTGeminiElevenLabsHandler")
+    with patch("robot_comic.elevenlabs_tts.LocalSTTGeminiElevenLabsHandler", fake):
+        result = HandlerFactory.build(
+            AUDIO_INPUT_MOONSHINE,
+            AUDIO_OUTPUT_ELEVENLABS,
+            mock_deps,
+            pipeline_mode=PIPELINE_MODE_COMPOSABLE,
+        )
+
+    assert isinstance(result, fake)
