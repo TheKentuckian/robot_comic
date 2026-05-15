@@ -158,11 +158,7 @@ class ClampStats:
 
     def is_empty(self) -> bool:
         """Return True when no clamps or caps fired in the window."""
-        return (
-            self.velocity_caps == 0
-            and self.tracker_clamps == 0
-            and not any(self.pose_clamps.values())
-        )
+        return self.velocity_caps == 0 and self.tracker_clamps == 0 and not any(self.pose_clamps.values())
 
 
 _pose_clamp_counts: Dict[str, int] = {"roll": 0, "pitch": 0, "yaw": 0}
