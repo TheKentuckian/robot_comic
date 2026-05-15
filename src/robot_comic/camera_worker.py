@@ -199,14 +199,26 @@ class CameraWorker:
                             translation *= 0.6
                             rotation *= 0.6
 
+                            # Tracker safe-envelope clamp (#308 hypothesis 3): the
+                            # continuous tracker can produce targets that, after
+                            # composition with breathing/wobble, push the daemon's
+                            # IK into "Collision detected or head pose not
+                            # achievable!" territory. Clamping the rotation offset
+                            # here cuts those warnings off at the source.
+                            from robot_comic.motion_safety import clamp_tracker_rotation_offsets  # noqa: PLC0415
+
+                            roll_c, pitch_c, yaw_c = clamp_tracker_rotation_offsets(
+                                (float(rotation[0]), float(rotation[1]), float(rotation[2]))
+                            )
+
                             with self.face_tracking_lock:
                                 self.face_tracking_offsets = [
                                     translation[0],
                                     translation[1],
                                     translation[2],
-                                    rotation[0],
-                                    rotation[1],
-                                    rotation[2],
+                                    roll_c,
+                                    pitch_c,
+                                    yaw_c,
                                 ]
 
                         elif self.last_face_detected_time is None or self.last_face_detected_time == current_time:

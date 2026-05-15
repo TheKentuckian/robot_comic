@@ -17,11 +17,18 @@ from robot_comic.motion_safety import (
     HEAD_ROLL_MIN_RAD,
     HEAD_PITCH_MAX_RAD,
     HEAD_PITCH_MIN_RAD,
+    HEAD_TRACKER_YAW_MAX_RAD,
+    HEAD_TRACKER_YAW_MIN_RAD,
+    HEAD_TRACKER_ROLL_MAX_RAD,
+    HEAD_TRACKER_ROLL_MIN_RAD,
+    HEAD_TRACKER_PITCH_MAX_RAD,
+    HEAD_TRACKER_PITCH_MIN_RAD,
     _step_toward,
     clamp_head_pose,
     cap_head_velocity,
     _clamped_axes_seen,
     get_and_reset_clamp_stats,
+    clamp_tracker_rotation_offsets,
 )
 
 
@@ -360,6 +367,66 @@ class TestClampStatsCounter:
         cap_head_velocity(pose, pose, self.DT, 1.5)
         stats = get_and_reset_clamp_stats()
         assert stats.velocity_caps == 0
+
+
+class TestTrackerClamp:
+    """Tracker-offset clamp (#308 hypothesis 3) keeps continuous tracker
+    targets inside an envelope before they reach pose composition.
+    """
+
+    def test_in_envelope_offset_unchanged(self) -> None:
+        get_and_reset_clamp_stats()
+        # Well within all axes
+        result = clamp_tracker_rotation_offsets((0.05, 0.05, 0.05))
+        assert result == (0.05, 0.05, 0.05)
+        stats = get_and_reset_clamp_stats()
+        assert stats.tracker_clamps == 0
+
+    def test_yaw_above_max_is_clamped(self) -> None:
+        get_and_reset_clamp_stats()
+        roll, pitch, yaw = clamp_tracker_rotation_offsets((0.0, 0.0, HEAD_TRACKER_YAW_MAX_RAD + 0.5))
+        assert yaw == HEAD_TRACKER_YAW_MAX_RAD
+        assert roll == 0.0
+        assert pitch == 0.0
+        stats = get_and_reset_clamp_stats()
+        assert stats.tracker_clamps == 1
+
+    def test_yaw_below_min_is_clamped(self) -> None:
+        get_and_reset_clamp_stats()
+        _, _, yaw = clamp_tracker_rotation_offsets((0.0, 0.0, HEAD_TRACKER_YAW_MIN_RAD - 0.5))
+        assert yaw == HEAD_TRACKER_YAW_MIN_RAD
+
+    def test_pitch_above_max_is_clamped(self) -> None:
+        get_and_reset_clamp_stats()
+        _, pitch, _ = clamp_tracker_rotation_offsets((0.0, HEAD_TRACKER_PITCH_MAX_RAD + 0.3, 0.0))
+        assert pitch == HEAD_TRACKER_PITCH_MAX_RAD
+
+    def test_pitch_below_min_is_clamped(self) -> None:
+        get_and_reset_clamp_stats()
+        _, pitch, _ = clamp_tracker_rotation_offsets((0.0, HEAD_TRACKER_PITCH_MIN_RAD - 0.3, 0.0))
+        assert pitch == HEAD_TRACKER_PITCH_MIN_RAD
+
+    def test_roll_clamped(self) -> None:
+        get_and_reset_clamp_stats()
+        roll_hi, _, _ = clamp_tracker_rotation_offsets((HEAD_TRACKER_ROLL_MAX_RAD + 1.0, 0.0, 0.0))
+        roll_lo, _, _ = clamp_tracker_rotation_offsets((HEAD_TRACKER_ROLL_MIN_RAD - 1.0, 0.0, 0.0))
+        assert roll_hi == HEAD_TRACKER_ROLL_MAX_RAD
+        assert roll_lo == HEAD_TRACKER_ROLL_MIN_RAD
+        stats = get_and_reset_clamp_stats()
+        assert stats.tracker_clamps == 2
+
+    def test_multi_axis_clamp_increments_counter_once(self) -> None:
+        """A single call that clamps multiple axes counts as one event."""
+        get_and_reset_clamp_stats()
+        clamp_tracker_rotation_offsets(
+            (
+                HEAD_TRACKER_ROLL_MAX_RAD + 1.0,
+                HEAD_TRACKER_PITCH_MAX_RAD + 1.0,
+                HEAD_TRACKER_YAW_MAX_RAD + 1.0,
+            )
+        )
+        stats = get_and_reset_clamp_stats()
+        assert stats.tracker_clamps == 1
 
 
 class TestClampAllocation:

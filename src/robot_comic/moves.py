@@ -804,12 +804,13 @@ class MovementManager:
         if stats.is_empty():
             return
         logger.info(
-            "motion_safety clamps in last %.1fs: roll=%d pitch=%d yaw=%d velocity_caps=%d",
+            "motion_safety clamps in last %.1fs: roll=%d pitch=%d yaw=%d velocity_caps=%d tracker_clamps=%d",
             summary_interval_loops / self.target_frequency,
             stats.pose_clamps.get("roll", 0),
             stats.pose_clamps.get("pitch", 0),
             stats.pose_clamps.get("yaw", 0),
             stats.velocity_caps,
+            stats.tracker_clamps,
         )
 
     def _update_face_tracking(self, current_time: float) -> None:
