@@ -85,6 +85,64 @@ def test_goto_queue_move_speed_factor_clamped():
     assert move.duration == pytest.approx(0.5)
 
 
+def test_goto_queue_move_linear_by_default():
+    """Without ease=True the goto move uses straight linear interpolation."""
+    from robot_comic.dance_emotion_moves import GotoQueueMove
+
+    target = np.eye(4, dtype=np.float32)
+    move = GotoQueueMove(
+        target_head_pose=target,
+        target_antennas=(10.0, 20.0),
+        start_antennas=(0.0, 0.0),
+        duration=1.0,
+    )
+    # At t=0.5 with linear interpolation, antennas should land at the midpoint.
+    _, antennas, _ = move.evaluate(0.5)
+    assert antennas is not None
+    assert antennas[0] == pytest.approx(5.0)
+    assert antennas[1] == pytest.approx(10.0)
+
+
+def test_goto_queue_move_smoothstep_when_ease_enabled():
+    """ease=True applies cubic smoothstep (#264) so velocity is zero at endpoints."""
+    from robot_comic.dance_emotion_moves import GotoQueueMove
+
+    target = np.eye(4, dtype=np.float32)
+    move = GotoQueueMove(
+        target_head_pose=target,
+        target_antennas=(10.0, 20.0),
+        start_antennas=(0.0, 0.0),
+        duration=1.0,
+        ease=True,
+    )
+    # Smoothstep midpoint: 3*0.5² − 2*0.5³ = 0.75 − 0.25 = 0.5 → same numeric
+    # midpoint as linear, but the shape diverges off-centre. Check t=0.25:
+    # smoothstep(0.25) = 3*0.0625 − 2*0.015625 = 0.1875 − 0.03125 = 0.15625.
+    _, antennas, _ = move.evaluate(0.25)
+    assert antennas is not None
+    assert antennas[0] == pytest.approx(10.0 * 0.15625)
+    assert antennas[1] == pytest.approx(20.0 * 0.15625)
+
+
+def test_goto_queue_move_smoothstep_endpoints_match_linear():
+    """Smoothstep maps 0→0 and 1→1, so endpoints are unchanged."""
+    from robot_comic.dance_emotion_moves import GotoQueueMove
+
+    target = np.eye(4, dtype=np.float32)
+    move = GotoQueueMove(
+        target_head_pose=target,
+        target_antennas=(10.0, 20.0),
+        start_antennas=(0.0, 0.0),
+        duration=1.0,
+        ease=True,
+    )
+    _, antennas_start, _ = move.evaluate(0.0)
+    _, antennas_end, _ = move.evaluate(1.0)
+    assert antennas_start is not None and antennas_end is not None
+    assert antennas_start[0] == pytest.approx(0.0)
+    assert antennas_end[0] == pytest.approx(10.0)
+
+
 def test_movement_manager_set_speed_factor_clamps():
     from robot_comic.moves import MovementManager
 

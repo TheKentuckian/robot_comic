@@ -30,3 +30,16 @@ async def test_move_head_still_allows_down() -> None:
 
     assert result == {"status": "looking down"}
     deps.movement_manager.queue_move.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_move_head_queues_eased_goto_move() -> None:
+    """Move_head opts into smoothstep easing (#264) so the head doesn't snap."""
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    deps.reachy_mini.get_current_joint_positions.return_value = (None, (0, 0))
+
+    await MoveHead()(deps, direction="left")
+
+    deps.movement_manager.queue_move.assert_called_once()
+    queued_move = deps.movement_manager.queue_move.call_args.args[0]
+    assert queued_move.ease is True

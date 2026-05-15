@@ -96,8 +96,16 @@ class GotoQueueMove(Move):  # type: ignore
         start_body_yaw: float | None = None,
         duration: float = 1.0,
         speed_factor: float = 1.0,
+        ease: bool = False,
     ):
-        """Initialize a GotoQueueMove."""
+        """Initialize a GotoQueueMove.
+
+        ``ease`` (default False keeps the legacy linear ramp): when True, the
+        interpolation parameter ``t`` is run through a cubic smoothstep
+        (3t² − 2t³) so velocity is zero at both endpoints. Used by single-shot
+        head pointing (#264) to avoid the snap at the start and end of each
+        move when discrete ``move_head`` calls chain together.
+        """
         self.speed_factor = max(0.1, min(2.0, speed_factor))
         self._duration = duration / self.speed_factor
         self.target_head_pose = target_head_pose
@@ -106,20 +114,31 @@ class GotoQueueMove(Move):  # type: ignore
         self.start_antennas = start_antennas or (0, 0)
         self.target_body_yaw = target_body_yaw
         self.start_body_yaw = start_body_yaw or 0
+        self.ease = ease
 
     @property
     def duration(self) -> float:
         """Duration property required by official Move interface."""
         return self._duration
 
+    @staticmethod
+    def _smoothstep(t: float) -> float:
+        """Cubic smoothstep: derivative is zero at t=0 and t=1."""
+        return t * t * (3.0 - 2.0 * t)
+
     def evaluate(self, t: float) -> tuple[NDArray[np.float64] | None, NDArray[np.float64] | None, float | None]:
-        """Evaluate goto move at time t using linear interpolation."""
+        """Evaluate goto move at time t.
+
+        Linear interpolation by default; cubic smoothstep when ``ease=True``
+        was passed at construction.
+        """
         try:
             from reachy_mini.utils import create_head_pose
             from reachy_mini.utils.interpolation import linear_pose_interpolation
 
             # Clamp t to [0, 1] for interpolation
             t_clamped = max(0, min(1, t / self.duration))
+            t_eff = self._smoothstep(t_clamped) if self.ease else t_clamped
 
             # Use start pose if available, otherwise neutral
             if self.start_head_pose is not None:
@@ -128,19 +147,19 @@ class GotoQueueMove(Move):  # type: ignore
                 start_pose = create_head_pose(0, 0, 0, 0, 0, 0, degrees=True)
 
             # Interpolate head pose
-            head_pose = linear_pose_interpolation(start_pose, self.target_head_pose, t_clamped)
+            head_pose = linear_pose_interpolation(start_pose, self.target_head_pose, t_eff)
 
             # Interpolate antennas - return as numpy array
             antennas = np.array(
                 [
-                    self.start_antennas[0] + (self.target_antennas[0] - self.start_antennas[0]) * t_clamped,
-                    self.start_antennas[1] + (self.target_antennas[1] - self.start_antennas[1]) * t_clamped,
+                    self.start_antennas[0] + (self.target_antennas[0] - self.start_antennas[0]) * t_eff,
+                    self.start_antennas[1] + (self.target_antennas[1] - self.start_antennas[1]) * t_eff,
                 ],
                 dtype=np.float64,
             )
 
             # Interpolate body yaw
-            body_yaw = self.start_body_yaw + (self.target_body_yaw - self.start_body_yaw) * t_clamped
+            body_yaw = self.start_body_yaw + (self.target_body_yaw - self.start_body_yaw) * t_eff
 
             return (head_pose, antennas, body_yaw)
 

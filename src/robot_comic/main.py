@@ -339,6 +339,12 @@ def run(
         current_robot=robot,
         camera_worker=camera_worker,
     )
+    if startup_settings.movement_speed is not None:
+        movement_manager.set_speed_factor(startup_settings.movement_speed)
+        logger.info(
+            "Applied persisted movement_speed=%.2f from startup_settings.json",
+            startup_settings.movement_speed,
+        )
     log_checkpoint("movement manager", logger)
 
     head_wobbler = HeadWobbler(

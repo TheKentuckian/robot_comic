@@ -194,6 +194,54 @@ def test_post_movement_speed_updates_manager(tmp_path: Path) -> None:
     assert mm.calls == [1.4]
 
 
+def test_post_movement_speed_persists_value_across_restarts(tmp_path: Path) -> None:
+    """POST /movement_speed writes the clamped value to startup_settings.json (#309)."""
+    from robot_comic.startup_settings import read_startup_settings
+
+    class _MM:
+        def __init__(self) -> None:
+            self.speed_factor = 0.6
+
+        def set_speed_factor(self, value: float) -> None:
+            self.speed_factor = max(0.1, min(2.0, value))
+
+    mm = _MM()
+    app, _ = _make_stream(tmp_path, movement_manager=mm)
+    client = TestClient(app)
+
+    resp = client.post("/movement_speed", json={"value": 0.45})
+    assert resp.status_code == 200
+
+    persisted = read_startup_settings(tmp_path)
+    assert persisted.movement_speed == 0.45
+
+
+def test_post_movement_speed_preserves_existing_profile_and_voice(tmp_path: Path) -> None:
+    """Updating the slider must not clobber a previously-saved profile/voice."""
+    from robot_comic.startup_settings import read_startup_settings, write_startup_settings
+
+    write_startup_settings(tmp_path, profile="sorry_bro", voice="shimmer")
+
+    class _MM:
+        def __init__(self) -> None:
+            self.speed_factor = 0.6
+
+        def set_speed_factor(self, value: float) -> None:
+            self.speed_factor = max(0.1, min(2.0, value))
+
+    mm = _MM()
+    app, _ = _make_stream(tmp_path, movement_manager=mm)
+    client = TestClient(app)
+
+    resp = client.post("/movement_speed", json={"value": 1.2})
+    assert resp.status_code == 200
+
+    settings = read_startup_settings(tmp_path)
+    assert settings.profile == "sorry_bro"
+    assert settings.voice == "shimmer"
+    assert settings.movement_speed == 1.2
+
+
 def test_movement_speed_503_when_no_manager(tmp_path: Path) -> None:
     """Both endpoints return 503 when no movement_manager is wired in."""
     app, _ = _make_stream(tmp_path)
