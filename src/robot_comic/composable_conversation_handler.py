@@ -46,8 +46,31 @@ class ComposableConversationHandler(ConversationHandler):
         self._tts_handler = tts_handler
         self.deps = deps
         self._build = build
-        self.output_queue = pipeline.output_queue
-        self._clear_queue = None
+        # Backing slot for the _clear_queue property below. Assign before any
+        # external code can read; see the setter for why we mirror onto the
+        # underlying TTS handler.
+        self.__clear_queue: Callable[[], None] | None = None
+
+    @property
+    def _clear_queue(self) -> Callable[[], None] | None:  # type: ignore[override]
+        """The queue-flush callback. Mirrors onto the wrapped TTS handler."""
+        return self.__clear_queue
+
+    @_clear_queue.setter
+    def _clear_queue(self, callback: Callable[[], None] | None) -> None:
+        """Mirror the queue-flush callback onto the underlying TTS handler.
+
+        The ``LocalSTTInputMixin`` listener calls ``self._clear_queue`` on the
+        legacy ``LocalSTTLlamaElevenLabsHandler`` instance it is mixed into;
+        that instance is our ``_tts_handler``, not the wrapper. So when
+        ``LocalStream.__init__`` does ``self.handler._clear_queue =
+        self.clear_audio_queue`` on the wrapper, we forward the assignment to
+        the legacy handler — otherwise barge-in stops flushing the player on
+        the composable path.
+        """
+        self.__clear_queue = callback
+        if getattr(self, "_tts_handler", None) is not None:
+            self._tts_handler._clear_queue = callback
 
     def copy(self) -> "ComposableConversationHandler":
         """Build a fresh wrapper + pipeline via the injected factory closure.

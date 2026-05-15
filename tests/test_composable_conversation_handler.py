@@ -289,3 +289,25 @@ async def test_integration_transcript_to_audio_frame() -> None:
 
     await wrapper.shutdown()
     await asyncio.wait_for(start_task, timeout=1.0)
+
+
+def test_clear_queue_assignment_propagates_to_tts_handler() -> None:
+    """LocalStream sets handler._clear_queue on the wrapper; the LocalSTTInputMixin
+    listener reads it off the legacy handler. Forward the assignment so barge-in
+    on the composable path still reaches console.clear_audio_queue."""
+    wrapper = _make_wrapper()
+
+    def cb() -> None:
+        return None
+
+    wrapper._clear_queue = cb
+    assert wrapper._clear_queue is cb
+    assert wrapper._tts_handler._clear_queue is cb
+
+
+def test_clear_queue_assignment_handles_none() -> None:
+    wrapper = _make_wrapper()
+    wrapper._clear_queue = lambda: None
+    wrapper._clear_queue = None
+    assert wrapper._clear_queue is None
+    assert wrapper._tts_handler._clear_queue is None
