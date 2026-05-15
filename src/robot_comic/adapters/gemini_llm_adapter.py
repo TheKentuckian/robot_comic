@@ -43,9 +43,11 @@ Tool-call shape:
 """
 
 from __future__ import annotations
+import time
 import logging
 from typing import TYPE_CHECKING, Any
 
+from robot_comic import telemetry
 from robot_comic.backends import ToolCall, LLMResponse
 
 
@@ -91,12 +93,26 @@ class GeminiLLMAdapter:
 
         saved_history = self._handler._conversation_history
         self._handler._conversation_history = []
+        # Lifecycle Hook #2 (#337): the legacy timing wrap lives in
+        # ``BaseLlamaResponseHandler._run_response_loop`` (which the
+        # Gemini-text handler inherits) around ``_call_llm``; the
+        # composable path bypasses that loop, so we record duration here
+        # to keep the histogram fed regardless of path. The legacy site
+        # remains until Phase 4e cleanup. ``gen_ai.system="gemini"`` is
+        # semantically correct (mirrors ``elevenlabs_tts.py:244``); the
+        # legacy ``_run_response_loop`` emits ``"llama_cpp"`` by inheritance
+        # accident — fixed on the new surface.
+        _llm_start = time.perf_counter()
         try:
             text, raw_tool_calls, _raw_msg = await self._handler._call_llm(
                 extra_messages=messages,
             )
         finally:
             self._handler._conversation_history = saved_history
+            telemetry.record_llm_duration(
+                time.perf_counter() - _llm_start,
+                {"gen_ai.system": "gemini", "gen_ai.operation.name": "chat"},
+            )
 
         tool_calls = tuple(_convert_tool_call(tc) for tc in raw_tool_calls)
         return LLMResponse(text=text, tool_calls=tool_calls)
