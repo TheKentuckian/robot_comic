@@ -521,8 +521,11 @@ def run(
     # Each async service → its own thread/loop
     movement_manager.start()
     head_wobbler.start()
-    if camera_worker:
-        camera_worker.start()
+    # camera_worker is deliberately NOT started here: the gstreamer pipeline
+    # adds ~5 s to the cold-start budget and the boot greeting does not need
+    # vision. CameraWorker.ensure_started() is invoked lazily by the first
+    # camera-touching tool call (camera / greet / roast / head_tracking),
+    # which is the only time we actually need a live capture loop. See #323.
 
     # Emit boot event now that all handlers are ready (Pi side only).
     if config.WS_ENABLED and _ws_loop is not None and _ws_endpoint is not None:

@@ -31,6 +31,9 @@ class CameraWorker:
         self.frame_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        # Guards lazy-start so the first concurrent caller wins the race and
+        # subsequent callers are cheap (see ensure_started()).
+        self._start_lock = threading.Lock()
 
         self.is_head_tracking_enabled = True
         self.face_tracking_offsets: List[float] = [
@@ -59,7 +62,16 @@ class CameraWorker:
         self._error_suppress_window: float = 60.0  # seconds
 
     def get_latest_frame(self) -> NDArray[np.uint8] | None:
-        """Get the latest frame (thread-safe)."""
+        """Get the latest frame (thread-safe).
+
+        Lazily starts the underlying capture thread on first call. The first
+        camera-using tool call therefore pays the gstreamer pipeline cost
+        (~5 s) instead of paying it during boot. Subsequent callers reuse the
+        same worker.
+        """
+        # Trigger lazy start before any frame read so a hot path doesn't
+        # silently return None forever when boot skipped the explicit start().
+        self.ensure_started()
         with self.frame_lock:
             if self.latest_frame is None:
                 return None
@@ -74,16 +86,48 @@ class CameraWorker:
             return (offsets[0], offsets[1], offsets[2], offsets[3], offsets[4], offsets[5])
 
     def set_head_tracking_enabled(self, enabled: bool) -> None:
-        """Enable/disable head tracking."""
+        """Enable/disable head tracking.
+
+        Enabling head tracking lazy-starts the camera worker; disabling does
+        not start a worker that has not already been started.
+        """
         self.is_head_tracking_enabled = enabled
         logger.info(f"Head tracking {'enabled' if enabled else 'disabled'}")
+        if enabled:
+            self.ensure_started()
 
     def start(self) -> None:
-        """Start the camera worker loop in a thread."""
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self.working_loop, daemon=True)
-        self._thread.start()
-        logger.debug("Camera worker started")
+        """Start the camera worker loop in a thread.
+
+        Idempotent: if a worker thread is already running this is a no-op so
+        callers (including lazy ``get_latest_frame()`` consumers and an
+        explicit boot start) cannot accidentally spawn duplicate capture
+        loops.
+        """
+        with self._start_lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self.working_loop, daemon=True)
+            self._thread.start()
+            logger.debug("Camera worker started")
+
+    def ensure_started(self) -> bool:
+        """Lazy-start the worker; return True if this call started the thread.
+
+        The first camera-touching tool call (``camera``, ``greet``, ``roast``,
+        or a head-tracking enable) triggers this so the ~5 s gstreamer
+        pipeline cost shifts off the boot critical path. Concurrent callers
+        are serialised on ``_start_lock`` so exactly one thread is spawned.
+        """
+        with self._start_lock:
+            if self._thread is not None and self._thread.is_alive():
+                return False
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self.working_loop, daemon=True)
+            self._thread.start()
+            logger.info("Camera worker lazy-started on first use")
+            return True
 
     def stop(self) -> None:
         """Stop the camera worker loop."""
