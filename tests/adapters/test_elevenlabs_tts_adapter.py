@@ -198,7 +198,7 @@ async def test_synthesize_cleans_up_when_consumer_breaks_early() -> None:
                 raise
 
     handler = _SlowHandler()
-    adapter = ElevenLabsTTSAdapter(handler)  # type: ignore[arg-type]
+    adapter = ElevenLabsTTSAdapter(handler)
 
     gen = adapter.synthesize("hi")
     first = await gen.__anext__()
@@ -252,5 +252,54 @@ def test_adapter_satisfies_tts_backend_protocol() -> None:
     """``ElevenLabsTTSAdapter`` passes ``isinstance(TTSBackend)``."""
     from robot_comic.backends import TTSBackend
 
-    adapter = ElevenLabsTTSAdapter(_StubElevenLabsHandler())  # type: ignore[arg-type]
+    adapter = ElevenLabsTTSAdapter(_StubElevenLabsHandler())
     assert isinstance(adapter, TTSBackend)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4c.3 — duck-typed acceptance for GeminiTextElevenLabsResponseHandler
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_adapter_accepts_duck_typed_gemini_elevenlabs_handler_shape() -> None:
+    """Phase 4c.3: the adapter accepts any handler matching the Protocol surface.
+
+    Mimics ``GeminiTextElevenLabsResponseHandler``'s diamond-MRO shape:
+    exposes ``_prepare_startup_credentials``, ``output_queue``,
+    ``_stream_tts_to_queue``, and ``_http`` without inheriting from
+    ``ElevenLabsTTSResponseHandler``. No ``# type: ignore`` is needed
+    because the broadened Protocol annotation accepts the structural match.
+    """
+
+    class _DuckGeminiElevenLabs:
+        def __init__(self) -> None:
+            self.output_queue: asyncio.Queue[Any] = asyncio.Queue()
+            self._http: Any = None
+            self.prepare_called = False
+            self.streamed_text: str | None = None
+
+        async def _prepare_startup_credentials(self) -> None:
+            self.prepare_called = True
+
+        async def _stream_tts_to_queue(
+            self,
+            text: str,
+            first_audio_marker: list[float] | None = None,
+            tags: list[str] | None = None,
+        ) -> bool:
+            self.streamed_text = text
+            await self.output_queue.put((24000, [42]))
+            return True
+
+    handler = _DuckGeminiElevenLabs()
+    adapter = ElevenLabsTTSAdapter(handler)
+    await adapter.prepare()
+    assert handler.prepare_called is True
+
+    out = [frame async for frame in adapter.synthesize("hello, world")]
+    assert len(out) == 1
+    assert out[0].sample_rate == 24000
+    assert handler.streamed_text == "hello, world"
+
+    await adapter.shutdown()
