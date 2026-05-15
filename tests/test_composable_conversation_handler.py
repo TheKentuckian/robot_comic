@@ -56,11 +56,18 @@ async def test_shutdown_delegates_to_pipeline() -> None:
 
 
 @pytest.mark.asyncio
-async def test_receive_forwards_to_feed_audio() -> None:
+async def test_receive_converts_and_forwards_to_feed_audio() -> None:
+    from robot_comic.backends import AudioFrame as BackendAudioFrame
+
     wrapper = _make_wrapper()
-    frame: AudioFrame = (16000, np.zeros(160, dtype=np.int16))
+    samples = np.zeros(160, dtype=np.int16)
+    frame: AudioFrame = (16000, samples)
     await wrapper.receive(frame)
-    wrapper.pipeline.feed_audio.assert_awaited_once_with(frame)
+    wrapper.pipeline.feed_audio.assert_awaited_once()
+    (forwarded,), _ = wrapper.pipeline.feed_audio.call_args
+    assert isinstance(forwarded, BackendAudioFrame)
+    assert forwarded.sample_rate == 16000
+    assert forwarded.samples is samples
 
 
 @pytest.mark.asyncio
@@ -202,10 +209,10 @@ def test_copy_does_not_share_pipeline_state() -> None:
 @pytest.mark.asyncio
 async def test_integration_transcript_to_audio_frame() -> None:
     """End-to-end through a real ``ComposablePipeline`` with stubbed backends."""
-    from robot_comic.backends import AudioFrame as BackendsAudioFrame, LLMResponse
-    from robot_comic.composable_conversation_handler import ComposableConversationHandler
+    from robot_comic.backends import AudioFrame as BackendsAudioFrame
+    from robot_comic.backends import LLMResponse, TranscriptCallback
     from robot_comic.composable_pipeline import ComposablePipeline
-    from robot_comic.backends import TranscriptCallback
+    from robot_comic.composable_conversation_handler import ComposableConversationHandler
 
     callback_holder: dict[str, TranscriptCallback] = {}
 
