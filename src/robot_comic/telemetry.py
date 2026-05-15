@@ -16,6 +16,7 @@ enabled — callers never need to check ENABLED themselves.
 import os
 import json
 import logging
+import threading
 from typing import Any, Optional
 
 from opentelemetry import trace, metrics
@@ -152,15 +153,29 @@ def _init_otel() -> None:
 
 
 def init() -> None:
-    """Initialise OTel if ROBOT_INSTRUMENTATION is set.  Safe to call multiple times."""
+    """Initialise OTel if ROBOT_INSTRUMENTATION is set.  Safe to call multiple times.
+
+    Also drains any supporting events that were queued before init() was called
+    (issue #337): the early-welcome path and its completion daemon thread
+    ``emit_supporting_event`` *before* ``run()`` reaches this function, and
+    without the drain those events would resolve to OTel's no-op default tracer
+    and be silently dropped.
+    """
     # Re-read at call time so .env loaded after module import takes effect.
-    global _RAW, ENABLED, _REMOTE
+    global _RAW, ENABLED, _REMOTE, _initialized
     _RAW = os.getenv("ROBOT_INSTRUMENTATION", "").strip().lower()
     ENABLED = _RAW in {"trace", "remote"}
     _REMOTE = _RAW == "remote"
     if ENABLED:
         _init_otel()
         _init_instruments()
+    _initialized = True
+    # Flush pre-init supporting events in original order.
+    with _pending_lock:
+        pending = list(_pending_supporting)
+        _pending_supporting.clear()
+    for name, dur_ms, extra_attrs in pending:
+        _emit_supporting_event_now(name, dur_ms, extra_attrs or None)
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +368,17 @@ def emit_first_greeting_audio_once() -> None:
         pass
 
 
+# Supporting-event queue for pre-init emissions (issue #337). The early-welcome
+# path dispatches the WAV before any non-stdlib import, and the WAV-completion
+# daemon thread can fire its emit before ``run()`` reaches ``telemetry.init()``.
+# Without buffering, those calls resolve against OTel's no-op default tracer
+# and the spans are silently dropped — so the monitor's boot-timeline lane is
+# empty for everything but ``app.startup`` (which emits *after* init).
+_initialized: bool = False
+_pending_supporting: list[tuple[str, Optional[float], dict[str, Any]]] = []
+_pending_lock = threading.Lock()
+
+
 def emit_supporting_event(
     name: str,
     dur_ms: Optional[float] = None,
@@ -375,9 +401,23 @@ def emit_supporting_event(
     that aren't in ``_SPAN_ATTRS_TO_KEEP`` are dropped silently by the
     exporter — keep that allowlist in sync when adding new attribute names.
 
-    Safe to call whether or not instrumentation is enabled — when OTel is not
-    initialised this resolves to the no-op default tracer.
+    Safe to call whether or not instrumentation is enabled. Calls made before
+    :func:`init` runs are buffered in ``_pending_supporting`` and flushed when
+    init completes (issue #337).
     """
+    if not _initialized:
+        with _pending_lock:
+            _pending_supporting.append((name, dur_ms, dict(extra_attrs or {})))
+        return
+    _emit_supporting_event_now(name, dur_ms, extra_attrs)
+
+
+def _emit_supporting_event_now(
+    name: str,
+    dur_ms: Optional[float],
+    extra_attrs: Optional[dict[str, Any]],
+) -> None:
+    """Emit a supporting span immediately. Internal helper, no queueing."""
     tracer = get_tracer()
     attrs: dict[str, Any] = {"event.kind": "supporting"}
     if dur_ms is not None:
