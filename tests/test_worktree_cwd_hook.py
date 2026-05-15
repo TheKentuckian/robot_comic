@@ -249,3 +249,36 @@ def test_production_hook_path_exists() -> None:
         and any("check_worktree_cwd.py" in hook.get("command", "") for hook in h.get("hooks", []))
         for h in pre
     )
+
+
+def test_production_hook_command_handles_missing_script(tmp_path: Path) -> None:
+    """The wrapper in settings.json must exit 0 silently when the hook script is missing.
+
+    Without this, switching to a branch that predates PR #325 (or any branch
+    that has dropped ``.claude/hooks/check_worktree_cwd.py``) causes every Bash
+    tool call to surface a ``can't open file`` error from the harness, because
+    Claude Code's in-memory hook config persists across ``git checkout`` even
+    when the script file disappears.
+    """
+    settings = json.loads((REPO_ROOT / ".claude" / "settings.json").read_text())
+    pre = settings["hooks"]["PreToolUse"]
+    command = next(
+        hook["command"]
+        for h in pre
+        if h.get("matcher") == "Bash"
+        for hook in h.get("hooks", [])
+        if "check_worktree_cwd.py" in hook.get("command", "")
+    )
+    # Run the wrapper command in tmp_path (no .claude/hooks/ subdir exists there).
+    result = subprocess.run(
+        command,
+        shell=True,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, (
+        f"Wrapper must exit 0 when script is missing; got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
