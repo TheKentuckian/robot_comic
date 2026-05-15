@@ -39,3 +39,21 @@ def test_normalize_invalid_falls_back_to_legacy_with_warning(
         result = cfg._normalize_factory_path("hybrid")
     assert result == "legacy"
     assert any("hybrid" in record.message for record in caplog.records)
+
+
+def test_config_field_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(cfg.FACTORY_PATH_ENV, raising=False)
+    cfg.refresh_runtime_config_from_env()
+    assert cfg.config.FACTORY_PATH == "legacy"
+
+
+def test_config_field_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(cfg.FACTORY_PATH_ENV, "composable")
+    cfg.refresh_runtime_config_from_env()
+    assert cfg.config.FACTORY_PATH == "composable"
+
+
+def test_config_field_invalid_env_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(cfg.FACTORY_PATH_ENV, "nope")
+    cfg.refresh_runtime_config_from_env()
+    assert cfg.config.FACTORY_PATH == "legacy"

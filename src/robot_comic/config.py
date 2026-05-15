@@ -1137,6 +1137,12 @@ class Config:
     _raw_pipeline_mode = _normalize_pipeline_mode(os.getenv(PIPELINE_MODE_ENV))
     PIPELINE_MODE: str = _raw_pipeline_mode or derive_pipeline_mode(AUDIO_INPUT_BACKEND, AUDIO_OUTPUT_BACKEND)
 
+    # 5th dial: FACTORY_PATH (legacy | composable). Phase 4b of #337. Default
+    # legacy preserves today's concrete handler classes; composable routes the
+    # (moonshine, llama, elevenlabs) triple through ComposableConversationHandler
+    # so the new pipeline can soak in parallel with the legacy one.
+    FACTORY_PATH: str = _normalize_factory_path(os.getenv(FACTORY_PATH_ENV))
+
     logger.debug(
         "Backend provider: %s, Model: %s, HF mode: %s, HF session URL set: %s, HF direct URL set: %s, HF_HOME: %s, Vision Model: %s, Local STT: %s/%s/%s response=%s cache=%s",
         BACKEND_PROVIDER,
@@ -1315,6 +1321,7 @@ def refresh_runtime_config_from_env() -> None:
     config.PIPELINE_MODE = _refresh_pipeline_mode or derive_pipeline_mode(
         config.AUDIO_INPUT_BACKEND, config.AUDIO_OUTPUT_BACKEND
     )
+    config.FACTORY_PATH = _normalize_factory_path(os.getenv(FACTORY_PATH_ENV))
 
 
 def get_backend_choice(model_name: str | None = None) -> str:
