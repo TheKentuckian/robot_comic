@@ -21,6 +21,7 @@ from robot_comic.motion_safety import (
     clamp_head_pose,
     cap_head_velocity,
     _clamped_axes_seen,
+    get_and_reset_clamp_stats,
 )
 
 
@@ -259,6 +260,106 @@ class TestStepToward:
 # ---------------------------------------------------------------------------
 # clamp_head_pose — cheap allocation check
 # ---------------------------------------------------------------------------
+
+
+class TestPerAxisVelocityCaps:
+    """Per-axis velocity overrides (#272) win over the default cap."""
+
+    DT = 1.0 / 60.0
+
+    def test_pitch_cap_overrides_default(self) -> None:
+        get_and_reset_clamp_stats()  # zero counters
+        current = _make_pose(0.0, 0.0, 0.0)
+        target = _make_pose(pitch=30.0)
+        # Default cap 1.5 rad/s; pitch override is 0.3 rad/s — much tighter.
+        result = cap_head_velocity(
+            current,
+            target,
+            self.DT,
+            max_vel_rad_s=1.5,
+            max_vel_pitch_rad_s=0.3,
+        )
+        _, pitch_r, _ = _extract_rpy_deg(result)
+        max_step_deg = math.degrees(0.3 * self.DT)
+        assert pitch_r <= max_step_deg + 0.01
+
+    def test_other_axes_still_use_default_when_overridden(self) -> None:
+        get_and_reset_clamp_stats()
+        current = _make_pose(0.0, 0.0, 0.0)
+        target = _make_pose(yaw=30.0)
+        # Only pitch override; yaw should use the default 1.5 rad/s cap.
+        result = cap_head_velocity(
+            current,
+            target,
+            self.DT,
+            max_vel_rad_s=1.5,
+            max_vel_pitch_rad_s=0.3,
+        )
+        _, _, yaw_r = _extract_rpy_deg(result)
+        max_step_deg = math.degrees(1.5 * self.DT)
+        assert yaw_r <= max_step_deg + 0.01
+
+    def test_yaw_cap_overrides_default(self) -> None:
+        get_and_reset_clamp_stats()
+        current = _make_pose(0.0, 0.0, 0.0)
+        target = _make_pose(yaw=30.0)
+        result = cap_head_velocity(
+            current,
+            target,
+            self.DT,
+            max_vel_rad_s=1.5,
+            max_vel_yaw_rad_s=0.2,
+        )
+        _, _, yaw_r = _extract_rpy_deg(result)
+        max_step_deg = math.degrees(0.2 * self.DT)
+        assert yaw_r <= max_step_deg + 0.01
+
+
+class TestClampStatsCounter:
+    """Pose-clamp and velocity-cap events increment a counter (#272)."""
+
+    DT = 1.0 / 60.0
+
+    def test_pose_clamp_increments_axis_counter(self) -> None:
+        get_and_reset_clamp_stats()  # zero out
+        _clamped_axes_seen.discard("yaw")
+        pose = _make_pose(yaw=math.degrees(HEAD_YAW_MAX_RAD) + 20.0)
+        clamp_head_pose(pose)
+        stats = get_and_reset_clamp_stats()
+        assert stats.pose_clamps["yaw"] >= 1
+        assert stats.pose_clamps["pitch"] == 0
+        assert stats.pose_clamps["roll"] == 0
+
+    def test_velocity_cap_increments_counter(self) -> None:
+        get_and_reset_clamp_stats()
+        current = _make_pose(0.0)
+        target = _make_pose(yaw=90.0)
+        cap_head_velocity(current, target, self.DT, 1.5)
+        stats = get_and_reset_clamp_stats()
+        assert stats.velocity_caps >= 1
+
+    def test_get_and_reset_zeroes_counters(self) -> None:
+        get_and_reset_clamp_stats()
+        _clamped_axes_seen.discard("yaw")
+        clamp_head_pose(_make_pose(yaw=math.degrees(HEAD_YAW_MAX_RAD) + 20.0))
+        cap_head_velocity(_make_pose(0.0), _make_pose(yaw=90.0), self.DT, 1.5)
+        first = get_and_reset_clamp_stats()
+        assert not first.is_empty()
+        second = get_and_reset_clamp_stats()
+        assert second.is_empty()
+
+    def test_in_envelope_does_not_increment(self) -> None:
+        get_and_reset_clamp_stats()
+        clamp_head_pose(_make_pose(0.0, 0.0, 0.0))
+        stats = get_and_reset_clamp_stats()
+        assert stats.is_empty()
+
+    def test_at_target_does_not_increment_velocity(self) -> None:
+        get_and_reset_clamp_stats()
+        pose = _make_pose(10.0, -5.0, 15.0)
+        cap_head_velocity(pose, pose, self.DT, 1.5)
+        stats = get_and_reset_clamp_stats()
+        assert stats.velocity_caps == 0
 
 
 class TestClampAllocation:

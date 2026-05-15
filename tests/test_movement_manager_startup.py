@@ -64,3 +64,60 @@ def test_loop_continues_if_enable_motors_raises() -> None:
 
     # Loop ran: set_target was still called despite the error
     assert robot.set_target.call_count > 0
+
+
+def test_maybe_log_clamp_stats_emits_summary_when_clamps_fired(caplog) -> None:
+    """The periodic summary surfaces non-zero clamp activity at INFO (#272)."""
+    import logging
+
+    from robot_comic import motion_safety
+
+    manager, _ = _make_manager()
+    motion_safety.get_and_reset_clamp_stats()  # zero counters
+    motion_safety._pose_clamp_counts["yaw"] = 5
+    motion_safety._velocity_cap_count = 12
+
+    with caplog.at_level(logging.INFO, logger="robot_comic.moves"):
+        # loop_count == summary_interval_loops triggers the emit.
+        manager._maybe_log_clamp_stats(loop_count=10, summary_interval_loops=10)
+
+    msgs = [r.message for r in caplog.records if "motion_safety clamps" in r.message]
+    assert msgs, "expected a clamp-stats summary at INFO"
+    assert "yaw=5" in msgs[0]
+    assert "velocity_caps=12" in msgs[0]
+
+    # Counters reset after emit, so a second call with no new activity stays silent.
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="robot_comic.moves"):
+        manager._maybe_log_clamp_stats(loop_count=20, summary_interval_loops=10)
+    assert not [r.message for r in caplog.records if "motion_safety clamps" in r.message]
+
+
+def test_maybe_log_clamp_stats_silent_when_no_activity(caplog) -> None:
+    """No clamps means no log line — keeps the journal quiet at idle."""
+    import logging
+
+    from robot_comic import motion_safety
+
+    manager, _ = _make_manager()
+    motion_safety.get_and_reset_clamp_stats()
+
+    with caplog.at_level(logging.INFO, logger="robot_comic.moves"):
+        manager._maybe_log_clamp_stats(loop_count=10, summary_interval_loops=10)
+
+    assert not [r for r in caplog.records if "motion_safety clamps" in r.message]
+
+
+def test_maybe_log_clamp_stats_respects_interval(caplog) -> None:
+    """Only every Nth tick emits — interim ticks stay silent."""
+    import logging
+
+    from robot_comic import motion_safety
+
+    manager, _ = _make_manager()
+    motion_safety.get_and_reset_clamp_stats()
+    motion_safety._velocity_cap_count = 1
+
+    with caplog.at_level(logging.INFO, logger="robot_comic.moves"):
+        manager._maybe_log_clamp_stats(loop_count=5, summary_interval_loops=10)
+    assert not [r for r in caplog.records if "motion_safety clamps" in r.message]

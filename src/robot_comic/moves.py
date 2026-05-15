@@ -52,8 +52,12 @@ from reachy_mini.utils.interpolation import (
 )
 from robot_comic.motion_safety import (
     HEAD_MAX_VEL_RAD_S,
+    HEAD_YAW_MAX_VEL_RAD_S,
+    HEAD_ROLL_MAX_VEL_RAD_S,
+    HEAD_PITCH_MAX_VEL_RAD_S,
     clamp_head_pose,
     cap_head_velocity,
+    get_and_reset_clamp_stats,
 )
 
 
@@ -313,8 +317,13 @@ class MovementManager:
             self.speed_factor = 0.6
 
         # Safety: per-axis angular velocity cap (rad/s) applied before every set_target.
-        # Reads REACHY_MINI_HEAD_MAX_VEL_RAD_S from the environment via motion_safety.
+        # Reads REACHY_MINI_HEAD_{,_PITCH/_YAW/_ROLL}_MAX_VEL_RAD_S from the environment
+        # via motion_safety. The single _head_max_vel_rad_s field is kept for back-compat
+        # with callers that read it directly; the per-axis caps win at the tick layer.
         self._head_max_vel_rad_s: float = HEAD_MAX_VEL_RAD_S
+        self._head_pitch_max_vel_rad_s: float = HEAD_PITCH_MAX_VEL_RAD_S
+        self._head_yaw_max_vel_rad_s: float = HEAD_YAW_MAX_VEL_RAD_S
+        self._head_roll_max_vel_rad_s: float = HEAD_ROLL_MAX_VEL_RAD_S
         # Last head pose that was actually issued to the robot (used by vel cap).
         self._last_safe_head_pose: NDArray[np.float32] = create_head_pose(0, 0, 0, 0, 0, 0, degrees=True)
 
@@ -782,6 +791,27 @@ class MovementManager:
         )
         stats.reset()
 
+    def _maybe_log_clamp_stats(self, loop_count: int, summary_interval_loops: int) -> None:
+        """Emit a periodic INFO summary of pose-clamp and velocity-cap activity (#272).
+
+        Surfaces how often the safety layer is engaged by the upstream move
+        library so operators can spot aggressive keyframes / runaway tracker
+        targets without trawling DEBUG logs.
+        """
+        if loop_count % summary_interval_loops != 0:
+            return
+        stats = get_and_reset_clamp_stats()
+        if stats.is_empty():
+            return
+        logger.info(
+            "motion_safety clamps in last %.1fs: roll=%d pitch=%d yaw=%d velocity_caps=%d",
+            summary_interval_loops / self.target_frequency,
+            stats.pose_clamps.get("roll", 0),
+            stats.pose_clamps.get("pitch", 0),
+            stats.pose_clamps.get("yaw", 0),
+            stats.velocity_caps,
+        )
+
     def _update_face_tracking(self, current_time: float) -> None:
         """Get face tracking offsets from camera worker thread."""
         if self._is_paused:
@@ -902,6 +932,8 @@ class MovementManager:
         loop_count = 0
         prev_loop_start = self._now()
         print_interval_loops = max(1, int(self.target_frequency * 2))
+        # Clamp-stats summary runs every ~30s (less noisy than the freq log).
+        clamp_summary_interval_loops = max(1, int(self.target_frequency * 30))
         freq_stats = self._freq_stats
 
         while not self._stop_event.is_set():
@@ -932,7 +964,15 @@ class MovementManager:
             #     single control point just before set_target.
             dt = loop_start - prev_loop_start if loop_count > 1 else self.target_period
             head = clamp_head_pose(head)
-            head = cap_head_velocity(self._last_safe_head_pose, head, dt, self._head_max_vel_rad_s)
+            head = cap_head_velocity(
+                self._last_safe_head_pose,
+                head,
+                dt,
+                self._head_max_vel_rad_s,
+                max_vel_roll_rad_s=self._head_roll_max_vel_rad_s,
+                max_vel_pitch_rad_s=self._head_pitch_max_vel_rad_s,
+                max_vel_yaw_rad_s=self._head_yaw_max_vel_rad_s,
+            )
             head = clamp_head_pose(head)  # re-clamp after vel-cap in case interpolation drifted
 
             # 5) Apply listening antenna freeze or blend-back
@@ -948,6 +988,7 @@ class MovementManager:
 
             # 8) Periodic telemetry on loop frequency
             self._maybe_log_frequency(loop_count, print_interval_loops, freq_stats)
+            self._maybe_log_clamp_stats(loop_count, clamp_summary_interval_loops)
 
             if sleep_time > 0:
                 time.sleep(sleep_time)
