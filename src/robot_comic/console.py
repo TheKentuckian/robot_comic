@@ -1151,6 +1151,27 @@ class LocalStream:
         time.sleep(1)  # give some time to the pipelines to start
         apply_audio_startup_config(_robot, logger=logger)
 
+        # Build + start the audio source (daemon shim or direct ALSA RW).
+        # If AUDIO_CAPTURE_PATH=alsa_rw on Linux, this spawns an arecord
+        # subprocess alongside the daemon's still-running MMAP capture.
+        self._audio_source = self._build_audio_source()
+        if self._audio_source is not None:
+            try:
+                self._audio_source.start()
+                logger.info(
+                    "Audio source ready: %s (path=%s)",
+                    type(self._audio_source).__name__,
+                    config.AUDIO_CAPTURE_PATH,
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to start audio source %s: %s — falling back to daemon path",
+                    type(self._audio_source).__name__,
+                    e,
+                )
+                self._audio_source = _DaemonAudioSource(_robot)
+                self._audio_source.start()
+
         async def runner() -> None:
             # Capture loop for cross-thread personality actions
             loop = asyncio.get_running_loop()
@@ -1224,6 +1245,14 @@ class LocalStream:
         """
         logger.info("Stopping LocalStream...")
 
+        # Stop our audio source (terminates arecord subprocess if active).
+        try:
+            if self._audio_source is not None:
+                self._audio_source.stop()
+                self._audio_source = None
+        except Exception as e:
+            logger.debug(f"Error stopping audio source (may already be stopped): {e}")
+
         # Stop media pipelines FIRST before cancelling async tasks
         # This ensures clean shutdown before PortAudio cleanup
         try:
@@ -1292,11 +1321,16 @@ class LocalStream:
     async def record_loop(self) -> None:
         """Read mic frames from the recorder and forward them to the handler."""
         assert self._robot is not None and self.handler is not None
-        input_sample_rate = self._robot.media.get_input_audio_samplerate()
-        logger.debug(f"Audio recording started at {input_sample_rate} Hz")
+        assert self._audio_source is not None, "record_loop requires _audio_source — launch() must have populated it"
+        input_sample_rate = self._audio_source.sample_rate
+        logger.debug(
+            "Audio recording started at %d Hz via %s",
+            input_sample_rate,
+            type(self._audio_source).__name__,
+        )
 
         while not self._stop_event.is_set():
-            audio_frame = self._robot.media.get_audio_sample()
+            audio_frame = self._audio_source.get_audio_sample()
             if audio_frame is not None:
                 await self.handler.receive((input_sample_rate, audio_frame))
             await asyncio.sleep(0)  # avoid busy loop
