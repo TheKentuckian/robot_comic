@@ -1,3 +1,4 @@
+import sys
 import importlib
 
 import pytest
@@ -61,3 +62,33 @@ def test_moonshine_heartbeat_defaults_false(monkeypatch):
 def test_moonshine_heartbeat_env_true(monkeypatch):
     cfg = _reload_config(monkeypatch, {"MOONSHINE_HEARTBEAT": "true"})
     assert cfg.MOONSHINE_HEARTBEAT is True
+
+
+def test_audio_capture_path_default_on_linux(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    cfg = _reload_config(monkeypatch, {})
+    assert cfg.AUDIO_CAPTURE_PATH == "alsa_rw"
+
+
+def test_audio_capture_path_default_off_linux(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    cfg = _reload_config(monkeypatch, {})
+    assert cfg.AUDIO_CAPTURE_PATH == "daemon"
+
+
+def test_audio_capture_path_explicit_daemon_on_linux(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    cfg = _reload_config(monkeypatch, {"REACHY_MINI_AUDIO_CAPTURE_PATH": "daemon"})
+    assert cfg.AUDIO_CAPTURE_PATH == "daemon"
+
+
+def test_audio_capture_path_explicit_alsa_rw_on_darwin(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    cfg = _reload_config(monkeypatch, {"REACHY_MINI_AUDIO_CAPTURE_PATH": "alsa_rw"})
+    assert cfg.AUDIO_CAPTURE_PATH == "alsa_rw"
+
+
+def test_audio_capture_path_invalid_falls_back_to_platform_default(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    cfg = _reload_config(monkeypatch, {"REACHY_MINI_AUDIO_CAPTURE_PATH": "bogus"})
+    assert cfg.AUDIO_CAPTURE_PATH == "alsa_rw"

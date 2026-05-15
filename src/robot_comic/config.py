@@ -266,6 +266,45 @@ AUDIO_INPUT_BACKEND_ENV = "REACHY_MINI_AUDIO_INPUT_BACKEND"
 AUDIO_OUTPUT_BACKEND_ENV = "REACHY_MINI_AUDIO_OUTPUT_BACKEND"
 
 # ---------------------------------------------------------------------------
+# Audio capture path: bypass ALSA MMAP attenuation on reachymini_audio_src
+# by spawning our own arecord subprocess in RW mode. See
+# docs/superpowers/specs/2026-05-15-stream-a-alsa-rw-capture-design.md.
+# ---------------------------------------------------------------------------
+
+AUDIO_CAPTURE_PATH_ENV = "REACHY_MINI_AUDIO_CAPTURE_PATH"
+AUDIO_CAPTURE_PATH_DAEMON = "daemon"
+AUDIO_CAPTURE_PATH_ALSA_RW = "alsa_rw"
+AUDIO_CAPTURE_PATH_CHOICES: tuple[str, ...] = (
+    AUDIO_CAPTURE_PATH_DAEMON,
+    AUDIO_CAPTURE_PATH_ALSA_RW,
+)
+
+
+def _resolve_audio_capture_path() -> str:
+    """Return the AUDIO_CAPTURE_PATH for this process.
+
+    Default is alsa_rw on Linux (the only platform with arecord +
+    reachymini_audio_src) and daemon elsewhere. The env var overrides either
+    direction; invalid values log a warning and fall back to the platform
+    default.
+    """
+    platform_default = AUDIO_CAPTURE_PATH_ALSA_RW if sys.platform == "linux" else AUDIO_CAPTURE_PATH_DAEMON
+    raw = (os.getenv(AUDIO_CAPTURE_PATH_ENV) or "").strip().lower()
+    if not raw:
+        return platform_default
+    if raw in AUDIO_CAPTURE_PATH_CHOICES:
+        return raw
+    logger.warning(
+        "Invalid %s=%r. Expected one of: %s. Using platform default %r.",
+        AUDIO_CAPTURE_PATH_ENV,
+        raw,
+        ", ".join(AUDIO_CAPTURE_PATH_CHOICES),
+        platform_default,
+    )
+    return platform_default
+
+
+# ---------------------------------------------------------------------------
 # 4th config dial: pipeline mode (composable vs bundled-realtime).
 # The STT/LLM/TTS dials only describe a meaningful pipeline when we're in
 # composable mode; bundled "speech-to-speech" backends (OpenAI Realtime,
@@ -938,6 +977,7 @@ class Config:
     MOVEMENT_SPEED_FACTOR = _env_float_clamped("MOVEMENT_SPEED_FACTOR", default=0.3, lo=0.1, hi=2.0)
     IDLE_ANIMATION_ENABLED = _env_flag("IDLE_ANIMATION_ENABLED", default=False)
     MOONSHINE_HEARTBEAT = _env_flag("MOONSHINE_HEARTBEAT", default=False)
+    AUDIO_CAPTURE_PATH = _resolve_audio_capture_path()
     # OTel instrumentation mode: unset=disabled, "trace"=console only, "remote"=console+OTLP
     ROBOT_INSTRUMENTATION = os.getenv("ROBOT_INSTRUMENTATION", "")
 
@@ -1195,6 +1235,7 @@ def refresh_runtime_config_from_env() -> None:
     config.MOVEMENT_SPEED_FACTOR = _env_float_clamped("MOVEMENT_SPEED_FACTOR", default=0.3, lo=0.1, hi=2.0)
     config.IDLE_ANIMATION_ENABLED = _env_flag("IDLE_ANIMATION_ENABLED", default=False)
     config.MOONSHINE_HEARTBEAT = _env_flag("MOONSHINE_HEARTBEAT", default=False)
+    config.AUDIO_CAPTURE_PATH = _resolve_audio_capture_path()
     config.CHATTERBOX_URL = os.getenv(CHATTERBOX_URL_ENV, CHATTERBOX_DEFAULT_URL)
     config.CHATTERBOX_VOICE = os.getenv(CHATTERBOX_VOICE_ENV, CHATTERBOX_DEFAULT_VOICE)
     config.CHATTERBOX_EXAGGERATION = float(os.getenv("CHATTERBOX_EXAGGERATION", str(CHATTERBOX_DEFAULT_EXAGGERATION)))
