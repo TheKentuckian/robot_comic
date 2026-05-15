@@ -488,6 +488,24 @@
             </div>
           </div>
         </div>
+        <div class="section">
+          <div class="section-heading">
+            <h3>ElevenLabs voice catalog</h3>
+            <p class="muted small">Cached voices from <code>/v1/voices</code>. Use these IDs in profile <code>voice</code> fields.</p>
+          </div>
+          <div class="row">
+            <button id="reload-voice-catalog" class="ghost" type="button">Reload catalog</button>
+            <span id="voice-catalog-status" class="muted small"></span>
+          </div>
+          <div class="voice-catalog-wrap">
+            <table id="voice-catalog-table" class="voice-catalog">
+              <thead>
+                <tr><th>Name</th><th>Voice ID</th><th>Category</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
         <p id="personality-status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
       </div>
     </div>

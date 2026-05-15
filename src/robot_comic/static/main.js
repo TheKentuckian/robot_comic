@@ -1598,6 +1598,48 @@ async function init() {
       }
     });
 
+    // ElevenLabs voice catalog table (#304)
+    const catalogTbody = document.querySelector("#voice-catalog-table tbody");
+    const catalogStatus = document.getElementById("voice-catalog-status");
+    const catalogReload = document.getElementById("reload-voice-catalog");
+    async function loadVoiceCatalog() {
+      if (!catalogTbody) return;
+      catalogStatus.textContent = "Loading...";
+      catalogTbody.innerHTML = "";
+      try {
+        const resp = await fetch("/api/voices/catalog");
+        if (resp.status === 503) {
+          catalogStatus.textContent = "ElevenLabs not configured.";
+          return;
+        }
+        if (!resp.ok) {
+          catalogStatus.textContent = `Failed (${resp.status})`;
+          return;
+        }
+        const data = await resp.json();
+        const voices = Array.isArray(data.voices) ? data.voices : [];
+        for (const v of voices) {
+          const tr = document.createElement("tr");
+          const nameTd = document.createElement("td");
+          nameTd.textContent = v.name || "";
+          const idTd = document.createElement("td");
+          idTd.textContent = v.voice_id || "";
+          idTd.classList.add("mono");
+          const catTd = document.createElement("td");
+          catTd.textContent = v.category || "";
+          tr.appendChild(nameTd);
+          tr.appendChild(idTd);
+          tr.appendChild(catTd);
+          catalogTbody.appendChild(tr);
+        }
+        catalogStatus.textContent = `${voices.length} voice${voices.length === 1 ? "" : "s"} cached.`;
+      } catch (e) {
+        catalogStatus.textContent = `Error: ${e.message || e}`;
+      }
+    }
+    if (catalogReload) catalogReload.addEventListener("click", loadVoiceCatalog);
+    loadVoiceCatalog();
+
     pApply.addEventListener("click", async () => {
       setStatusMessage(pStatus, "Applying...");
       try {
