@@ -391,8 +391,8 @@ def _build_composable_llama_chatterbox(**handler_kwargs: Any) -> Any:
         MoonshineSTTAdapter,
         ChatterboxTTSAdapter,
     )
-    from robot_comic.composable_pipeline import ComposablePipeline
     from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
+    from robot_comic.composable_pipeline import ComposablePipeline
     from robot_comic.composable_conversation_handler import ComposableConversationHandler
 
     def _build() -> ComposableConversationHandler:
