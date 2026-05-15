@@ -1012,11 +1012,11 @@ field test:
     /venvs/apps_venv/bin/python scripts/dsnoop_multireader_check.py
 
 Prints peak/RMS over a 3-second window.  Expect peak >= ~0.3 (with the
-operator clapping or speaking in the room) — full-scale signal is 1.0.
-Anything <= 0.1 means the MMAP-attenuation bug has somehow propagated
-to RW mode and the workaround needs revisiting.  See
+sound in the room (clapping, speech, played audio) — full-scale signal
+is 1.0. Anything lower means the MMAP-attenuation bug has somehow
+propagated to RW mode and the workaround needs revisiting.  See
 docs/superpowers/specs/2026-05-15-stream-a-alsa-rw-capture-design.md
-and reference_alsa_mmap_attenuation (auto-memory) for context.
+and docs/references/alsa-mmap-attenuation.md for context.
 """
 
 from __future__ import annotations
@@ -1195,7 +1195,7 @@ Audio source ready: AlsaRwCapture (path=alsa_rw)
 
 - [ ] **Step 6: Play the test audio from the laptop**
 
-Per the `reference_audio_playback_recipe` memory, play `hello.m4a` from the laptop while the app is running:
+Per [`docs/references/audio-playback-recipe.md`](../../references/audio-playback-recipe.md), play `hello.m4a` from the laptop while the app is running:
 
 ```powershell
 $player = New-Object System.Windows.Media.MediaPlayer
