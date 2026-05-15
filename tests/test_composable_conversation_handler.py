@@ -197,3 +197,88 @@ def test_copy_does_not_share_pipeline_state() -> None:
     original.pipeline._conversation_history.append({"role": "user", "content": "hi"})
     assert copy.pipeline._conversation_history == []
     assert copy.pipeline is not original.pipeline
+
+
+@pytest.mark.asyncio
+async def test_integration_transcript_to_audio_frame() -> None:
+    """End-to-end through a real ``ComposablePipeline`` with stubbed backends."""
+    from robot_comic.backends import AudioFrame as BackendsAudioFrame, LLMResponse
+    from robot_comic.composable_conversation_handler import ComposableConversationHandler
+    from robot_comic.composable_pipeline import ComposablePipeline
+    from robot_comic.backends import TranscriptCallback
+
+    callback_holder: dict[str, TranscriptCallback] = {}
+
+    class StubSTT:
+        async def start(self, on_completed: TranscriptCallback) -> None:
+            callback_holder["fn"] = on_completed
+
+        async def feed_audio(self, frame: Any) -> None:  # noqa: ARG002
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+    class StubLLM:
+        async def prepare(self) -> None:
+            pass
+
+        async def chat(
+            self,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]] | None = None,
+        ) -> LLMResponse:
+            return LLMResponse(text="hello world", tool_calls=())
+
+        async def shutdown(self) -> None:
+            pass
+
+    class StubTTS:
+        async def prepare(self) -> None:
+            pass
+
+        async def synthesize(
+            self,
+            text: str,  # noqa: ARG002
+            tags: tuple[str, ...] = (),  # noqa: ARG002
+        ):
+            yield BackendsAudioFrame(
+                samples=np.ones(48, dtype=np.int16),
+                sample_rate=24000,
+            )
+
+        async def shutdown(self) -> None:
+            pass
+
+    pipeline = ComposablePipeline(StubSTT(), StubLLM(), StubTTS())
+
+    def _build_unused() -> ComposableConversationHandler:
+        raise AssertionError("copy() not exercised in this test")
+
+    wrapper = ComposableConversationHandler(
+        pipeline=pipeline,
+        tts_handler=MagicMock(),
+        deps=MagicMock(),
+        build=_build_unused,
+    )
+
+    # start_up blocks until shutdown — run it in the background.
+    start_task = asyncio.create_task(wrapper.start_up())
+    # Let prepare()/start() run and register the STT callback.
+    for _ in range(5):
+        if "fn" in callback_holder:
+            break
+        await asyncio.sleep(0)
+    assert "fn" in callback_holder, "pipeline did not register STT callback"
+
+    # Drive a "completed transcript" through the registered callback.
+    await callback_holder["fn"]("hello")
+
+    # The TTS frame should now be on the wrapper's output queue.
+    frame = await asyncio.wait_for(wrapper.emit(), timeout=1.0)
+    assert isinstance(frame, BackendsAudioFrame)
+    assert frame.sample_rate == 24000
+    assert frame.samples.shape == (48,)
+
+    await wrapper.shutdown()
+    await asyncio.wait_for(start_task, timeout=1.0)
