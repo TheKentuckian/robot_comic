@@ -35,6 +35,7 @@ import shutil
 import struct
 import logging
 import tempfile
+import threading
 import subprocess
 from pathlib import Path
 
@@ -166,9 +167,47 @@ def _play_windows(wav_path: Path) -> bool:
 
 
 def default_warmup_wav_path() -> Path:
-    """Return the default ``<repo_root>/assets/welcome/welcome.wav`` path."""
+    """Return the default ``<repo_root>/assets/welcome/welcome.wav`` path.
+
+    This is the legacy single-file fallback. The split intro+picker pair
+    lives next to it as ``welcome_intro.wav`` and ``welcome_picker.wav``;
+    see :func:`default_welcome_intro_path` and
+    :func:`default_welcome_picker_path`.
+    """
     # src/robot_comic/warmup_audio.py -> src/robot_comic -> src -> repo root
     return Path(__file__).resolve().parents[2] / "assets" / "welcome" / "welcome.wav"
+
+
+def default_welcome_intro_path() -> Path:
+    """Return the default ``<repo_root>/assets/welcome/welcome_intro.wav`` path."""
+    return Path(__file__).resolve().parents[2] / "assets" / "welcome" / "welcome_intro.wav"
+
+
+def default_welcome_picker_path() -> Path:
+    """Return the default ``<repo_root>/assets/welcome/welcome_picker.wav`` path."""
+    return Path(__file__).resolve().parents[2] / "assets" / "welcome" / "welcome_picker.wav"
+
+
+def _is_persona_locked() -> bool:
+    """Return True when a custom/locked persona is active and the picker prompt
+    should be suppressed.
+
+    Reads from :mod:`robot_comic.config` so that both the build-time
+    ``LOCKED_PROFILE`` constant and the runtime ``REACHY_MINI_CUSTOM_PROFILE``
+    env var are honoured (the config module merges them into the same
+    attribute at startup). Falls back to a direct env-var read if config has
+    not been imported yet — warmup fires very early in boot.
+    """
+    try:
+        from robot_comic import config  # noqa: PLC0415 — late import to avoid boot cost
+
+        profile = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
+        if profile:
+            return True
+    except Exception:
+        # config import can fail very early in boot; fall through to env check
+        pass
+    return bool(os.environ.get("REACHY_MINI_CUSTOM_PROFILE", "").strip())
 
 
 # ---------------------------------------------------------------------------
@@ -248,26 +287,77 @@ def _safe_remove(path: Path) -> None:
         pass
 
 
-def play_warmup_wav(path: str | Path | None = None) -> None:
-    """Spawn a player subprocess for the warmup WAV and return immediately.
+def _dispatch_single_wav(wav_path: Path) -> bool:
+    """Fire-and-forget play of a single WAV. Returns True if dispatched.
 
-    Silent no-op if the file does not exist or no player is on PATH. Never
-    raises; warmup is a best-effort UX nicety and must not block startup.
+    Mirrors the per-platform branching used by :func:`play_warmup_wav`, but
+    factored out so callers (and the chained intro+picker path) can dispatch
+    one file at a time without re-implementing player detection.
+    """
+    global _PLAYER_WARNED
+
+    if not wav_path.is_file():
+        logger.info("Warmup WAV not found at %s; skipping", wav_path)
+        return False
+
+    if sys.platform == "win32":
+        dispatched = _play_windows(wav_path)
+        if dispatched:
+            logger.info("Warmup WAV dispatched (winsound): %s", wav_path.name)
+        return dispatched
+
+    if _PLAYER_CMD is None:
+        if not _PLAYER_WARNED:
+            logger.warning("No audio player available (looked for aplay/paplay/afplay); skipping warmup WAV")
+            _PLAYER_WARNED = True
+        return False
+
+    cmd = [*_PLAYER_CMD, str(wav_path)]
+    try:
+        subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+        logger.info("Warmup WAV dispatched: %s", wav_path.name)
+        return True
+    except Exception as exc:
+        logger.warning("Failed to spawn warmup player %s: %s", cmd[0], exc)
+        return False
+
+
+def play_warmup_wav(path: str | Path | None = None) -> None:
+    """Dispatch warmup audio playback and return immediately.
+
+    Behaviour matrix:
+    - When ``path`` is provided explicitly: play that single file (legacy/test
+      callers, ``ROBOT_COMIC_WARMUP_WAV`` env override).
+    - When ``path`` is None and the split assets exist
+      (``welcome_intro.wav`` + ``welcome_picker.wav``):
+      * If a persona is locked (``REACHY_MINI_CUSTOM_PROFILE`` /
+        ``LOCKED_PROFILE``): play only the intro — the picker prompt
+        ("pick your comedian") would be misleading.
+      * Otherwise: play intro, then chain the picker on a daemon thread.
+    - When the split assets are missing: fall back to legacy
+      ``welcome.wav``.
+
+    Silent no-op if no player is on PATH. Never raises; warmup is a
+    best-effort UX nicety and must not block startup.
 
     Emits a ``warmup wav dispatched`` startup checkpoint (via
-    ``startup_timer.log_checkpoint``) only when a subprocess is actually
-    spawned, so the ``+Xs warmup wav dispatched → first TTS audio frame``
-    delta is meaningful. Skipped paths emit ``warmup wav skipped`` at INFO
-    so the journal always records which path was taken.
+    ``startup_timer.log_checkpoint``) only when at least one subprocess /
+    winsound call is actually spawned, so the ``+Xs warmup wav dispatched →
+    first TTS audio frame`` delta is meaningful. Skipped paths emit
+    ``warmup wav skipped`` at INFO so the journal always records which path
+    was taken.
 
     Optional blip
     ~~~~~~~~~~~~~
     When ``REACHY_MINI_WARMUP_BLIP_ENABLED=1`` is set, a tiny synthesised
     tone (:func:`play_warmup_blip`) is played first for instant "alive"
-    feedback, then the full welcome WAV follows as usual.
+    feedback, then the welcome WAV(s) follow as usual.
     """
-    global _PLAYER_WARNED
-
     from robot_comic.startup_timer import log_checkpoint
 
     # ``main.py`` dispatches the welcome WAV before any non-stdlib import so
@@ -289,41 +379,74 @@ def play_warmup_wav(path: str | Path | None = None) -> None:
     if blip_enabled:
         play_warmup_blip()
 
-    # --- welcome WAV path ---------------------------------------------------
-    wav_path = Path(path) if path else default_warmup_wav_path()
-    if not wav_path.is_file():
-        logger.info("Warmup WAV not found at %s; skipping", wav_path)
-        log_checkpoint("warmup wav skipped", logger)
+    # --- explicit path: legacy single-file behaviour -----------------------
+    if path is not None:
+        wav_path = Path(path)
+        dispatched = _dispatch_single_wav(wav_path)
+        log_checkpoint("warmup wav dispatched" if dispatched else "warmup wav skipped", logger)
         return
 
-    # Windows: use winsound directly (no external player needed)
-    if sys.platform == "win32":
-        dispatched = _play_windows(wav_path)
-        if dispatched:
-            logger.info("Warmup WAV dispatched (winsound): %s", wav_path.name)
-            log_checkpoint("warmup wav dispatched", logger)
-        else:
+    # --- default: prefer split intro+picker; fall back to legacy welcome.wav
+    intro_path = default_welcome_intro_path()
+    picker_path = default_welcome_picker_path()
+
+    if intro_path.is_file() and picker_path.is_file():
+        intro_dispatched = _dispatch_single_wav(intro_path)
+        if not intro_dispatched:
             log_checkpoint("warmup wav skipped", logger)
-        return
+            return
 
-    # POSIX: spawn subprocess player
-    if _PLAYER_CMD is None:
-        if not _PLAYER_WARNED:
-            logger.warning("No audio player available (looked for aplay/paplay/afplay); skipping warmup WAV")
-            _PLAYER_WARNED = True
-        log_checkpoint("warmup wav skipped", logger)
-        return
+        if _is_persona_locked():
+            logger.info("Persona locked; skipping welcome picker prompt")
+            log_checkpoint("warmup wav dispatched", logger)
+            return
 
-    cmd = [*_PLAYER_CMD, str(wav_path)]
-    try:
-        subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
+        # Chain picker after intro on a daemon thread so we don't block boot.
+        t = threading.Thread(
+            target=_chain_intro_then_picker_after_dispatch,
+            args=(intro_path, picker_path),
+            name="warmup-picker-chain",
+            daemon=True,
         )
-        logger.info("Warmup WAV dispatched: %s", wav_path.name)
+        t.start()
         log_checkpoint("warmup wav dispatched", logger)
+        return
+
+    # Legacy fallback: either split file missing — play the old single welcome.wav
+    legacy_path = default_warmup_wav_path()
+    logger.info(
+        "Split welcome assets missing (intro=%s, picker=%s); falling back to %s",
+        intro_path.is_file(),
+        picker_path.is_file(),
+        legacy_path.name,
+    )
+    dispatched = _dispatch_single_wav(legacy_path)
+    log_checkpoint("warmup wav dispatched" if dispatched else "warmup wav skipped", logger)
+
+
+def _chain_intro_then_picker_after_dispatch(intro: Path, picker: Path) -> None:
+    """Worker-thread target: wait for the already-dispatched intro to finish,
+    then play the picker.
+
+    The intro was already dispatched fire-and-forget by the caller (so the
+    checkpoint fires on the boot path), so here we just re-play the intro
+    *blockingly* to wait out its duration before triggering the picker.
+    A second simultaneous open of the same WAV via the shared player is
+    benign — pw-play / paplay route through the daemon's mix sink, aplay
+    fails silently when the device is busy, and winsound serialises.
+
+    To avoid the doubled audio we instead use a duration-based sleep derived
+    from the WAV header, which is cheap and platform-agnostic.
+    """
+    try:
+        with wave.open(str(intro), "rb") as wf:
+            duration_s = wf.getnframes() / float(wf.getframerate())
     except Exception as exc:
-        logger.warning("Failed to spawn warmup player %s: %s", cmd[0], exc)
-        log_checkpoint("warmup wav skipped", logger)
+        logger.warning("Could not read intro duration from %s: %s", intro.name, exc)
+        duration_s = 0.0
+
+    # Small safety pad so the picker doesn't clip onto the intro tail.
+    import time  # noqa: PLC0415 — narrow scope, daemon-thread only
+
+    time.sleep(max(0.0, duration_s) + 0.05)
+    _dispatch_single_wav(picker)
