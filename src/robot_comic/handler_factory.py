@@ -205,10 +205,26 @@ class HandlerFactory:
                         LLM_BACKEND_LLAMA,
                     )
                     return LocalSTTLlamaElevenLabsHandler(**handler_kwargs)
-                # Other llama+TTS combos (chatterbox uses BaseLlamaResponseHandler
-                # already; gemini_tts has LocalSTTLlamaGeminiTTSHandler) fall
-                # through to the existing composable selection below, which
-                # picks the correct llama-aware handler for those outputs.
+                if output_backend == AUDIO_OUTPUT_CHATTERBOX:
+                    # Phase 4c.1 (#337): chatterbox+llama is routed through
+                    # ComposableConversationHandler when FACTORY_PATH=composable.
+                    # Default FACTORY_PATH=legacy falls through to the existing
+                    # LocalSTTChatterboxHandler selection in the moonshine block
+                    # below.
+                    if getattr(config, "FACTORY_PATH", FACTORY_PATH_LEGACY) == FACTORY_PATH_COMPOSABLE:
+                        logger.info(
+                            "HandlerFactory: selecting ComposableConversationHandler "
+                            "(%s → %s, llm=%s, factory_path=composable)",
+                            input_backend,
+                            output_backend,
+                            LLM_BACKEND_LLAMA,
+                        )
+                        return _build_composable_llama_chatterbox(**handler_kwargs)
+                    # else: fall through to LocalSTTChatterboxHandler below.
+                # Other llama+TTS combos (chatterbox legacy path below;
+                # gemini_tts has LocalSTTLlamaGeminiTTSHandler) fall through to
+                # the existing composable selection below, which picks the
+                # correct llama-aware handler for those outputs.
 
             if _llm_backend == LLM_BACKEND_GEMINI:
                 if output_backend == AUDIO_OUTPUT_CHATTERBOX:
@@ -343,6 +359,47 @@ def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
         # but doesn't share the inheritance chain; the adapter is duck-typed
         # at runtime. Phase 4c will broaden the adapter's annotation.
         tts = ElevenLabsTTSAdapter(cast(Any, legacy))
+        pipeline = ComposablePipeline(
+            stt,
+            llm,
+            tts,
+            system_prompt=get_session_instructions(),
+        )
+        return ComposableConversationHandler(
+            pipeline=pipeline,
+            tts_handler=legacy,
+            deps=handler_kwargs["deps"],
+            build=_build,
+        )
+
+    return _build()
+
+
+def _build_composable_llama_chatterbox(**handler_kwargs: Any) -> Any:
+    """Construct the composable (moonshine, chatterbox, llama) pipeline.
+
+    Builds a legacy ``LocalSTTChatterboxHandler`` (the adapters delegate into
+    it), wraps it with the three Phase 3 adapters, composes them into a
+    ``ComposablePipeline`` seeded with the current session instructions, and
+    returns a ``ComposableConversationHandler`` whose ``build`` closure
+    re-runs the same construction. FastRTC's ``copy()`` per-peer cloning
+    invokes the closure for fresh state on each new peer.
+    """
+    from robot_comic.prompts import get_session_instructions
+    from robot_comic.adapters import (
+        LlamaLLMAdapter,
+        MoonshineSTTAdapter,
+        ChatterboxTTSAdapter,
+    )
+    from robot_comic.composable_pipeline import ComposablePipeline
+    from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
+    from robot_comic.composable_conversation_handler import ComposableConversationHandler
+
+    def _build() -> ComposableConversationHandler:
+        legacy = LocalSTTChatterboxHandler(**handler_kwargs)
+        stt = MoonshineSTTAdapter(legacy)
+        llm = LlamaLLMAdapter(legacy)
+        tts = ChatterboxTTSAdapter(legacy)
         pipeline = ComposablePipeline(
             stt,
             llm,
