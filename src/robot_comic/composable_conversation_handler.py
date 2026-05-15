@@ -72,10 +72,10 @@ class ComposableConversationHandler(ConversationHandler):
         raise NotImplementedError
 
     async def get_available_voices(self) -> list[str]:
-        raise NotImplementedError
+        return await self._tts_handler.get_available_voices()
 
     def get_current_voice(self) -> str:
-        raise NotImplementedError
+        return self._tts_handler.get_current_voice()
 
     async def change_voice(self, voice: str) -> str:
-        raise NotImplementedError
+        return await self._tts_handler.change_voice(voice)

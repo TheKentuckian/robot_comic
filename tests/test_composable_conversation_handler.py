@@ -70,3 +70,26 @@ async def test_emit_pulls_from_output_queue() -> None:
     await wrapper.pipeline.output_queue.put(sentinel)
     result = await wrapper.emit()
     assert result is sentinel
+
+
+def test_get_current_voice_delegates() -> None:
+    wrapper = _make_wrapper()
+    wrapper._tts_handler.get_current_voice = MagicMock(return_value="Brian")
+    assert wrapper.get_current_voice() == "Brian"
+    wrapper._tts_handler.get_current_voice.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_available_voices_delegates() -> None:
+    wrapper = _make_wrapper()
+    wrapper._tts_handler.get_available_voices = AsyncMock(return_value=["A", "B"])
+    assert await wrapper.get_available_voices() == ["A", "B"]
+    wrapper._tts_handler.get_available_voices.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_change_voice_delegates() -> None:
+    wrapper = _make_wrapper()
+    wrapper._tts_handler.change_voice = AsyncMock(return_value="Voice changed to X.")
+    assert await wrapper.change_voice("X") == "Voice changed to X."
+    wrapper._tts_handler.change_voice.assert_awaited_once_with("X")
