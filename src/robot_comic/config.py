@@ -265,6 +265,70 @@ AUDIO_OUTPUT_CHOICES: tuple[str, ...] = (
 AUDIO_INPUT_BACKEND_ENV = "REACHY_MINI_AUDIO_INPUT_BACKEND"
 AUDIO_OUTPUT_BACKEND_ENV = "REACHY_MINI_AUDIO_OUTPUT_BACKEND"
 
+# ---------------------------------------------------------------------------
+# 4th config dial: pipeline mode (composable vs bundled-realtime).
+# The STT/LLM/TTS dials only describe a meaningful pipeline when we're in
+# composable mode; bundled "speech-to-speech" backends (OpenAI Realtime,
+# Gemini Live, HF Realtime) fuse all three phases into one websocket session
+# and ignore the other dials. PIPELINE_MODE makes that choice explicit
+# instead of inferring it from the (input, output) pair.
+# ---------------------------------------------------------------------------
+
+PIPELINE_MODE_ENV = "REACHY_MINI_PIPELINE_MODE"
+PIPELINE_MODE_COMPOSABLE = "composable"
+PIPELINE_MODE_OPENAI_REALTIME = "openai_realtime"
+PIPELINE_MODE_GEMINI_LIVE = "gemini_live"
+PIPELINE_MODE_HF_REALTIME = "hf_realtime"
+
+PIPELINE_MODE_CHOICES: tuple[str, ...] = (
+    PIPELINE_MODE_COMPOSABLE,
+    PIPELINE_MODE_OPENAI_REALTIME,
+    PIPELINE_MODE_GEMINI_LIVE,
+    PIPELINE_MODE_HF_REALTIME,
+)
+
+
+def derive_pipeline_mode(input_backend: str, output_backend: str) -> str:
+    """Return the implied pipeline mode for a resolved (input, output) pair.
+
+    Bundled realtime backends fuse STT/LLM/TTS in one session — they're
+    identified by their input/output strings matching the canonical bundled
+    pair. Everything else is a composable 3-phase pipeline.
+
+    This is the backwards-compatibility bridge: when ``REACHY_MINI_PIPELINE_MODE``
+    is unset, ``refresh_runtime_config_from_env`` calls this function with the
+    resolved input/output so existing ``.env`` deployments keep working without
+    operator action.
+    """
+    if input_backend == AUDIO_INPUT_OPENAI_REALTIME and output_backend == AUDIO_OUTPUT_OPENAI_REALTIME:
+        return PIPELINE_MODE_OPENAI_REALTIME
+    if input_backend == AUDIO_INPUT_GEMINI_LIVE and output_backend == AUDIO_OUTPUT_GEMINI_LIVE:
+        return PIPELINE_MODE_GEMINI_LIVE
+    if input_backend == AUDIO_INPUT_HF and output_backend == AUDIO_OUTPUT_HF:
+        return PIPELINE_MODE_HF_REALTIME
+    return PIPELINE_MODE_COMPOSABLE
+
+
+def _normalize_pipeline_mode(value: str | None) -> str | None:
+    """Validate an explicit ``REACHY_MINI_PIPELINE_MODE`` value.
+
+    Returns the normalised string, or None if the value was absent/empty/invalid
+    (in which case ``refresh_runtime_config_from_env`` falls back to
+    :func:`derive_pipeline_mode`). Logs a warning on invalid values.
+    """
+    candidate = (value or "").strip().lower()
+    if not candidate:
+        return None
+    if candidate in PIPELINE_MODE_CHOICES:
+        return candidate
+    logger.warning(
+        "Invalid %s=%r. Expected one of: %s. Falling back to (input,output)-derived value.",
+        PIPELINE_MODE_ENV,
+        value,
+        ", ".join(PIPELINE_MODE_CHOICES),
+    )
+    return None
+
 # Supported (bundled) combinations — the only ones that map cleanly to an
 # existing handler class.  Any combo not in this set is aspirational and will
 # trigger a warning + fallback.
@@ -992,6 +1056,16 @@ class Config:
     AUDIO_INPUT_BACKEND: str = _resolved_audio[0]
     AUDIO_OUTPUT_BACKEND: str = _resolved_audio[1]
 
+    # 4th dial: PIPELINE_MODE. Composable (default) means the STT/LLM/TTS dials
+    # decide the pipeline; bundled values (openai_realtime / gemini_live /
+    # hf_realtime) fuse all three phases into one session. When the env var is
+    # unset we derive from the resolved (input, output) pair so existing .env
+    # files keep working — see derive_pipeline_mode.
+    _raw_pipeline_mode = _normalize_pipeline_mode(os.getenv(PIPELINE_MODE_ENV))
+    PIPELINE_MODE: str = _raw_pipeline_mode or derive_pipeline_mode(
+        AUDIO_INPUT_BACKEND, AUDIO_OUTPUT_BACKEND
+    )
+
     logger.debug(
         "Backend provider: %s, Model: %s, HF mode: %s, HF session URL set: %s, HF direct URL set: %s, HF_HOME: %s, Vision Model: %s, Local STT: %s/%s/%s response=%s cache=%s",
         BACKEND_PROVIDER,
@@ -1165,6 +1239,10 @@ def refresh_runtime_config_from_env() -> None:
     )
     config.AUDIO_INPUT_BACKEND = _refresh_audio[0]
     config.AUDIO_OUTPUT_BACKEND = _refresh_audio[1]
+    _refresh_pipeline_mode = _normalize_pipeline_mode(os.getenv(PIPELINE_MODE_ENV))
+    config.PIPELINE_MODE = _refresh_pipeline_mode or derive_pipeline_mode(
+        config.AUDIO_INPUT_BACKEND, config.AUDIO_OUTPUT_BACKEND
+    )
 
 
 def get_backend_choice(model_name: str | None = None) -> str:
