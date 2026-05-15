@@ -26,11 +26,17 @@ from robot_comic.main import _play_welcome_early  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _clear_early_played_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Each test starts with a clean env so dispatch decisions are testable."""
+def _clear_early_played_env(monkeypatch: pytest.MonkeyPatch):
+    """Each test starts AND ends with a clean env so direct ``os.environ``
+    writes by ``_play_welcome_early`` don't leak into later tests
+    (``test_warmup_audio_platform`` greps the flag and short-circuits)."""
     monkeypatch.delenv("REACHY_MINI_EARLY_WELCOME_PLAYED", raising=False)
     monkeypatch.delenv("REACHY_MINI_SKIP_EARLY_WELCOME", raising=False)
     monkeypatch.delenv("REACHY_MINI_ALSA_DEVICE", raising=False)
+    yield
+    # _play_welcome_early sets REACHY_MINI_EARLY_WELCOME_PLAYED directly via
+    # os.environ, so monkeypatch doesn't restore it on teardown — pop manually.
+    os.environ.pop("REACHY_MINI_EARLY_WELCOME_PLAYED", None)
 
 
 def _make_assets_with(tmp_path: Path, *files: str) -> Path:

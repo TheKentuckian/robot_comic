@@ -139,9 +139,7 @@ async def test_first_audio_chunk_triggers_first_greeting_supporting_event(
     monkeypatch.setattr(mod, "load_profile_elevenlabs_config", lambda: {"voice_id": "v"})
     handler = _make_handler()
 
-    handler._http.stream = lambda *a, **kw: _FakeStreamCM(
-        _FakeStreamResponse([_silent_pcm_bytes(2400)])
-    )
+    handler._http.stream = lambda *a, **kw: _FakeStreamCM(_FakeStreamResponse([_silent_pcm_bytes(2400)]))
 
     # Reset the once-guard so the function is reachable in this test.
     monkeypatch.setattr(telemetry, "_FIRST_GREETING_EMITTED", False)
@@ -164,9 +162,7 @@ async def test_first_greeting_hook_skipped_when_marker_empty(
     monkeypatch.setattr(mod, "load_profile_elevenlabs_config", lambda: {"voice_id": "v"})
     handler = _make_handler()
 
-    handler._http.stream = lambda *a, **kw: _FakeStreamCM(
-        _FakeStreamResponse([_silent_pcm_bytes(2400)])
-    )
+    handler._http.stream = lambda *a, **kw: _FakeStreamCM(_FakeStreamResponse([_silent_pcm_bytes(2400)]))
 
     with patch.object(telemetry, "emit_first_greeting_audio_once") as once_hook:
         await handler._stream_tts_to_queue("hi", first_audio_marker=[])
