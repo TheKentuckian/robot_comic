@@ -312,6 +312,25 @@ class HandlerFactory:
                 return LocalSTTGeminiTTSHandler(**handler_kwargs)
 
             if output_backend == AUDIO_OUTPUT_ELEVENLABS:
+                # Phase 4c.4 (#337): the gemini-fallback dispatch arm is
+                # reached when LLM_BACKEND is neither "llama" nor "gemini".
+                # For the composable path we route through the same builder
+                # used by the LLM_BACKEND=gemini arm (4c.3) because the
+                # underlying triple is the same (moonshine + elevenlabs +
+                # Gemini-API LLM), just reached through a different dispatch
+                # condition. The composable path's GeminiLLMAdapter requires
+                # a handler with _call_llm (GeminiTextElevenLabsHandler);
+                # LocalSTTGeminiElevenLabsHandler uses _run_llm_with_tools
+                # instead and can't host that adapter. Phase 4e will retire
+                # LocalSTTGeminiElevenLabsHandler.
+                if getattr(config, "FACTORY_PATH", FACTORY_PATH_LEGACY) == FACTORY_PATH_COMPOSABLE:
+                    logger.info(
+                        "HandlerFactory: selecting ComposableConversationHandler "
+                        "(%s → %s, llm=gemini-fallback, factory_path=composable)",
+                        input_backend,
+                        output_backend,
+                    )
+                    return _build_composable_gemini_elevenlabs(**handler_kwargs)
                 from robot_comic.elevenlabs_tts import LocalSTTGeminiElevenLabsHandler
 
                 logger.info(
