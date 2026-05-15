@@ -43,9 +43,14 @@ from robot_comic.config import (
     AUDIO_OUTPUT_GEMINI_TTS,
     AUDIO_OUTPUT_BACKEND_ENV,
     AUDIO_OUTPUT_GEMINI_LIVE,
+    PIPELINE_MODE_COMPOSABLE,
+    PIPELINE_MODE_GEMINI_LIVE,
+    PIPELINE_MODE_HF_REALTIME,
     AUDIO_INPUT_OPENAI_REALTIME,
     AUDIO_OUTPUT_OPENAI_REALTIME,
+    PIPELINE_MODE_OPENAI_REALTIME,
     config,
+    derive_pipeline_mode,
 )
 
 
@@ -93,6 +98,7 @@ class HandlerFactory:
         output_backend: str,
         deps: "ToolDependencies",
         *,
+        pipeline_mode: Optional[str] = None,
         sim_mode: bool = False,
         instance_path: Optional[str] = None,
         startup_voice: Optional[str] = None,
@@ -103,6 +109,9 @@ class HandlerFactory:
             input_backend:  Resolved ``AUDIO_INPUT_BACKEND`` value (e.g. ``"moonshine"``).
             output_backend: Resolved ``AUDIO_OUTPUT_BACKEND`` value (e.g. ``"chatterbox"``).
             deps:           Populated ``ToolDependencies`` instance.
+            pipeline_mode:  Optional explicit ``PIPELINE_MODE`` value. When omitted
+                the factory derives it from the (input, output) pair so legacy
+                call sites keep working unchanged.
             sim_mode:       Whether the app is running in simulation / dev mode.
             instance_path:  Optional path to the per-instance data directory.
             startup_voice:  Optional voice name loaded from ``startup_settings.json``.
@@ -116,8 +125,6 @@ class HandlerFactory:
                 and references ``docs/audio-backends.md``.
 
         """
-        combo = (input_backend, output_backend)
-
         handler_kwargs: dict[str, Any] = {
             "deps": deps,
             "sim_mode": sim_mode,
@@ -125,39 +132,42 @@ class HandlerFactory:
             "startup_voice": startup_voice,
         }
 
+        # Resolve pipeline_mode: explicit arg > derived from (input, output).
+        # When callers (main.py) want config.PIPELINE_MODE to drive selection
+        # they pass it explicitly; legacy callers (tests, internal) that just
+        # pass an (input, output) pair get the original behaviour via
+        # derivation.
+        if pipeline_mode is None:
+            pipeline_mode = derive_pipeline_mode(input_backend, output_backend)
+
         # ------------------------------------------------------------------
-        # Fully-realtime bundled pairs
+        # Bundled speech-to-speech sessions (one websocket fuses STT+LLM+TTS).
+        # These ignore the input/output dial values; PIPELINE_MODE is the
+        # source of truth.
         # ------------------------------------------------------------------
 
-        if combo == (AUDIO_INPUT_HF, AUDIO_OUTPUT_HF):
+        if pipeline_mode == PIPELINE_MODE_HF_REALTIME:
             from robot_comic.huggingface_realtime import HuggingFaceRealtimeHandler
 
-            logger.info(
-                "HandlerFactory: selecting HuggingFaceRealtimeHandler (%s → %s)",
-                input_backend,
-                output_backend,
-            )
+            logger.info("HandlerFactory: selecting HuggingFaceRealtimeHandler (PIPELINE_MODE=hf_realtime)")
             return HuggingFaceRealtimeHandler(**handler_kwargs)
 
-        if combo == (AUDIO_INPUT_OPENAI_REALTIME, AUDIO_OUTPUT_OPENAI_REALTIME):
+        if pipeline_mode == PIPELINE_MODE_OPENAI_REALTIME:
             from robot_comic.openai_realtime import OpenaiRealtimeHandler
 
-            logger.info(
-                "HandlerFactory: selecting OpenaiRealtimeHandler (%s → %s)",
-                input_backend,
-                output_backend,
-            )
+            logger.info("HandlerFactory: selecting OpenaiRealtimeHandler (PIPELINE_MODE=openai_realtime)")
             return OpenaiRealtimeHandler(**handler_kwargs)
 
-        if combo == (AUDIO_INPUT_GEMINI_LIVE, AUDIO_OUTPUT_GEMINI_LIVE):
+        if pipeline_mode == PIPELINE_MODE_GEMINI_LIVE:
             from robot_comic.gemini_live import GeminiLiveHandler
 
-            logger.info(
-                "HandlerFactory: selecting GeminiLiveHandler (%s → %s)",
-                input_backend,
-                output_backend,
-            )
+            logger.info("HandlerFactory: selecting GeminiLiveHandler (PIPELINE_MODE=gemini_live)")
             return GeminiLiveHandler(**handler_kwargs)
+
+        # ------------------------------------------------------------------
+        # Composable mode — STT/LLM/TTS dials decide the pipeline.
+        # ------------------------------------------------------------------
+        assert pipeline_mode == PIPELINE_MODE_COMPOSABLE, f"Unhandled pipeline_mode={pipeline_mode!r}"
 
         # ------------------------------------------------------------------
         # Local STT (Moonshine) + TTS output pairs — Gemini text-LLM variants
