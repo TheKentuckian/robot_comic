@@ -29,7 +29,7 @@ attempted here.
 
 from __future__ import annotations
 import logging
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional
 
 from robot_comic.config import (
     AUDIO_INPUT_HF,
@@ -252,6 +252,19 @@ class HandlerFactory:
                     return GeminiTextChatterboxHandler(**handler_kwargs)
 
                 if output_backend == AUDIO_OUTPUT_ELEVENLABS:
+                    # Phase 4c.3 (#337): gemini+elevenlabs is routed through
+                    # ComposableConversationHandler when FACTORY_PATH=composable.
+                    # Default FACTORY_PATH=legacy keeps the existing
+                    # GeminiTextElevenLabsHandler selection below.
+                    if getattr(config, "FACTORY_PATH", FACTORY_PATH_LEGACY) == FACTORY_PATH_COMPOSABLE:
+                        logger.info(
+                            "HandlerFactory: selecting ComposableConversationHandler "
+                            "(%s → %s, llm=%s, factory_path=composable)",
+                            input_backend,
+                            output_backend,
+                            LLM_BACKEND_GEMINI,
+                        )
+                        return _build_composable_gemini_elevenlabs(**handler_kwargs)
                     from robot_comic.gemini_text_handlers import GeminiTextElevenLabsHandler
 
                     logger.info(
@@ -367,11 +380,11 @@ def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
         legacy = LocalSTTLlamaElevenLabsHandler(**handler_kwargs)
         stt = MoonshineSTTAdapter(legacy)
         llm = LlamaLLMAdapter(legacy)
-        # LlamaElevenLabsTTSResponseHandler has the same _stream_tts_to_queue +
-        # _prepare_startup_credentials surface as ElevenLabsTTSResponseHandler
-        # but doesn't share the inheritance chain; the adapter is duck-typed
-        # at runtime. Phase 4c will broaden the adapter's annotation.
-        tts = ElevenLabsTTSAdapter(cast(Any, legacy))
+        # LlamaElevenLabsTTSResponseHandler structurally matches the
+        # ElevenLabsTTSAdapter Protocol surface (broadened in 4c.3) even
+        # though it doesn't share ElevenLabsTTSResponseHandler's inheritance
+        # chain. No cast needed.
+        tts = ElevenLabsTTSAdapter(legacy)
         pipeline = ComposablePipeline(
             stt,
             llm,
@@ -460,6 +473,54 @@ def _build_composable_gemini_chatterbox(**handler_kwargs: Any) -> Any:
         stt = MoonshineSTTAdapter(legacy)
         llm = GeminiLLMAdapter(legacy)
         tts = ChatterboxTTSAdapter(legacy)
+        pipeline = ComposablePipeline(
+            stt,
+            llm,
+            tts,
+            system_prompt=get_session_instructions(),
+        )
+        return ComposableConversationHandler(
+            pipeline=pipeline,
+            tts_handler=legacy,
+            deps=handler_kwargs["deps"],
+            build=_build,
+        )
+
+    return _build()
+
+
+def _build_composable_gemini_elevenlabs(**handler_kwargs: Any) -> Any:
+    """Construct the composable (moonshine, elevenlabs, gemini) pipeline.
+
+    Builds a legacy ``GeminiTextElevenLabsHandler`` (the adapters delegate
+    into it), wraps it with the three Phase 3/4 adapters, composes them into
+    a ``ComposablePipeline`` seeded with the current session instructions,
+    and returns a ``ComposableConversationHandler`` whose ``build`` closure
+    re-runs the same construction. FastRTC's ``copy()`` per-peer cloning
+    invokes the closure for fresh state on each new peer.
+
+    The ElevenLabs TTS half is shared with Phase 4b's llama variant; the
+    LLM half is the same ``GeminiLLMAdapter`` from Phase 4c.2. No new
+    adapter is introduced — only the routing. The Phase 4c.3
+    ``_ElevenLabsCompatibleHandler`` Protocol broadening in
+    ``elevenlabs_tts_adapter.py`` is what lets the ElevenLabs adapter accept
+    the diamond-MRO ``GeminiTextElevenLabsResponseHandler`` without a cast.
+    """
+    from robot_comic.prompts import get_session_instructions
+    from robot_comic.adapters import (
+        GeminiLLMAdapter,
+        MoonshineSTTAdapter,
+        ElevenLabsTTSAdapter,
+    )
+    from robot_comic.composable_pipeline import ComposablePipeline
+    from robot_comic.gemini_text_handlers import GeminiTextElevenLabsHandler
+    from robot_comic.composable_conversation_handler import ComposableConversationHandler
+
+    def _build() -> ComposableConversationHandler:
+        legacy = GeminiTextElevenLabsHandler(**handler_kwargs)
+        stt = MoonshineSTTAdapter(legacy)
+        llm = GeminiLLMAdapter(legacy)
+        tts = ElevenLabsTTSAdapter(legacy)
         pipeline = ComposablePipeline(
             stt,
             llm,

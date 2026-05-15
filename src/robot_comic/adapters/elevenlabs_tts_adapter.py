@@ -1,4 +1,4 @@
-"""ElevenLabsTTSAdapter: expose ElevenLabsTTSResponseHandler as TTSBackend.
+"""ElevenLabsTTSAdapter: expose ElevenLabs-shaped TTS handlers as TTSBackend.
 
 The legacy ``_stream_tts_to_queue`` pushes PCM frames into
 ``self.output_queue`` as ``(sample_rate, np.ndarray)`` tuples. The Phase 1
@@ -21,6 +21,26 @@ The queue substitution preserves the handler's per-response state
 because the adapter delegates to ``_enqueue_audio_frame`` indirectly via
 the legacy ``_stream_tts_to_queue`` — only the *destination* queue changes.
 
+## Duck-typed handler surface (Phase 4c.3)
+
+The constructor accepts any object satisfying the
+:class:`_ElevenLabsCompatibleHandler` Protocol below — the four-member
+duck-typed surface the adapter actually uses. Today that includes:
+
+- ``ElevenLabsTTSResponseHandler`` (and subclasses).
+- ``GeminiTextElevenLabsResponseHandler`` (diamond-MRO subclass of
+  ``ElevenLabsTTSResponseHandler``).
+- ``LlamaElevenLabsTTSResponseHandler`` (structural match, parallel
+  inheritance chain — no nominal relation to
+  ``ElevenLabsTTSResponseHandler``).
+- ``LocalSTTGeminiElevenLabsHandler`` (structural match — will be wired
+  in 4c.4).
+
+Broadening from the concrete class to a Protocol pays down the
+``cast(Any, legacy)`` workaround introduced in Phase 4b for the llama
+variant, and unblocks the Phase 4c.3 routing for
+``(moonshine, elevenlabs, gemini)`` without a new adapter.
+
 ## Known gap
 
 The legacy ``_stream_tts_to_queue`` accepts a ``first_audio_marker:
@@ -34,13 +54,9 @@ the adapter can forward both.
 from __future__ import annotations
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, AsyncIterator
+from typing import Any, Protocol, AsyncIterator
 
 from robot_comic.backends import AudioFrame
-
-
-if TYPE_CHECKING:
-    from robot_comic.elevenlabs_tts import ElevenLabsTTSResponseHandler
 
 
 logger = logging.getLogger(__name__)
@@ -52,10 +68,43 @@ logger = logging.getLogger(__name__)
 _STREAM_DONE = object()
 
 
-class ElevenLabsTTSAdapter:
-    """Adapter exposing ``ElevenLabsTTSResponseHandler`` as ``TTSBackend``."""
+class _ElevenLabsCompatibleHandler(Protocol):
+    """Duck-typed surface ``ElevenLabsTTSAdapter`` needs on its wrapped handler.
 
-    def __init__(self, handler: "ElevenLabsTTSResponseHandler") -> None:
+    Captures only the four members the adapter actually touches:
+
+    - ``_prepare_startup_credentials()`` — awaited from ``prepare()``.
+    - ``output_queue`` — read + reassigned (swapped with a temp queue for
+      the duration of one ``synthesize()`` call, then restored).
+    - ``_stream_tts_to_queue(text, tags=...)`` — the streaming entry point.
+    - ``_http`` — optional httpx client closed in ``shutdown()``.
+
+    ``_http`` is typed ``Any`` so the adapter doesn't need to import
+    ``httpx`` just for the closeable-resource contract. The only operation
+    the adapter performs on it is ``await http.aclose()`` after a
+    ``getattr(..., None)`` guard.
+
+    Not ``@runtime_checkable`` — we don't ``isinstance``-check Protocol
+    matches; mypy structural typing is the only consumer.
+    """
+
+    output_queue: asyncio.Queue[Any]
+    _http: Any
+
+    async def _prepare_startup_credentials(self) -> None: ...
+
+    async def _stream_tts_to_queue(
+        self,
+        text: str,
+        first_audio_marker: list[float] | None = None,
+        tags: list[str] | None = None,
+    ) -> bool: ...
+
+
+class ElevenLabsTTSAdapter:
+    """Adapter exposing ElevenLabs-shaped TTS handlers as ``TTSBackend``."""
+
+    def __init__(self, handler: "_ElevenLabsCompatibleHandler") -> None:
         """Wrap a pre-constructed handler instance."""
         self._handler = handler
 
