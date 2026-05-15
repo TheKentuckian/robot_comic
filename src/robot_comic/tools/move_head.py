@@ -80,6 +80,10 @@ class MoveHead(Tool):
                 start_body_yaw=current_antennas[0],  # body_yaw is first in joint positions
                 duration=deps.motion_duration_s,
                 speed_factor=speed,
+                # Cubic smoothstep ramp (#264): zero start/end velocity removes
+                # the visible snap when consecutive move_head calls chain in
+                # quick succession (greet scan sweep, etc).
+                ease=True,
             )
 
             movement_manager.queue_move(goto_move)
