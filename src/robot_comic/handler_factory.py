@@ -35,6 +35,7 @@ from robot_comic.config import (
     AUDIO_OUTPUT_HF,
     LLM_BACKEND_ENV,
     LLM_BACKEND_GEMINI,
+    LLM_BACKEND_LLAMA,
     AUDIO_INPUT_MOONSHINE,
     AUDIO_INPUT_BACKEND_ENV,
     AUDIO_INPUT_GEMINI_LIVE,
@@ -174,7 +175,29 @@ class HandlerFactory:
         # ------------------------------------------------------------------
 
         if input_backend == AUDIO_INPUT_MOONSHINE:
-            _llm_backend = getattr(config, "LLM_BACKEND", "llama")
+            _llm_backend = getattr(config, "LLM_BACKEND", LLM_BACKEND_LLAMA)
+
+            # LLM_BACKEND=llama variants. The orphan-handler bug was here:
+            # before this branch existed the factory ignored LLM_BACKEND=llama
+            # for the elevenlabs output and fell through to the
+            # Gemini-hardcoded LocalSTTElevenLabsHandler. The llama-specific
+            # handlers actually call llama-server for the LLM phase.
+            if _llm_backend == LLM_BACKEND_LLAMA:
+                if output_backend == AUDIO_OUTPUT_ELEVENLABS:
+                    from robot_comic.llama_elevenlabs_tts import LocalSTTLlamaElevenLabsHandler
+
+                    logger.info(
+                        "HandlerFactory: selecting LocalSTTLlamaElevenLabsHandler (%s → %s, llm=%s)",
+                        input_backend,
+                        output_backend,
+                        LLM_BACKEND_LLAMA,
+                    )
+                    return LocalSTTLlamaElevenLabsHandler(**handler_kwargs)
+                # Other llama+TTS combos (chatterbox uses BaseLlamaResponseHandler
+                # already; gemini_tts has LocalSTTLlamaGeminiTTSHandler) fall
+                # through to the existing composable selection below, which
+                # picks the correct llama-aware handler for those outputs.
+
             if _llm_backend == LLM_BACKEND_GEMINI:
                 if output_backend == AUDIO_OUTPUT_CHATTERBOX:
                     from robot_comic.gemini_text_handlers import GeminiTextChatterboxHandler

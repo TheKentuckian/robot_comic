@@ -89,9 +89,13 @@ def test_explicit_hf_realtime_returns_hf_handler(mock_deps: MagicMock) -> None:
 
 
 def test_explicit_composable_uses_input_output_selection(mock_deps: MagicMock) -> None:
-    """``pipeline_mode=composable`` falls through to (input, output) dispatch."""
-    fake = _fake_cls("LocalSTTElevenLabsHandler")
-    with patch("robot_comic.elevenlabs_tts.LocalSTTElevenLabsHandler", fake):
+    """``pipeline_mode=composable`` falls through to (input, output, llm) dispatch.
+
+    With default LLM_BACKEND=llama, (moonshine, elevenlabs) picks the llama
+    variant. The Gemini variant is exercised in test_handler_factory_gemini_llm.py.
+    """
+    fake = _fake_cls("LocalSTTLlamaElevenLabsHandler")
+    with patch("robot_comic.llama_elevenlabs_tts.LocalSTTLlamaElevenLabsHandler", fake):
         result = HandlerFactory.build(
             AUDIO_INPUT_MOONSHINE,
             AUDIO_OUTPUT_ELEVENLABS,
@@ -119,9 +123,12 @@ def test_pipeline_mode_omitted_derives_from_bundled_pair(mock_deps: MagicMock) -
 
 
 def test_pipeline_mode_omitted_falls_through_to_composable(mock_deps: MagicMock) -> None:
-    """(moonshine, elevenlabs) without explicit mode goes to the composable branch."""
-    fake = _fake_cls("LocalSTTElevenLabsHandler")
-    with patch("robot_comic.elevenlabs_tts.LocalSTTElevenLabsHandler", fake):
+    """(moonshine, elevenlabs) without explicit mode goes to the composable branch.
+
+    Default LLM_BACKEND=llama → LocalSTTLlamaElevenLabsHandler.
+    """
+    fake = _fake_cls("LocalSTTLlamaElevenLabsHandler")
+    with patch("robot_comic.llama_elevenlabs_tts.LocalSTTLlamaElevenLabsHandler", fake):
         result = HandlerFactory.build(
             AUDIO_INPUT_MOONSHINE,
             AUDIO_OUTPUT_ELEVENLABS,
