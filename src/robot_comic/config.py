@@ -348,6 +348,38 @@ def derive_pipeline_mode(input_backend: str, output_backend: str) -> str:
     return PIPELINE_MODE_COMPOSABLE
 
 
+# ---------------------------------------------------------------------------
+# Factory path dial — Phase 4b of #337. Selects whether HandlerFactory returns
+# the legacy concrete handler classes (default, today's behaviour) or the new
+# ComposableConversationHandler wrapper around a ComposablePipeline. Only
+# affects the (moonshine, llama, elevenlabs) triple in 4b; other triples are
+# migrated in 4c.
+# ---------------------------------------------------------------------------
+
+FACTORY_PATH_ENV = "REACHY_MINI_FACTORY_PATH"
+FACTORY_PATH_LEGACY = "legacy"
+FACTORY_PATH_COMPOSABLE = "composable"
+FACTORY_PATH_CHOICES: tuple[str, ...] = (FACTORY_PATH_LEGACY, FACTORY_PATH_COMPOSABLE)
+DEFAULT_FACTORY_PATH = FACTORY_PATH_LEGACY
+
+
+def _normalize_factory_path(value: str | None) -> str:
+    """Validate REACHY_MINI_FACTORY_PATH; fall back to legacy on unknowns."""
+    candidate = (value or "").strip().lower()
+    if not candidate:
+        return DEFAULT_FACTORY_PATH
+    if candidate in FACTORY_PATH_CHOICES:
+        return candidate
+    logger.warning(
+        "Invalid %s=%r. Expected one of: %s. Falling back to %r.",
+        FACTORY_PATH_ENV,
+        value,
+        ", ".join(FACTORY_PATH_CHOICES),
+        DEFAULT_FACTORY_PATH,
+    )
+    return DEFAULT_FACTORY_PATH
+
+
 def _normalize_pipeline_mode(value: str | None) -> str | None:
     """Validate an explicit ``REACHY_MINI_PIPELINE_MODE`` value.
 
