@@ -2,6 +2,7 @@
 
 import os
 import sys
+import math
 import time
 import asyncio
 import logging
@@ -289,6 +290,13 @@ class LocalSTTInputMixin:
         # is disabled.
         self._diag_add_audio_logged: int = 0
         self._diag_last_add_audio_at: float | None = None
+        # #314 audio-level diagnostic: rolling peak / sum-of-squares / sample
+        # count since the last periodic diag dump. Reveals whether the audio
+        # reaching Moonshine is silence or real speech, which the per-call
+        # `first_sample` log can't distinguish.
+        self._diag_window_peak: float = 0.0
+        self._diag_window_sumsq: float = 0.0
+        self._diag_window_samples: int = 0
         self._diag_periodic_future: "asyncio.Future[Any] | ConcurrentFuture[None] | None" = None
         self._welcome_gate: WelcomeGate | None = self._build_welcome_gate()
 
@@ -718,10 +726,18 @@ class LocalSTTInputMixin:
         now = time.monotonic()
         last_audio = self._diag_last_add_audio_at
         elapsed_audio = (now - last_audio) if last_audio is not None else None
+        peak = self._diag_window_peak
+        samples = self._diag_window_samples
+        rms = math.sqrt(self._diag_window_sumsq / samples) if samples > 0 else 0.0
+        # Reset the rolling window so each periodic dump reports the level
+        # since the previous dump, not since process start.
+        self._diag_window_peak = 0.0
+        self._diag_window_sumsq = 0.0
+        self._diag_window_samples = 0
         logger.info(
             "[MOONSHINE_DIAG] periodic listener_id=%s stream_id=%s audio_frames=%d "
             "last_add_audio_elapsed_s=%s state=%s last_event=%s last_event_age_s=%.1f "
-            "pending_rearm=%s",
+            "pending_rearm=%s window_peak=%.4f window_rms=%.4f window_samples=%d",
             id(self._local_stt_listener),
             id(self._local_stt_stream),
             h["audio_frames"],
@@ -730,6 +746,9 @@ class LocalSTTInputMixin:
             h["last_event"],
             now - h["last_event_at"],
             self._pending_stream_rearm,
+            peak,
+            rms,
+            samples,
         )
 
     async def _moonshine_diag_periodic_loop(self) -> None:
@@ -823,6 +842,14 @@ class LocalSTTInputMixin:
             self._diag_last_add_audio_at = time.monotonic()
             if self._heartbeat["first_audio_at"] is None:
                 self._heartbeat["first_audio_at"] = time.monotonic()
+            if _diag_enabled():
+                # #314: track audio level reaching Moonshine so the periodic
+                # dump can prove silence vs speech regardless of VAD outcome.
+                peak = float(np.abs(audio_float).max()) if len(audio_float) else 0.0
+                if peak > self._diag_window_peak:
+                    self._diag_window_peak = peak
+                self._diag_window_sumsq += float((audio_float.astype(np.float32) ** 2).sum())
+                self._diag_window_samples += len(audio_float)
         except Exception as e:
             if _diag_enabled():
                 logger.info(
