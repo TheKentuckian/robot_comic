@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import robot_comic.base_realtime as base_rt_mod
 import robot_comic.huggingface_realtime as hf_mod
 from robot_comic.config import HF_BACKEND, config, get_default_voice_for_backend
 from robot_comic.tools.core_tools import ToolDependencies
@@ -250,7 +249,11 @@ async def test_emit_skips_idle_signal_while_response_active(monkeypatch: Any) ->
 
     send_idle_signal = AsyncMock()
     monkeypatch.setattr(handler, "send_idle_signal", send_idle_signal)
-    monkeypatch.setattr(base_rt_mod, "wait_for_item", AsyncMock(return_value=None))
+    # wait_for_item is lazy-imported inside _wait_for_output_item (see #284);
+    # patch the source module attribute so the deferred import picks up the mock.
+    import fastrtc
+
+    monkeypatch.setattr(fastrtc, "wait_for_item", AsyncMock(return_value=None))
 
     result = await handler.emit()
 

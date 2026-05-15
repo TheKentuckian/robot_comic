@@ -21,7 +21,7 @@ from datetime import datetime
 
 import numpy as np
 import gradio as gr
-from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item, audio_to_int16
+from fastrtc import AsyncStreamHandler
 from numpy.typing import NDArray
 from scipy.signal import resample
 from opentelemetry import trace
@@ -29,6 +29,7 @@ from opentelemetry import context as otel_context
 
 
 if TYPE_CHECKING:
+    from fastrtc import AdditionalOutputs
     from google.genai import types
 
 from robot_comic import telemetry
@@ -513,6 +514,8 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
         phrases work on Gemini Live the same way they do on the realtime
         handlers that inherit from BaseRealtimeHandler.
         """
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
+
         if not chunks:
             return
 
@@ -788,6 +791,8 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _handle_tool_call(self, response: Any) -> None:
         """Process a tool_call from Gemini and send the response back."""
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
+
         if not response.tool_call or not response.tool_call.function_calls:
             return
 
@@ -831,6 +836,7 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
 
     async def _handle_tool_result(self, bg_tool: ToolNotification) -> None:
         """Process the result of a completed tool and send it back to Gemini."""
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
         from google.genai import types  # deferred: google.genai.types costs ~5.5 s at boot
 
         if bg_tool.error is not None:
@@ -1107,6 +1113,7 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
 
     async def receive(self, frame: Tuple[int, NDArray[np.int16]]) -> None:
         """Receive audio frame from microphone and send to Gemini."""
+        from fastrtc import audio_to_int16  # deferred: fastrtc pulls gradio at boot
         from google.genai import types  # deferred: google.genai.types costs ~5.5 s at boot
 
         if not self.session:
@@ -1141,6 +1148,8 @@ class GeminiLiveHandler(AsyncStreamHandler, ConversationHandler):
 
     async def emit(self) -> Tuple[int, NDArray[np.int16]] | AdditionalOutputs | None:
         """Emit audio frame to be played by the speaker."""
+        from fastrtc import wait_for_item  # deferred: fastrtc pulls gradio at boot
+
         # Handle idle
         idle_duration = asyncio.get_event_loop().time() - self.last_activity_time
         if idle_duration > 15.0 and self.deps.movement_manager.is_idle():

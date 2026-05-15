@@ -15,7 +15,7 @@ from typing import Any, Optional, AsyncGenerator
 
 import httpx
 import numpy as np
-from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item
+from fastrtc import AsyncStreamHandler
 from opentelemetry import trace as _otel_trace
 from opentelemetry import context as _otel_context
 
@@ -202,6 +202,8 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         """No-op: audio input is handled by LocalSTTInputMixin.receive()."""
 
     async def emit(self) -> Any:
+        from fastrtc import wait_for_item  # deferred: fastrtc pulls gradio at boot
+
         item = await wait_for_item(self.output_queue)
         if isinstance(item, tuple):
             # Update the speaking deadline using total bytes enqueued so far.
@@ -263,6 +265,8 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         Yields text deltas, accumulates tool calls, and synthesizes complete sentences.
         Returns (full_text, tool_calls, raw_message) like _call_llm but with streaming TTS.
         """
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
+
         text_parts: list[str] = []
         tool_calls_by_idx: dict[int, dict[str, Any]] = {}
         pending_text: str = ""
@@ -495,6 +499,8 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                     self._turn_span = None
 
     async def _run_turn(self, outer_span: Any = None) -> None:
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
+
         _tracer = telemetry.get_tracer()
         # Reset byte-count echo-guard accumulators for this new response turn.
         self._response_audio_bytes = 0

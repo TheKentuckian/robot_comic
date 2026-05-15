@@ -1,3 +1,4 @@
+from __future__ import annotations
 import json
 import time
 import uuid
@@ -6,13 +7,13 @@ import random
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Final, Tuple, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, Final, Tuple, ClassVar, Optional
 from datetime import datetime
 
 import numpy as np
 import gradio as gr
 from openai import AsyncOpenAI
-from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item, audio_to_int16
+from fastrtc import AsyncStreamHandler
 from pydantic import Field, BaseModel
 from numpy.typing import NDArray
 from scipy.signal import resample
@@ -28,6 +29,10 @@ from openai.types.realtime import (
 )
 from websockets.exceptions import ConnectionClosedError
 from openai.resources.realtime.realtime import AsyncRealtimeConnection
+
+
+if TYPE_CHECKING:
+    from fastrtc import AdditionalOutputs
 
 from robot_comic import telemetry
 from robot_comic.config import (
@@ -274,6 +279,8 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
 
     async def _wait_for_output_item(self) -> Tuple[int, NDArray[np.int16]] | AdditionalOutputs | None:
         """Wait for the next output item."""
+        from fastrtc import wait_for_item  # deferred: fastrtc pulls gradio at boot
+
         return await wait_for_item(self.output_queue)  # type: ignore[no-any-return]
 
     def _mark_activity(self, reason: str) -> None:
@@ -371,6 +378,8 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
 
     async def _emit_debounced_partial(self, transcript: str, item_id: str, sequence_counter: int) -> None:
         """Emit partial transcript after debounce delay."""
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
+
         try:
             await asyncio.sleep(self.partial_debounce_delay)
 
@@ -591,6 +600,8 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
 
     async def _handle_tool_result(self, bg_tool: ToolNotification) -> None:
         """Process the result of a tool call."""
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
+
         if bg_tool.error is not None:
             logger.error("Tool '%s' (id=%s) failed with error: %s", bg_tool.tool_name, bg_tool.id, bg_tool.error)
             tool_result = {"error": bg_tool.error}
@@ -716,6 +727,8 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
 
     async def _run_realtime_session(self) -> None:
         """Establish and manage a single realtime session."""
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
+
         tool_specs = self._get_active_tool_specs()
         logger.info(
             "Tools to be used in conversation: %s",
@@ -1121,6 +1134,8 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
             frame: A tuple containing (sample_rate, audio_data).
 
         """
+        from fastrtc import audio_to_int16  # deferred: fastrtc pulls gradio at boot
+
         if not self.connection:
             return
 

@@ -16,7 +16,6 @@ from typing import Any, Optional
 
 import httpx
 import numpy as np
-from fastrtc import AdditionalOutputs
 
 from robot_comic import telemetry
 from robot_comic.config import (
@@ -203,6 +202,8 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
     ) -> None:
         if not response_text:
             return
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
+
         out_queue = target_queue if target_queue is not None else self.output_queue
         sentences = split_sentences(response_text) or [response_text]
         any_audio = False
