@@ -325,20 +325,23 @@ def test_composable_path_copy_constructs_fresh_legacy_for_chatterbox(
 @pytest.mark.parametrize(
     "output_backend, target_module, target_class",
     [
-        (AUDIO_OUTPUT_CHATTERBOX, "robot_comic.chatterbox_tts", "LocalSTTChatterboxHandler"),
+        # NOTE: chatterbox is migrated as of Phase 4c.1 — its composable
+        # routing is pinned by ``test_composable_path_*_for_llama_chatterbox``
+        # above. The rows below cover the moonshine triples that remain on
+        # the legacy concrete handlers until Phase 4c.2 onwards.
         (AUDIO_OUTPUT_GEMINI_TTS, "robot_comic.gemini_tts", "LocalSTTGeminiTTSHandler"),
         (AUDIO_OUTPUT_OPENAI_REALTIME, "robot_comic.local_stt_realtime", "LocalSTTOpenAIRealtimeHandler"),
         (AUDIO_OUTPUT_HF, "robot_comic.local_stt_realtime", "LocalSTTHuggingFaceRealtimeHandler"),
     ],
 )
-def test_composable_path_only_affects_llama_elevenlabs(
+def test_composable_path_other_triples_remain_legacy(
     monkeypatch: pytest.MonkeyPatch,
     mock_deps: MagicMock,
     output_backend: str,
     target_module: str,
     target_class: str,
 ) -> None:
-    """Even with FACTORY_PATH=composable, other Moonshine triples stay on legacy."""
+    """Even with FACTORY_PATH=composable, unmigrated Moonshine triples stay on legacy."""
     from robot_comic import config as cfg_mod
 
     monkeypatch.setattr(cfg_mod.config, "LLM_BACKEND", LLM_BACKEND_LLAMA)
