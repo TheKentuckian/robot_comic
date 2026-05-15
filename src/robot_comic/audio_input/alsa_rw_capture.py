@@ -10,10 +10,9 @@ full-level signal without touching the daemon.
 """
 
 from __future__ import annotations
-
+import sys
 import logging
 import subprocess
-import sys
 from typing import Any, Optional
 
 import numpy as np
@@ -32,6 +31,7 @@ class AlsaRwCapture:
         channels: int = 2,
         frame_samples: int = 256,
     ) -> None:
+        """Configure capture parameters; does not start the subprocess (see :meth:`start`)."""
         self._device = device
         self._sample_rate = sample_rate
         self._channels = channels
@@ -42,9 +42,11 @@ class AlsaRwCapture:
 
     @property
     def sample_rate(self) -> int:
+        """Sample rate the arecord subprocess is producing, in Hz."""
         return self._sample_rate
 
     def start(self) -> None:
+        """Spawn the ``arecord`` subprocess in RW mode. Linux-only."""
         if sys.platform != "linux":
             raise RuntimeError(
                 f"AlsaRwCapture is Linux-only (current platform: {sys.platform}). "
@@ -94,6 +96,7 @@ class AlsaRwCapture:
         return np.frombuffer(frame_bytes, dtype=np.int16).reshape(self._frame_samples, self._channels)
 
     def stop(self) -> None:
+        """Terminate the ``arecord`` subprocess; safe to call before :meth:`start`."""
         proc, self._proc = self._proc, None
         if proc is None:
             return
