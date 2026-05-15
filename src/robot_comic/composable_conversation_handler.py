@@ -19,9 +19,9 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
-from robot_comic.backends import AudioFrame as BackendAudioFrame
 from robot_comic.config import set_custom_profile
 from robot_comic.prompts import get_session_instructions
+from robot_comic.backends import AudioFrame as BackendAudioFrame
 from robot_comic.tools.core_tools import ToolDependencies
 from robot_comic.composable_pipeline import ComposablePipeline
 from robot_comic.conversation_handler import AudioFrame, HandlerOutput, ConversationHandler
