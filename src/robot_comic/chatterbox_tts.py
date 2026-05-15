@@ -349,7 +349,7 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
         for seg in segments:
             if seg.silence_ms:
                 for frame in self._pcm_to_frames(self._silence_pcm(seg.silence_ms)):
-                    await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
+                    await self._enqueue_audio_frame(frame)
                 any_audio = True
             else:
                 text = f"{seg.turbo_insert} {seg.text}" if seg.turbo_insert else seg.text
@@ -368,7 +368,7 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
 
                             log_once("first TTS audio frame", logger)
                             telemetry.emit_first_greeting_audio_once()
-                            await self.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
+                            await self._enqueue_audio_frame(frame)
                         any_audio = True
         if not any_audio:
             await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": "[TTS error]"}))

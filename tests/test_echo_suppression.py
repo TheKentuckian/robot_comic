@@ -51,8 +51,15 @@ class TestLlamaBaseEchoGuard:
         return handler
 
     @pytest.mark.asyncio
-    async def test_emit_sets_speaking_until_from_byte_count(self) -> None:
-        """emit() should derive _speaking_until from total bytes, not queue size."""
+    async def test_enqueue_audio_frame_sets_speaking_until_from_byte_count(self) -> None:
+        """_enqueue_audio_frame() derives _speaking_until from cumulative bytes.
+
+        Moved from emit() to BaseLlamaResponseHandler._enqueue_audio_frame in
+        the Option A fix (spec:
+        docs/superpowers/specs/2026-05-15-lifecycle-echo-guard-fix.md) so the
+        composable factory path — which bypasses emit() — also updates the
+        echo guard.
+        """
         from robot_comic.llama_base import _BYTES_PER_SAMPLE, _OUTPUT_SAMPLE_RATE
 
         handler = self._make_handler()
@@ -63,11 +70,6 @@ class TestLlamaBaseEchoGuard:
         expected_bytes = frame.nbytes  # n_samples * 2
 
         fake_start = 100.0
-        handler._response_start_ts = fake_start
-        handler._response_audio_bytes = expected_bytes  # pre-load total bytes
-
-        # Put a frame in the queue so emit() dequeues it as a tuple
-        await handler.output_queue.put((_OUTPUT_SAMPLE_RATE, frame))
 
         cooldown_ms = 300
         with patch.dict(os.environ, {"REACHY_MINI_ECHO_COOLDOWN_MS": str(cooldown_ms)}):
@@ -75,14 +77,16 @@ class TestLlamaBaseEchoGuard:
 
             refresh_runtime_config_from_env()
 
-            fake_now = 101.5  # arbitrary; only affects perf_counter call in emit
-            with patch("time.perf_counter", return_value=fake_now):
-                await handler.emit()
+            # First frame: _response_start_ts is captured from perf_counter().
+            with patch("time.perf_counter", return_value=fake_start):
+                await handler._enqueue_audio_frame(frame)
 
         cooldown_s = cooldown_ms / 1000.0
         bytes_per_second = _OUTPUT_SAMPLE_RATE * _BYTES_PER_SAMPLE
         expected_deadline = fake_start + expected_bytes / bytes_per_second + cooldown_s
         assert abs(handler._speaking_until - expected_deadline) < 1e-9
+        assert handler._response_start_ts == fake_start
+        assert handler._response_audio_bytes == expected_bytes
 
     @pytest.mark.asyncio
     async def test_drain_accumulates_bytes_and_sets_start_ts(self) -> None:

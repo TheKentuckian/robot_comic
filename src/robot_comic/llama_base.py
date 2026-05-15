@@ -206,17 +206,42 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
     async def emit(self) -> Any:
         from fastrtc import wait_for_item  # deferred: fastrtc pulls gradio at boot
 
-        item = await wait_for_item(self.output_queue)
-        if isinstance(item, tuple):
-            # Update the speaking deadline using total bytes enqueued so far.
-            # This is more accurate than the queue-size heuristic because it
-            # accounts for all PCM audio pushed during this response, not just
-            # how many frames happen to be sitting in the queue right now.
-            cooldown_s = config.ECHO_COOLDOWN_MS / 1000.0
-            bytes_per_second = _OUTPUT_SAMPLE_RATE * _BYTES_PER_SAMPLE
-            playback_end = self._response_start_ts + self._response_audio_bytes / bytes_per_second
-            self._speaking_until = playback_end + cooldown_s
-        return item
+        # _speaking_until is now derived inside _enqueue_audio_frame so the
+        # composable factory path (which bypasses this emit()) still updates
+        # the echo guard. See docs/superpowers/specs/2026-05-15-lifecycle-echo-guard-fix.md.
+        return await wait_for_item(self.output_queue)
+
+    async def _enqueue_audio_frame(
+        self,
+        frame: "np.ndarray[Any, Any]",
+        target_queue: "asyncio.Queue[Any] | None" = None,
+    ) -> None:
+        """Update byte-count accumulators, derive _speaking_until, and enqueue one audio frame.
+
+        Single source of truth for the echo-guard deadline on the llama-LLM
+        TTS path. Subclasses (``LlamaElevenLabsTTSResponseHandler``,
+        ``ChatterboxTTSResponseHandler``) must route their direct
+        ``queue.put((rate, frame))`` sites through this helper so the
+        composable factory path also updates ``_speaking_until``.
+
+        ``target_queue`` lets ``_stream_response_and_synthesize``'s
+        per-sentence playback chain route frames through a local queue
+        without bypassing the byte-count + echo-guard accounting.
+
+        See ``docs/superpowers/specs/2026-05-15-lifecycle-echo-guard-fix.md``.
+        """
+        if self._response_audio_bytes == 0:
+            self._response_start_ts = time.perf_counter()
+        self._response_audio_bytes += frame.nbytes
+        # Derive the playback deadline from the cumulative byte count. Same
+        # formula the legacy emit() site used; preserved here so behaviour is
+        # identical on the legacy path.
+        cooldown_s = config.ECHO_COOLDOWN_MS / 1000.0
+        bytes_per_second = _OUTPUT_SAMPLE_RATE * _BYTES_PER_SAMPLE
+        playback_end = self._response_start_ts + self._response_audio_bytes / bytes_per_second
+        self._speaking_until = playback_end + cooldown_s
+        queue = target_queue if target_queue is not None else self.output_queue
+        await queue.put((_OUTPUT_SAMPLE_RATE, frame))
 
     # ------------------------------------------------------------------ #
     # Personality / voice (common plumbing; voice specifics in subclasses)#
@@ -310,13 +335,14 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
                     item = await local_q.get()
                     if item is None:
                         return
-                    # Track byte-count for the byte-accurate echo-guard deadline.
+                    # Route audio frames through _enqueue_audio_frame so byte-count
+                    # accumulators AND the echo-guard deadline update in one place.
+                    # Non-tuple items (e.g. AdditionalOutputs status messages) go
+                    # straight to the output queue unchanged.
                     if isinstance(item, tuple) and len(item) >= 2 and isinstance(item[1], np.ndarray):
-                        frame_bytes = item[1].nbytes
-                        if self._response_audio_bytes == 0:
-                            self._response_start_ts = time.perf_counter()
-                        self._response_audio_bytes += frame_bytes
-                    await self.output_queue.put(item)
+                        await self._enqueue_audio_frame(item[1])
+                    else:
+                        await self.output_queue.put(item)
                 # Ensure the synth task itself is awaited so exceptions propagate
                 # and the task doesn't get garbage-collected mid-flight.
 

@@ -220,7 +220,7 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
                 continue
             if SHORT_PAUSE_TAG in tags:
                 for frame in self._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS, _OUTPUT_SAMPLE_RATE)):
-                    await out_queue.put((_OUTPUT_SAMPLE_RATE, frame))
+                    await self._enqueue_audio_frame(frame, target_queue=out_queue)
             sentence_had_audio = await self._stream_tts_to_queue(
                 spoken, first_audio_marker, tags, target_queue=out_queue
             )
@@ -319,12 +319,12 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
                         leftover += chunk
                         while len(leftover) >= frame_bytes:
                             frame = np.frombuffer(leftover[:frame_bytes], dtype=np.int16)
-                            await out_queue.put((_OUTPUT_SAMPLE_RATE, frame))
+                            await self._enqueue_audio_frame(frame, target_queue=out_queue)
                             leftover = leftover[frame_bytes:]
                 if leftover:
                     tail = np.frombuffer(leftover[: (len(leftover) // 2) * 2], dtype=np.int16)
                     if len(tail) > 0:
-                        await out_queue.put((_OUTPUT_SAMPLE_RATE, tail))
+                        await self._enqueue_audio_frame(tail, target_queue=out_queue)
                 return got_audio
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code == 429:
