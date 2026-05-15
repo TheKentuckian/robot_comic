@@ -102,8 +102,10 @@ def test_start_invokes_arecord_with_expected_args(monkeypatch, fake_popen):
     assert "-c" in cmd and "2" in cmd
     assert "-f" in cmd and "S16_LE" in cmd
     assert "-t" in cmd and "raw" in cmd
-    # -M no = explicit "no MMAP" — the whole point of this module.
-    assert "-M" in cmd and "no" in cmd
+    # arecord defaults to RW-interleaved access mode.  Passing -M would
+    # enable MMAP — the broken mode this module exists to bypass — so
+    # the flag MUST be absent from the spawn command.
+    assert "-M" not in cmd
 
 
 def test_get_audio_sample_returns_none_when_buffer_empty(monkeypatch, fake_popen):

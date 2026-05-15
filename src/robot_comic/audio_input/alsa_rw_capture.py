@@ -52,13 +52,15 @@ class AlsaRwCapture:
             )
         if self._proc is not None:
             raise RuntimeError("AlsaRwCapture already started")
+        # arecord defaults to RW-interleaved (read/write) access mode.
+        # We deliberately do NOT pass -M, which would enable MMAP — the very
+        # mode whose ~10x signal attenuation on reachymini_audio_src is what
+        # this module exists to bypass.
         cmd = [
             "arecord",
             "-q",
             "-D",
             self._device,
-            "-M",
-            "no",
             "-f",
             "S16_LE",
             "-r",
