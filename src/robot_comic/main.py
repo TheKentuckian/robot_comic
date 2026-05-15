@@ -43,9 +43,13 @@ def _play_welcome_early() -> None:
         return  # nothing to play — fail silent at boot
 
     device = os.environ.get("REACHY_MINI_ALSA_DEVICE", "plug:reachymini_audio_sink")
+    cmd = ["aplay", "-D", device, "-q", str(wav)]
+    import time as _time  # noqa: PLC0415 — keep stdlib-only at this point
+
+    started_at = _time.monotonic()
     try:
-        subprocess.Popen(
-            ["aplay", "-D", device, "-q", str(wav)],
+        proc = subprocess.Popen(
+            cmd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -65,6 +69,19 @@ def _play_welcome_early() -> None:
     # operator doesn't hear the WAV start, get cut by handler audio capture,
     # and then start over again.
     os.environ["REACHY_MINI_EARLY_WELCOME_PLAYED"] = "1"
+
+    # Fire a ``welcome.wav.completed`` span when aplay actually exits (#324).
+    # ``warmup_audio`` is stdlib-only at module top, so importing it here
+    # doesn't dent the early-welcome budget; the helper itself defers the
+    # ``telemetry`` import until the wait thread emits.
+    try:
+        from robot_comic.warmup_audio import _wait_and_emit_completion  # noqa: PLC0415
+
+        _wait_and_emit_completion(proc, cmd, started_at=started_at)
+    except Exception:
+        # Telemetry must never break boot — drop completion span if anything
+        # in the wiring throws (import error, sys.path quirk, etc).
+        pass
 
 
 _play_welcome_early()

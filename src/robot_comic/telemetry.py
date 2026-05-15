@@ -353,7 +353,12 @@ def emit_first_greeting_audio_once() -> None:
         pass
 
 
-def emit_supporting_event(name: str, dur_ms: Optional[float] = None) -> None:
+def emit_supporting_event(
+    name: str,
+    dur_ms: Optional[float] = None,
+    *,
+    extra_attrs: Optional[dict[str, Any]] = None,
+) -> None:
     """Emit a synthetic boot-timeline span (``event.kind=supporting``).
 
     Opens and immediately closes a span carrying ``event.kind=supporting`` so
@@ -365,6 +370,11 @@ def emit_supporting_event(name: str, dur_ms: Optional[float] = None) -> None:
     emits the span's own ``dur_ms`` at the top level; the monitor prefers
     ``attrs["event.dur_ms"]`` when present.
 
+    ``extra_attrs`` is merged in for callers that need to attach event-specific
+    metadata (e.g. ``aplay.exit_code`` on ``welcome.wav.completed``, #324). Keys
+    that aren't in ``_SPAN_ATTRS_TO_KEEP`` are dropped silently by the
+    exporter — keep that allowlist in sync when adding new attribute names.
+
     Safe to call whether or not instrumentation is enabled — when OTel is not
     initialised this resolves to the no-op default tracer.
     """
@@ -372,5 +382,7 @@ def emit_supporting_event(name: str, dur_ms: Optional[float] = None) -> None:
     attrs: dict[str, Any] = {"event.kind": "supporting"}
     if dur_ms is not None:
         attrs["event.dur_ms"] = float(dur_ms)
+    if extra_attrs:
+        attrs.update(extra_attrs)
     with tracer.start_as_current_span(name, attributes=attrs):
         pass
