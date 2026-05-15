@@ -1,11 +1,80 @@
 """Entrypoint for Robot Comic."""
 
+# ---------------------------------------------------------------------------
+# Welcome WAV early-dispatch
+# ---------------------------------------------------------------------------
+# Operators need the welcome WAV audible within ~1s of `systemctl start`. The
+# heavy non-stdlib imports below (fastrtc, google.genai, transformers, ...)
+# take 5-15s on the Pi 5, so the previous warmup path in handler.start_up was
+# audibly late. This block runs BEFORE any non-stdlib import so the WAV is
+# dispatched immediately, in parallel with the rest of Python loading.
+#
+# The reachy_mini daemon runs persistently and owns the dmix-backed ALSA sink
+# `plug:reachymini_audio_sink`, so subprocess-aplay-ing into it is safe from
+# the app's first millisecond — no need to wait for any service to come up.
+import os  # noqa: E402 — stdlib-only, must precede the early-play block
+import sys  # noqa: E402
+import subprocess  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+
+def _play_welcome_early() -> None:
+    """Fire-and-forget welcome WAV dispatch before heavy Python imports.
+
+    Best-effort: never raises, never blocks. Sets
+    ``REACHY_MINI_EARLY_WELCOME_PLAYED=1`` on successful dispatch so the later
+    ``play_warmup_wav`` call in ``run()`` knows to skip and we don't double up.
+    Honours ``REACHY_MINI_SKIP_EARLY_WELCOME=1`` to disable (sim/test use).
+    """
+    if os.environ.get("REACHY_MINI_SKIP_EARLY_WELCOME") == "1":
+        return
+    # Asset discovery mirrors ``warmup_audio.default_warmup_wav_path``:
+    # ``src/robot_comic/main.py`` -> ``src/robot_comic`` -> ``src`` -> repo
+    # root, then ``assets/welcome/``. Prefer the split intro from PR #311
+    # if present, fall back to legacy ``welcome.wav``.
+    assets = Path(__file__).resolve().parents[2] / "assets" / "welcome"
+    wav: Path | None = None
+    for candidate in ("welcome_intro.wav", "welcome.wav"):
+        p = assets / candidate
+        if p.is_file():
+            wav = p
+            break
+    if wav is None:
+        return  # nothing to play — fail silent at boot
+
+    device = os.environ.get("REACHY_MINI_ALSA_DEVICE", "plug:reachymini_audio_sink")
+    try:
+        subprocess.Popen(
+            ["aplay", "-D", device, "-q", str(wav)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+    except FileNotFoundError:
+        # ``aplay`` not on PATH (dev workstation without alsa-utils, Windows,
+        # macOS). The full warmup_audio pipeline runs later and will pick the
+        # right player for the host. Skip silently here.
+        return
+    except OSError:
+        # Any other spawn failure (permissions, etc) — skip silently so boot
+        # is never blocked by a welcome-WAV problem.
+        return
+
+    # Tell the in-process warmup_audio path to skip its own dispatch so the
+    # operator doesn't hear the WAV start, get cut by handler audio capture,
+    # and then start over again.
+    os.environ["REACHY_MINI_EARLY_WELCOME_PLAYED"] = "1"
+
+
+_play_welcome_early()
+
 # Import the startup stopwatch first so STARTUP_T0 captures the earliest
 # possible Python time. Any later "Startup: +X.XXs ..." log — including
 # handler-side first-event hooks — shares this origin.
-import warnings
+import warnings  # noqa: E402
 
-from robot_comic import startup_timer  # noqa: F401  (side-effect: captures t0)
+from robot_comic import startup_timer  # noqa: F401,E402  (side-effect: captures t0)
 
 
 warnings.filterwarnings(
@@ -14,15 +83,12 @@ warnings.filterwarnings(
     module="google.protobuf.symbol_database",
 )
 
-import os
-import sys
-import time
-import signal
-import asyncio
-import argparse
-import threading
-from typing import Any, Dict, List, Optional
-from pathlib import Path
+import time  # noqa: E402
+import signal  # noqa: E402
+import asyncio  # noqa: E402
+import argparse  # noqa: E402
+import threading  # noqa: E402
+from typing import Any, Dict, List, Optional  # noqa: E402
 
 from reachy_mini import ReachyMini, ReachyMiniApp
 from robot_comic.utils import (

@@ -270,6 +270,15 @@ def play_warmup_wav(path: str | Path | None = None) -> None:
 
     from robot_comic.startup_timer import log_checkpoint
 
+    # ``main.py`` dispatches the welcome WAV before any non-stdlib import so
+    # the operator hears it within ~1s of ``systemctl start`` (vs ~5-15s for
+    # this in-process path). When that early path fires it sets the env flag
+    # below; skip cleanly so we don't double-play.
+    if os.environ.get("REACHY_MINI_EARLY_WELCOME_PLAYED") == "1":
+        logger.info("Warmup WAV already played by early-dispatch in main.py; skipping")
+        log_checkpoint("warmup wav skipped", logger)
+        return
+
     # --- optional fast-blip path -------------------------------------------
     blip_enabled = os.getenv("REACHY_MINI_WARMUP_BLIP_ENABLED", "").strip().lower() in {
         "1",
