@@ -329,6 +329,7 @@ def _normalize_pipeline_mode(value: str | None) -> str | None:
     )
     return None
 
+
 # Supported (bundled) combinations — the only ones that map cleanly to an
 # existing handler class.  Any combo not in this set is aspirational and will
 # trigger a warning + fallback.
@@ -1062,9 +1063,7 @@ class Config:
     # unset we derive from the resolved (input, output) pair so existing .env
     # files keep working — see derive_pipeline_mode.
     _raw_pipeline_mode = _normalize_pipeline_mode(os.getenv(PIPELINE_MODE_ENV))
-    PIPELINE_MODE: str = _raw_pipeline_mode or derive_pipeline_mode(
-        AUDIO_INPUT_BACKEND, AUDIO_OUTPUT_BACKEND
-    )
+    PIPELINE_MODE: str = _raw_pipeline_mode or derive_pipeline_mode(AUDIO_INPUT_BACKEND, AUDIO_OUTPUT_BACKEND)
 
     logger.debug(
         "Backend provider: %s, Model: %s, HF mode: %s, HF session URL set: %s, HF direct URL set: %s, HF_HOME: %s, Vision Model: %s, Local STT: %s/%s/%s response=%s cache=%s",

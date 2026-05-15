@@ -1,4 +1,4 @@
-"""End-to-end integration smoke test — LocalSTTElevenLabsHandler lifecycle.
+"""End-to-end integration smoke test — LocalSTTGeminiElevenLabsHandler lifecycle.
 
 Boots the handler in sim mode, injects a synthetic transcript through the
 public ``_dispatch_completed_transcript`` entry point, drains the output queue,
@@ -22,7 +22,7 @@ import pytest
 
 import robot_comic.elevenlabs_tts as elevenlabs_mod
 from .conftest import drain_queue, make_tool_deps
-from robot_comic.elevenlabs_tts import LocalSTTElevenLabsHandler
+from robot_comic.elevenlabs_tts import LocalSTTGeminiElevenLabsHandler
 
 
 # ---------------------------------------------------------------------------
@@ -77,9 +77,9 @@ def _make_fake_http_stream(pcm_data: bytes) -> Any:
     return stream_cm
 
 
-def _make_handler() -> LocalSTTElevenLabsHandler:
+def _make_handler() -> LocalSTTGeminiElevenLabsHandler:
     deps = make_tool_deps()
-    handler = LocalSTTElevenLabsHandler(deps, sim_mode=True)
+    handler = LocalSTTGeminiElevenLabsHandler(deps, sim_mode=True)
     # Pre-initialise the Gemini client mock so no real API calls are made.
     handler._client = MagicMock()
     handler._http = MagicMock()

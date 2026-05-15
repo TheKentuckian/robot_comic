@@ -18,9 +18,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from robot_comic.config import (
+    LLM_BACKEND_LLAMA,
     AUDIO_INPUT_MOONSHINE,
     AUDIO_OUTPUT_ELEVENLABS,
-    LLM_BACKEND_LLAMA,
     PIPELINE_MODE_COMPOSABLE,
 )
 from robot_comic.handler_factory import HandlerFactory
@@ -57,9 +57,7 @@ def test_llama_llm_with_elevenlabs_output_selects_llama_variant(
             pipeline_mode=PIPELINE_MODE_COMPOSABLE,
         )
 
-    assert isinstance(result, fake), (
-        f"expected LocalSTTLlamaElevenLabsHandler, got {type(result).__name__}"
-    )
+    assert isinstance(result, fake), f"expected LocalSTTLlamaElevenLabsHandler, got {type(result).__name__}"
 
 
 def test_default_llm_backend_is_llama_so_default_picks_llama_variant(

@@ -11,7 +11,8 @@ Supported (input, output) → handler-class matrix
   (gemini_live_input,    gemini_live_output)     → GeminiLiveHandler
   (moonshine,            chatterbox)             → LocalSTTChatterboxHandler
   (moonshine,            gemini_tts)             → LocalSTTGeminiTTSHandler
-  (moonshine,            elevenlabs)             → LocalSTTElevenLabsHandler
+  (moonshine,            elevenlabs, llama)      → LocalSTTLlamaElevenLabsHandler
+  (moonshine,            elevenlabs, gemini)     → LocalSTTGeminiElevenLabsHandler
   (moonshine,            openai_realtime_output) → LocalSTTOpenAIRealtimeHandler
   (moonshine,            hf_output)              → LocalSTTHuggingFaceRealtimeHandler
 
@@ -34,8 +35,8 @@ from robot_comic.config import (
     AUDIO_INPUT_HF,
     AUDIO_OUTPUT_HF,
     LLM_BACKEND_ENV,
-    LLM_BACKEND_GEMINI,
     LLM_BACKEND_LLAMA,
+    LLM_BACKEND_GEMINI,
     AUDIO_INPUT_MOONSHINE,
     AUDIO_INPUT_BACKEND_ENV,
     AUDIO_INPUT_GEMINI_LIVE,
@@ -258,14 +259,14 @@ class HandlerFactory:
                 return LocalSTTGeminiTTSHandler(**handler_kwargs)
 
             if output_backend == AUDIO_OUTPUT_ELEVENLABS:
-                from robot_comic.elevenlabs_tts import LocalSTTElevenLabsHandler
+                from robot_comic.elevenlabs_tts import LocalSTTGeminiElevenLabsHandler
 
                 logger.info(
-                    "HandlerFactory: selecting LocalSTTElevenLabsHandler (%s → %s)",
+                    "HandlerFactory: selecting LocalSTTGeminiElevenLabsHandler (%s → %s)",
                     input_backend,
                     output_backend,
                 )
-                return LocalSTTElevenLabsHandler(**handler_kwargs)
+                return LocalSTTGeminiElevenLabsHandler(**handler_kwargs)
 
             if output_backend == AUDIO_OUTPUT_OPENAI_REALTIME:
                 from robot_comic.local_stt_realtime import LocalSTTOpenAIRealtimeHandler
