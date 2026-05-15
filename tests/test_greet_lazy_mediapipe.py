@@ -108,3 +108,48 @@ def test_detect_face_with_scores_returns_empty_when_mp_unavailable(
     found, scores = greet_mod._detect_face_with_scores(object())
     assert found is False
     assert scores == []
+
+
+def test_face_detection_confidence_uses_default_when_env_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No env var → returns the module default (#269)."""
+    monkeypatch.delenv("REACHY_MINI_FACE_DETECTION_CONFIDENCE", raising=False)
+    assert greet_mod._face_detection_confidence() == greet_mod._DEFAULT_FACE_DETECTION_CONFIDENCE
+
+
+def test_face_detection_confidence_reads_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REACHY_MINI_FACE_DETECTION_CONFIDENCE overrides the default."""
+    monkeypatch.setenv("REACHY_MINI_FACE_DETECTION_CONFIDENCE", "0.15")
+    assert greet_mod._face_detection_confidence() == pytest.approx(0.15)
+
+
+def test_face_detection_confidence_clamps_to_unit_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Values outside [0.0, 1.0] are clamped."""
+    monkeypatch.setenv("REACHY_MINI_FACE_DETECTION_CONFIDENCE", "5")
+    assert greet_mod._face_detection_confidence() == 1.0
+    monkeypatch.setenv("REACHY_MINI_FACE_DETECTION_CONFIDENCE", "-1")
+    assert greet_mod._face_detection_confidence() == 0.0
+
+
+def test_face_detection_confidence_falls_back_on_non_numeric(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Non-numeric override logs a warning and falls back to the default."""
+    monkeypatch.setenv("REACHY_MINI_FACE_DETECTION_CONFIDENCE", "permissive")
+    with caplog.at_level("WARNING", logger="robot_comic.tools.greet"):
+        assert greet_mod._face_detection_confidence() == greet_mod._DEFAULT_FACE_DETECTION_CONFIDENCE
+    assert any("Invalid REACHY_MINI_FACE_DETECTION_CONFIDENCE" in r.message for r in caplog.records)
+
+
+def test_face_detection_confidence_treats_empty_string_as_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty env value is treated as unset, not as an invalid number."""
+    monkeypatch.setenv("REACHY_MINI_FACE_DETECTION_CONFIDENCE", "  ")
+    assert greet_mod._face_detection_confidence() == greet_mod._DEFAULT_FACE_DETECTION_CONFIDENCE

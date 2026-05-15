@@ -31,6 +31,12 @@ SWEEP_POSITIONS = ["left", "up", "right", "front"]
 _DEFAULT_SCAN_WAIT_S = 1.5
 _SCAN_POLL_INTERVAL_S = 0.1
 
+# Default MediaPipe face-detection confidence threshold (#269). 0.3 is lower
+# than MediaPipe's 0.5 default to compensate for the Reachy Mini camera lens /
+# lighting envelope where 0.5 was missing square-on faces. Tunable per-unit
+# via REACHY_MINI_FACE_DETECTION_CONFIDENCE.
+_DEFAULT_FACE_DETECTION_CONFIDENCE = 0.3
+
 # MediaPipe is deferred to first use — ``import mediapipe`` costs ~1.2s on
 # the Pi and is the dominant chunk of greet.py's ~3s boot import (#323
 # lever 2). The first ``_scan`` call pays the cost; subsequent calls reuse
@@ -39,6 +45,27 @@ _SCAN_POLL_INTERVAL_S = 0.1
 # ``monkeypatch.setattr(greet_mod, "MP_AVAILABLE", True/False)`` keep working.
 _mp_face_detection: Any = None
 MP_AVAILABLE: Optional[bool] = None
+
+
+def _face_detection_confidence() -> float:
+    """Return the MediaPipe min_detection_confidence threshold, env-tunable.
+
+    REACHY_MINI_FACE_DETECTION_CONFIDENCE overrides the default. Values are
+    clamped to [0.0, 1.0]; non-numeric values fall back to the default.
+    """
+    raw = os.environ.get("REACHY_MINI_FACE_DETECTION_CONFIDENCE")
+    if raw is None or not raw.strip():
+        return _DEFAULT_FACE_DETECTION_CONFIDENCE
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid REACHY_MINI_FACE_DETECTION_CONFIDENCE=%r; using default %.2f",
+            raw,
+            _DEFAULT_FACE_DETECTION_CONFIDENCE,
+        )
+        return _DEFAULT_FACE_DETECTION_CONFIDENCE
+    return max(0.0, min(1.0, value))
 
 
 def _check_mp_available() -> bool:
@@ -58,6 +85,11 @@ def _check_mp_available() -> bool:
         return False
     _mp_face_detection = mp.solutions.face_detection
     MP_AVAILABLE = True
+    logger.info(
+        "MediaPipe face detection ready; min_detection_confidence=%.2f "
+        "(override via REACHY_MINI_FACE_DETECTION_CONFIDENCE)",
+        _face_detection_confidence(),
+    )
     return True
 
 
@@ -66,7 +98,7 @@ def _detect_face(frame: Any) -> bool:
     if not _check_mp_available() or _mp_face_detection is None:
         return False
     rgb = frame[..., ::-1].copy()
-    with _mp_face_detection.FaceDetection(min_detection_confidence=0.3) as detector:
+    with _mp_face_detection.FaceDetection(min_detection_confidence=_face_detection_confidence()) as detector:
         results = detector.process(rgb)
         return bool(results.detections)
 
@@ -81,7 +113,7 @@ def _detect_face_with_scores(frame: Any) -> Tuple[bool, List[float]]:
     if not _check_mp_available() or _mp_face_detection is None:
         return False, []
     rgb = frame[..., ::-1].copy()
-    with _mp_face_detection.FaceDetection(min_detection_confidence=0.3) as detector:
+    with _mp_face_detection.FaceDetection(min_detection_confidence=_face_detection_confidence()) as detector:
         results = detector.process(rgb)
         detections = results.detections or []
         scores: List[float] = []
