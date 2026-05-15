@@ -228,6 +228,19 @@ class HandlerFactory:
 
             if _llm_backend == LLM_BACKEND_GEMINI:
                 if output_backend == AUDIO_OUTPUT_CHATTERBOX:
+                    # Phase 4c.2 (#337): gemini+chatterbox is routed through
+                    # ComposableConversationHandler when FACTORY_PATH=composable.
+                    # Default FACTORY_PATH=legacy keeps the existing
+                    # GeminiTextChatterboxHandler selection below.
+                    if getattr(config, "FACTORY_PATH", FACTORY_PATH_LEGACY) == FACTORY_PATH_COMPOSABLE:
+                        logger.info(
+                            "HandlerFactory: selecting ComposableConversationHandler "
+                            "(%s → %s, llm=%s, factory_path=composable)",
+                            input_backend,
+                            output_backend,
+                            LLM_BACKEND_GEMINI,
+                        )
+                        return _build_composable_gemini_chatterbox(**handler_kwargs)
                     from robot_comic.gemini_text_handlers import GeminiTextChatterboxHandler
 
                     logger.info(
@@ -399,6 +412,53 @@ def _build_composable_llama_chatterbox(**handler_kwargs: Any) -> Any:
         legacy = LocalSTTChatterboxHandler(**handler_kwargs)
         stt = MoonshineSTTAdapter(legacy)
         llm = LlamaLLMAdapter(legacy)
+        tts = ChatterboxTTSAdapter(legacy)
+        pipeline = ComposablePipeline(
+            stt,
+            llm,
+            tts,
+            system_prompt=get_session_instructions(),
+        )
+        return ComposableConversationHandler(
+            pipeline=pipeline,
+            tts_handler=legacy,
+            deps=handler_kwargs["deps"],
+            build=_build,
+        )
+
+    return _build()
+
+
+def _build_composable_gemini_chatterbox(**handler_kwargs: Any) -> Any:
+    """Construct the composable (moonshine, chatterbox, gemini) pipeline.
+
+    Builds a legacy ``GeminiTextChatterboxHandler`` (the adapters delegate
+    into it), wraps it with the three Phase 3/4 adapters, composes them into
+    a ``ComposablePipeline`` seeded with the current session instructions,
+    and returns a ``ComposableConversationHandler`` whose ``build`` closure
+    re-runs the same construction. FastRTC's ``copy()`` per-peer cloning
+    invokes the closure for fresh state on each new peer.
+
+    The chatterbox TTS half is shared with Phase 4c.1's llama variant; the
+    LLM half differs only in the adapter (``GeminiLLMAdapter`` wraps
+    ``GeminiTextResponseHandler._call_llm`` which Gemini-specifically routes
+    through the google-genai SDK while emitting llama-server-shaped
+    tool_call dicts upstream).
+    """
+    from robot_comic.prompts import get_session_instructions
+    from robot_comic.adapters import (
+        GeminiLLMAdapter,
+        MoonshineSTTAdapter,
+        ChatterboxTTSAdapter,
+    )
+    from robot_comic.composable_pipeline import ComposablePipeline
+    from robot_comic.gemini_text_handlers import GeminiTextChatterboxHandler
+    from robot_comic.composable_conversation_handler import ComposableConversationHandler
+
+    def _build() -> ComposableConversationHandler:
+        legacy = GeminiTextChatterboxHandler(**handler_kwargs)
+        stt = MoonshineSTTAdapter(legacy)
+        llm = GeminiLLMAdapter(legacy)
         tts = ChatterboxTTSAdapter(legacy)
         pipeline = ComposablePipeline(
             stt,
