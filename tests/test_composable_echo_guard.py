@@ -116,8 +116,7 @@ async def test_elevenlabs_adapter_updates_speaking_until_on_streamed_audio(
     # adapter exercises indirectly via _stream_tts_to_queue. Before the fix
     # this stays at 0.0.
     assert handler._speaking_until > 0.0, (
-        "Echo guard not updated on composable path; "
-        "_enqueue_audio_frame must write _speaking_until."
+        "Echo guard not updated on composable path; _enqueue_audio_frame must write _speaking_until."
     )
     # Byte accumulators must also be tracked.
     assert handler._response_audio_bytes > 0
