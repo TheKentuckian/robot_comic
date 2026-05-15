@@ -12,7 +12,12 @@ authoritative roadmap; per-sub-phase specs and TDD plans live under
 |-----------|------|--------|-------------|
 | 4a | `ComposableConversationHandler(ConversationHandler)` wrapper over `ComposablePipeline` | ✅ Done | #355 (commit c8de597) |
 | 4b | Factory dual path behind `REACHY_MINI_FACTORY_PATH` for `(moonshine, llama, elevenlabs)` | ✅ Done | #359 (commit 8f94691) |
-| 4c | Expand composable to remaining triples + build `ChatterboxTTSAdapter`, `GeminiLLMAdapter`, `GeminiTTSAdapter` | ⏸ Pending | — |
+| 4c | Expand composable to remaining triples + build `ChatterboxTTSAdapter`, `GeminiLLMAdapter`, `GeminiTTSAdapter` | ⏳ In progress (2/5 triples) | — |
+| 4c.1 | `ChatterboxTTSAdapter` + `(moonshine, chatterbox, llama)` routing | ✅ Done | #361 (commit aa59ea1) |
+| 4c.2 | `GeminiLLMAdapter` + `(moonshine, chatterbox, gemini)` routing | ✅ Done | #362 (commit a91acb2) |
+| 4c.3 | `(moonshine, elevenlabs, gemini)` routing (reuses 4c.2 adapter) | ⏸ Pending | — |
+| 4c.4 | `(moonshine, elevenlabs, gemini-fallback)` routing | ⏸ Pending | — |
+| 4c.5 | `GeminiTTSAdapter` + `(moonshine, gemini_tts)` routing | ⏸ Pending | — |
 | 4c-tris | `HybridRealtimePipeline` for `LocalSTTOpenAIRealtimeHandler` / `LocalSTTHuggingFaceRealtimeHandler` | ⏸ Pending (needs design memo first) | — |
 | 4d | Flip default `FACTORY_PATH=composable` | ⏸ Pending | — |
 | 4e | Delete legacy concrete handlers + the dual-path dial + rewrite tests | ⏸ Pending | — |
