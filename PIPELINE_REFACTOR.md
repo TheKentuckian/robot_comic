@@ -11,7 +11,7 @@ authoritative roadmap; per-sub-phase specs and TDD plans live under
 | Sub-phase | Goal | Status | PR / branch |
 |-----------|------|--------|-------------|
 | 4a | `ComposableConversationHandler(ConversationHandler)` wrapper over `ComposablePipeline` | ✅ Done | #355 (commit c8de597) |
-| 4b | Factory dual path behind `REACHY_MINI_FACTORY_PATH` for `(moonshine, llama, elevenlabs)` | ⏳ In flight | `claude/phase-4b-factory-dual-path-TsCMu` |
+| 4b | Factory dual path behind `REACHY_MINI_FACTORY_PATH` for `(moonshine, llama, elevenlabs)` | ✅ Done | #359 (commit 8f94691) |
 | 4c | Expand composable to remaining triples + build `ChatterboxTTSAdapter`, `GeminiLLMAdapter`, `GeminiTTSAdapter` | ⏸ Pending | — |
 | 4c-tris | `HybridRealtimePipeline` for `LocalSTTOpenAIRealtimeHandler` / `LocalSTTHuggingFaceRealtimeHandler` | ⏸ Pending (needs design memo first) | — |
 | 4d | Flip default `FACTORY_PATH=composable` | ⏸ Pending | — |
