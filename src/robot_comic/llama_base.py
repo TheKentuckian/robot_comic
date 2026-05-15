@@ -174,6 +174,8 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         if not text or not text.strip():
             logger.warning("Canned opener was empty; skipping startup speak.")
             return
+        from fastrtc import AdditionalOutputs  # deferred: fastrtc pulls gradio at boot
+
         logger.info("Canned startup opener: %r", text)
         self._conversation_history.append({"role": "assistant", "content": text})
         await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": text}))
