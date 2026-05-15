@@ -37,12 +37,14 @@ from robot_comic.config import (
     LLM_BACKEND_ENV,
     LLM_BACKEND_LLAMA,
     LLM_BACKEND_GEMINI,
+    FACTORY_PATH_LEGACY,
     AUDIO_INPUT_MOONSHINE,
     AUDIO_INPUT_BACKEND_ENV,
     AUDIO_INPUT_GEMINI_LIVE,
     AUDIO_OUTPUT_CHATTERBOX,
     AUDIO_OUTPUT_ELEVENLABS,
     AUDIO_OUTPUT_GEMINI_TTS,
+    FACTORY_PATH_COMPOSABLE,
     AUDIO_OUTPUT_BACKEND_ENV,
     AUDIO_OUTPUT_GEMINI_LIVE,
     PIPELINE_MODE_COMPOSABLE,
@@ -185,6 +187,15 @@ class HandlerFactory:
             # handlers actually call llama-server for the LLM phase.
             if _llm_backend == LLM_BACKEND_LLAMA:
                 if output_backend == AUDIO_OUTPUT_ELEVENLABS:
+                    if getattr(config, "FACTORY_PATH", FACTORY_PATH_LEGACY) == FACTORY_PATH_COMPOSABLE:
+                        logger.info(
+                            "HandlerFactory: selecting ComposableConversationHandler "
+                            "(%s → %s, llm=%s, factory_path=composable)",
+                            input_backend,
+                            output_backend,
+                            LLM_BACKEND_LLAMA,
+                        )
+                        return _build_composable_llama_elevenlabs(**handler_kwargs)
                     from robot_comic.llama_elevenlabs_tts import LocalSTTLlamaElevenLabsHandler
 
                     logger.info(
@@ -301,3 +312,44 @@ class HandlerFactory:
             "Arbitrary cross-combinations are not supported by the current "
             "handler classes; see docs/audio-backends.md for the supported set."
         )
+
+
+def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
+    """Construct the composable (moonshine, llama, elevenlabs) pipeline.
+
+    Builds a legacy ``LocalSTTLlamaElevenLabsHandler`` (the adapters delegate
+    into it), wraps it with the three Phase 3 adapters, composes them into a
+    ``ComposablePipeline`` seeded with the current session instructions, and
+    returns a ``ComposableConversationHandler`` whose ``build`` closure
+    re-runs the same construction. FastRTC's ``copy()`` per-peer cloning
+    invokes the closure for fresh state on each new peer.
+    """
+    from robot_comic.prompts import get_session_instructions
+    from robot_comic.adapters import (
+        LlamaLLMAdapter,
+        MoonshineSTTAdapter,
+        ElevenLabsTTSAdapter,
+    )
+    from robot_comic.composable_pipeline import ComposablePipeline
+    from robot_comic.llama_elevenlabs_tts import LocalSTTLlamaElevenLabsHandler
+    from robot_comic.composable_conversation_handler import ComposableConversationHandler
+
+    def _build() -> ComposableConversationHandler:
+        legacy = LocalSTTLlamaElevenLabsHandler(**handler_kwargs)
+        stt = MoonshineSTTAdapter(legacy)
+        llm = LlamaLLMAdapter(legacy)
+        tts = ElevenLabsTTSAdapter(legacy)
+        pipeline = ComposablePipeline(
+            stt,
+            llm,
+            tts,
+            system_prompt=get_session_instructions(),
+        )
+        return ComposableConversationHandler(
+            pipeline=pipeline,
+            tts_handler=legacy,
+            deps=handler_kwargs["deps"],
+            build=_build,
+        )
+
+    return _build()
