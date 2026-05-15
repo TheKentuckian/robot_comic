@@ -447,9 +447,9 @@ def _build_composable_gemini_chatterbox(**handler_kwargs: Any) -> Any:
     """
     from robot_comic.prompts import get_session_instructions
     from robot_comic.adapters import (
-        ChatterboxTTSAdapter,
         GeminiLLMAdapter,
         MoonshineSTTAdapter,
+        ChatterboxTTSAdapter,
     )
     from robot_comic.composable_pipeline import ComposablePipeline
     from robot_comic.gemini_text_handlers import GeminiTextChatterboxHandler

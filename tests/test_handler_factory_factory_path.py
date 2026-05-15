@@ -379,9 +379,9 @@ def test_composable_path_wires_three_adapters_for_gemini_chatterbox(
     """All three adapters wrap the same single GeminiTextChatterboxHandler instance."""
     from robot_comic import config as cfg_mod
     from robot_comic.adapters import (
-        ChatterboxTTSAdapter,
         GeminiLLMAdapter,
         MoonshineSTTAdapter,
+        ChatterboxTTSAdapter,
     )
 
     monkeypatch.setattr(cfg_mod.config, "LLM_BACKEND", LLM_BACKEND_GEMINI)
