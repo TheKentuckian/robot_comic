@@ -39,6 +39,7 @@ import tempfile
 import threading
 import subprocess
 from pathlib import Path
+from collections.abc import Sequence
 
 
 logger = logging.getLogger(__name__)
@@ -288,12 +289,119 @@ def _safe_remove(path: Path) -> None:
         pass
 
 
+def _wait_and_emit_completion(
+    popen: subprocess.Popen[bytes] | None,
+    command: Sequence[str],
+    *,
+    started_at: float | None = None,
+) -> threading.Thread | None:
+    """Spawn a daemon thread that waits on *popen* and emits a completion span.
+
+    Surfaces ``welcome.wav.completed`` (#324) on the monitor boot-timeline lane
+    so the operator can see when the welcome WAV actually finished playing,
+    not just when the player subprocess was dispatched. The companion
+    ``welcome.wav.played`` dispatch span (#301 / PR #321) is preserved.
+
+    Span attributes carried on the completion event:
+
+    * ``event.kind=supporting`` — routes the row in the monitor TUI lane
+    * ``event.dur_ms`` — wall-clock from *started_at* (or now) to Popen exit
+    * ``aplay.exit_code`` — the player's exit status (stringified)
+    * ``aplay.command`` — the player command joined by spaces (debug only)
+
+    Returns the spawned daemon thread, or ``None`` when no thread was started
+    (Popen is ``None``, or had already exited at call time — in which case the
+    helper still emits the event synchronously via :func:`_emit_completion_now`
+    so the timeline reflects the actual exit).
+
+    The thread is always ``daemon=True`` so a stuck player cannot block
+    process shutdown. Any telemetry failure inside the thread is swallowed.
+    """
+    if popen is None:
+        return None
+    try:
+        if popen.poll() is not None:
+            _emit_completion_now(popen, command, started_at=started_at)
+            return None
+    except Exception:
+        # Test doubles may not implement .poll(); fall through to the
+        # threaded path which has its own broad except guard.
+        pass
+
+    t0 = started_at if started_at is not None else time.monotonic()
+
+    def _wait() -> None:
+        try:
+            exit_code = popen.wait()
+        except Exception as exc:
+            logger.debug("welcome.wav.completed wait() failed: %s", exc)
+            return
+        try:
+            from robot_comic import telemetry as _telemetry
+
+            _telemetry.emit_supporting_event(
+                "welcome.wav.completed",
+                dur_ms=(time.monotonic() - t0) * 1000,
+                extra_attrs={
+                    "aplay.exit_code": str(exit_code),
+                    "aplay.command": " ".join(str(p) for p in command),
+                },
+            )
+        except Exception as exc:  # pragma: no cover — telemetry must never raise
+            logger.debug("welcome.wav.completed telemetry failed: %s", exc)
+
+    thread = threading.Thread(
+        target=_wait,
+        name="welcome-wav-completion",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def _emit_completion_now(
+    popen: subprocess.Popen[bytes],
+    command: Sequence[str],
+    *,
+    started_at: float | None,
+) -> None:
+    """Emit the completion span synchronously for an already-exited Popen.
+
+    Mirrors the threaded path so the span attribute shape is identical
+    regardless of whether the player exited before or after the helper was
+    called. Telemetry failures are swallowed.
+    """
+    try:
+        exit_code = popen.returncode
+    except Exception:
+        exit_code = None
+    elapsed_ms = (time.monotonic() - started_at) * 1000 if started_at is not None else 0.0
+    try:
+        from robot_comic import telemetry as _telemetry
+
+        _telemetry.emit_supporting_event(
+            "welcome.wav.completed",
+            dur_ms=elapsed_ms,
+            extra_attrs={
+                "aplay.exit_code": str(exit_code),
+                "aplay.command": " ".join(str(p) for p in command),
+            },
+        )
+    except Exception as exc:  # pragma: no cover — telemetry must never raise
+        logger.debug("welcome.wav.completed (sync) telemetry failed: %s", exc)
+
+
 def _dispatch_single_wav(wav_path: Path) -> bool:
     """Fire-and-forget play of a single WAV. Returns True if dispatched.
 
     Mirrors the per-platform branching used by :func:`play_warmup_wav`, but
     factored out so callers (and the chained intro+picker path) can dispatch
     one file at a time without re-implementing player detection.
+
+    On POSIX (where we Popen an external player), a ``welcome.wav.completed``
+    span is fired on Popen exit via a daemon thread (:func:`_wait_and_emit_completion`,
+    issue #324). Windows uses ``winsound.PlaySound`` and emits no completion
+    span — there is no waitable handle for an async winsound playback.
     """
     global _PLAYER_WARNED
 
@@ -314,14 +422,16 @@ def _dispatch_single_wav(wav_path: Path) -> bool:
         return False
 
     cmd = [*_PLAYER_CMD, str(wav_path)]
+    started_at = time.monotonic()
     try:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             close_fds=True,
         )
         logger.info("Warmup WAV dispatched: %s", wav_path.name)
+        _wait_and_emit_completion(proc, cmd, started_at=started_at)
         return True
     except Exception as exc:
         logger.warning("Failed to spawn warmup player %s: %s", cmd[0], exc)
