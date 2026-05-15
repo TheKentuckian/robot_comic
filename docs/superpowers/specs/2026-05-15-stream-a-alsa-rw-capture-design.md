@@ -8,7 +8,7 @@
 
 The Reachy Mini USB audio chip's `dsnoop` endpoint, `reachymini_audio_src`, delivers ~1/10 the signal level when opened in MMAP-interleaved mode vs RW-interleaved mode. Side-by-side `arecord` runs prove it (RW peak ≈ 1.0, MMAP peak ≈ 0.1 — same device, same audio, same moment). GStreamer's `alsasrc` has no `force-rw` knob and defaults to MMAP, so every byte that flows through the daemon's audio pipeline reaches `r.media.get_audio_sample()` attenuated to room-noise floor. Moonshine correctly reports "no speech" on this signal — the stall is real, just not Moonshine's fault.
 
-Full evidence in `reference_alsa_mmap_attenuation` (auto-memory).
+Full evidence and measurement table in [`docs/references/alsa-mmap-attenuation.md`](../../references/alsa-mmap-attenuation.md).
 
 Per the no-upstream rule, we do not patch the daemon, GStreamer, or the XMOS driver. We open a second reader on the same dsnoop endpoint in RW mode from our app. `dsnoop` is designed for multiple readers; the daemon's MMAP reader stays running for AEC and for TTS output. The daemon's TTS playback path (`r.media.push_audio_sample`) is untouched.
 
@@ -97,7 +97,7 @@ Before touching `record_loop`, ship a small standalone script `scripts/dsnoop_mu
 
 Run this on the Pi as Step 1 of the field test. If frames flow and peak ≈ 1.0 while the daemon is alive, we have multi-reader confirmation. If `arecord` errors with `device busy` or the daemon's audio pipeline reports xruns, we stop and reassess before any wiring.
 
-This script ships as a permanent diagnostic — keep it in the tree for future regression testing per the "retest after daemon updates" note in `reference_alsa_mmap_attenuation`.
+This script ships as a permanent diagnostic — keep it in the tree for future regression testing per the "Retest cadence" note in [`docs/references/alsa-mmap-attenuation.md`](../../references/alsa-mmap-attenuation.md).
 
 ## Files Changed
 
@@ -128,7 +128,7 @@ No changes to handlers, profiles, tools, or the daemon-side path. No new third-p
 3. `arecord -L | grep reachymini_audio_src` — confirm alias resolves.
 4. `python scripts/dsnoop_multireader_check.py` — confirm RW peak ≈ 1.0 while daemon is alive.
 5. Stop autostart if running. Run `python -m robot_comic.main` foreground so logs are visible.
-6. Play `hello.m4a` from laptop per `reference_audio_playback_recipe` (auto-memory).
+6. Play `hello.m4a` from laptop per [`docs/references/audio-playback-recipe.md`](../../references/audio-playback-recipe.md).
 7. Verify: Moonshine `on_line_completed` fires → llama-server response → ElevenLabs TTS through speaker.
 8. Repeat with `my name is tony.m4a`.
 9. Enable `reachy-app-autostart`, reboot the Pi, verify cold-boot path completes a turn end-to-end. Repeat reboot 3× to catch the intermittent bug pattern noted in the memory.

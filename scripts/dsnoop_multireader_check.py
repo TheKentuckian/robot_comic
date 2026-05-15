@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Sanity-check: open AlsaRwCapture while the daemon is running.
 
-Confirms that arecord -M no on reachymini_audio_src can coexist with the
-daemon's MMAP-mode GStreamer reader.  Run on the Pi as Step 1 of the
-field test:
+Confirms that arecord (no -M, so default RW mode) on reachymini_audio_src
+can coexist with the daemon's MMAP-mode GStreamer reader.  Run on the Pi
+as Step 1 of the field test:
 
     sudo systemctl is-active reachy-mini-daemon.service
     /venvs/apps_venv/bin/python scripts/dsnoop_multireader_check.py
 
-Prints peak/RMS over a 3-second window.  Expect peak >= ~0.15 (with the
-operator clapping or speaking in the room) — full-scale signal is 1.0.
+Prints peak/RMS over a 3-second window.  Expect peak >= ~0.15 with sound
+in the room (clapping, speech, played audio) — full-scale signal is 1.0.
 Anything lower means the MMAP-attenuation bug has somehow propagated
 to RW mode and the workaround needs revisiting.  See
 docs/superpowers/specs/2026-05-15-stream-a-alsa-rw-capture-design.md
-and reference_alsa_mmap_attenuation (auto-memory) for context.
+and docs/references/alsa-mmap-attenuation.md for context.
 """
 
 from __future__ import annotations
