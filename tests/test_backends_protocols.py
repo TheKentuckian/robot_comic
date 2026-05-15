@@ -144,6 +144,27 @@ def test_unrelated_class_does_not_satisfy_tts_protocol() -> None:
 
 
 # ---------------------------------------------------------------------------
+# prepare() idempotency — docstring claims "Safe to call multiple times"
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_llm_prepare_is_idempotent() -> None:
+    llm = _MockLLM()
+    await llm.prepare()
+    await llm.prepare()
+    assert llm.prepared is True
+
+
+@pytest.mark.asyncio
+async def test_tts_prepare_is_idempotent() -> None:
+    tts = _MockTTS()
+    await tts.prepare()
+    await tts.prepare()
+    assert tts.prepared is True
+
+
+# ---------------------------------------------------------------------------
 # Behavioural smoke — the Protocols compose into a working pipeline
 # ---------------------------------------------------------------------------
 

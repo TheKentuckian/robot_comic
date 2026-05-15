@@ -193,7 +193,16 @@ class TTSBackend(Protocol):
         text: str,
         tags: tuple[str, ...] = (),
     ) -> AsyncIterator[AudioFrame]:
-        """Stream synthesised PCM frames for *text*."""
+        """Stream synthesised PCM frames for *text*.
+
+        Implementations are typically async generators
+        (``async def synthesize(...): ... yield AudioFrame(...)``); calling
+        an async-generator function returns the iterator directly without
+        ``await``, which matches the plain-``def`` declaration here. A
+        synchronous function returning an ``AsyncIterator`` would also
+        satisfy the Protocol — ``runtime_checkable`` checks method names
+        only, not signatures.
+        """
         ...
 
     async def shutdown(self) -> None:
