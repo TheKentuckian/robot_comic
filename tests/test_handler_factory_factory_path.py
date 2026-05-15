@@ -13,12 +13,24 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from robot_comic.config import (
+    AUDIO_INPUT_HF,
+    AUDIO_OUTPUT_HF,
     LLM_BACKEND_LLAMA,
+    LLM_BACKEND_GEMINI,
     FACTORY_PATH_LEGACY,
     AUDIO_INPUT_MOONSHINE,
+    AUDIO_INPUT_GEMINI_LIVE,
+    AUDIO_OUTPUT_CHATTERBOX,
     AUDIO_OUTPUT_ELEVENLABS,
+    AUDIO_OUTPUT_GEMINI_TTS,
     FACTORY_PATH_COMPOSABLE,
+    AUDIO_OUTPUT_GEMINI_LIVE,
     PIPELINE_MODE_COMPOSABLE,
+    PIPELINE_MODE_GEMINI_LIVE,
+    PIPELINE_MODE_HF_REALTIME,
+    AUDIO_INPUT_OPENAI_REALTIME,
+    AUDIO_OUTPUT_OPENAI_REALTIME,
+    PIPELINE_MODE_OPENAI_REALTIME,
 )
 from robot_comic.handler_factory import HandlerFactory
 
@@ -172,3 +184,108 @@ def test_composable_path_copy_constructs_fresh_legacy(monkeypatch: pytest.Monkey
     assert copy is not original
     assert copy._tts_handler is not original._tts_handler
     assert copy.pipeline is not original.pipeline
+
+
+@pytest.mark.parametrize(
+    "output_backend, target_module, target_class",
+    [
+        (AUDIO_OUTPUT_CHATTERBOX, "robot_comic.chatterbox_tts", "LocalSTTChatterboxHandler"),
+        (AUDIO_OUTPUT_GEMINI_TTS, "robot_comic.gemini_tts", "LocalSTTGeminiTTSHandler"),
+        (AUDIO_OUTPUT_OPENAI_REALTIME, "robot_comic.local_stt_realtime", "LocalSTTOpenAIRealtimeHandler"),
+        (AUDIO_OUTPUT_HF, "robot_comic.local_stt_realtime", "LocalSTTHuggingFaceRealtimeHandler"),
+    ],
+)
+def test_composable_path_only_affects_llama_elevenlabs(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_deps: MagicMock,
+    output_backend: str,
+    target_module: str,
+    target_class: str,
+) -> None:
+    """Even with FACTORY_PATH=composable, other Moonshine triples stay on legacy."""
+    from robot_comic import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod.config, "LLM_BACKEND", LLM_BACKEND_LLAMA)
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_COMPOSABLE)
+
+    fake = _fake_cls(target_class)
+    with patch(f"{target_module}.{target_class}", fake):
+        result = HandlerFactory.build(
+            AUDIO_INPUT_MOONSHINE,
+            output_backend,
+            mock_deps,
+            pipeline_mode=PIPELINE_MODE_COMPOSABLE,
+        )
+
+    assert isinstance(result, fake)
+
+
+@pytest.mark.parametrize(
+    "pipeline_mode, input_b, output_b, target_module, target_class",
+    [
+        (
+            PIPELINE_MODE_HF_REALTIME,
+            AUDIO_INPUT_HF,
+            AUDIO_OUTPUT_HF,
+            "robot_comic.huggingface_realtime",
+            "HuggingFaceRealtimeHandler",
+        ),
+        (
+            PIPELINE_MODE_OPENAI_REALTIME,
+            AUDIO_INPUT_OPENAI_REALTIME,
+            AUDIO_OUTPUT_OPENAI_REALTIME,
+            "robot_comic.openai_realtime",
+            "OpenaiRealtimeHandler",
+        ),
+        (
+            PIPELINE_MODE_GEMINI_LIVE,
+            AUDIO_INPUT_GEMINI_LIVE,
+            AUDIO_OUTPUT_GEMINI_LIVE,
+            "robot_comic.gemini_live",
+            "GeminiLiveHandler",
+        ),
+    ],
+)
+def test_composable_path_ignored_in_bundled_realtime_modes(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_deps: MagicMock,
+    pipeline_mode: str,
+    input_b: str,
+    output_b: str,
+    target_module: str,
+    target_class: str,
+) -> None:
+    """Bundled-realtime modes ignore FACTORY_PATH entirely."""
+    from robot_comic import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_COMPOSABLE)
+
+    fake = _fake_cls(target_class)
+    with patch(f"{target_module}.{target_class}", fake):
+        result = HandlerFactory.build(
+            input_b,
+            output_b,
+            mock_deps,
+            pipeline_mode=pipeline_mode,
+        )
+
+    assert isinstance(result, fake)
+
+
+def test_composable_path_with_gemini_llm_unchanged(monkeypatch: pytest.MonkeyPatch, mock_deps: MagicMock) -> None:
+    """FACTORY_PATH=composable + LLM_BACKEND=gemini stays on the legacy Gemini-text path (4c migrates this)."""
+    from robot_comic import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod.config, "LLM_BACKEND", LLM_BACKEND_GEMINI)
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_COMPOSABLE)
+
+    fake = _fake_cls("GeminiTextElevenLabsHandler")
+    with patch("robot_comic.gemini_text_handlers.GeminiTextElevenLabsHandler", fake):
+        result = HandlerFactory.build(
+            AUDIO_INPUT_MOONSHINE,
+            AUDIO_OUTPUT_ELEVENLABS,
+            mock_deps,
+            pipeline_mode=PIPELINE_MODE_COMPOSABLE,
+        )
+
+    assert isinstance(result, fake)
