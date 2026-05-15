@@ -91,6 +91,27 @@ def test_legacy_path_returns_legacy_handler_for_llama_chatterbox(
     assert isinstance(result, fake)
 
 
+def test_legacy_path_returns_legacy_handler_for_gemini_chatterbox(
+    monkeypatch: pytest.MonkeyPatch, mock_deps: MagicMock
+) -> None:
+    """``FACTORY_PATH=legacy`` (default) keeps today's GeminiTextChatterboxHandler."""
+    from robot_comic import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod.config, "LLM_BACKEND", LLM_BACKEND_GEMINI)
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_LEGACY)
+
+    fake = _fake_cls("GeminiTextChatterboxHandler")
+    with patch("robot_comic.gemini_text_handlers.GeminiTextChatterboxHandler", fake):
+        result = HandlerFactory.build(
+            AUDIO_INPUT_MOONSHINE,
+            AUDIO_OUTPUT_CHATTERBOX,
+            mock_deps,
+            pipeline_mode=PIPELINE_MODE_COMPOSABLE,
+        )
+
+    assert isinstance(result, fake)
+
+
 def test_composable_path_returns_wrapper_for_llama_elevenlabs(
     monkeypatch: pytest.MonkeyPatch, mock_deps: MagicMock
 ) -> None:
