@@ -23,11 +23,13 @@ from robot_comic.adapters.gemini_tts_adapter import GeminiTTSAdapter
 from robot_comic.adapters.moonshine_stt_adapter import MoonshineSTTAdapter
 from robot_comic.adapters.chatterbox_tts_adapter import ChatterboxTTSAdapter
 from robot_comic.adapters.elevenlabs_tts_adapter import ElevenLabsTTSAdapter
+from robot_comic.adapters.gemini_bundled_llm_adapter import GeminiBundledLLMAdapter
 
 
 __all__ = [
     "ChatterboxTTSAdapter",
     "ElevenLabsTTSAdapter",
+    "GeminiBundledLLMAdapter",
     "GeminiLLMAdapter",
     "GeminiTTSAdapter",
     "LlamaLLMAdapter",
