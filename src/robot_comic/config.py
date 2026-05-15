@@ -348,6 +348,38 @@ def derive_pipeline_mode(input_backend: str, output_backend: str) -> str:
     return PIPELINE_MODE_COMPOSABLE
 
 
+# ---------------------------------------------------------------------------
+# Factory path dial — Phase 4b of #337. Selects whether HandlerFactory returns
+# the legacy concrete handler classes (default, today's behaviour) or the new
+# ComposableConversationHandler wrapper around a ComposablePipeline. Only
+# affects the (moonshine, llama, elevenlabs) triple in 4b; other triples are
+# migrated in 4c.
+# ---------------------------------------------------------------------------
+
+FACTORY_PATH_ENV = "REACHY_MINI_FACTORY_PATH"
+FACTORY_PATH_LEGACY = "legacy"
+FACTORY_PATH_COMPOSABLE = "composable"
+FACTORY_PATH_CHOICES: tuple[str, ...] = (FACTORY_PATH_LEGACY, FACTORY_PATH_COMPOSABLE)
+DEFAULT_FACTORY_PATH = FACTORY_PATH_LEGACY
+
+
+def _normalize_factory_path(value: str | None) -> str:
+    """Validate REACHY_MINI_FACTORY_PATH; fall back to legacy on unknowns."""
+    candidate = (value or "").strip().lower()
+    if not candidate:
+        return DEFAULT_FACTORY_PATH
+    if candidate in FACTORY_PATH_CHOICES:
+        return candidate
+    logger.warning(
+        "Invalid %s=%r. Expected one of: %s. Falling back to %r.",
+        FACTORY_PATH_ENV,
+        value,
+        ", ".join(FACTORY_PATH_CHOICES),
+        DEFAULT_FACTORY_PATH,
+    )
+    return DEFAULT_FACTORY_PATH
+
+
 def _normalize_pipeline_mode(value: str | None) -> str | None:
     """Validate an explicit ``REACHY_MINI_PIPELINE_MODE`` value.
 
@@ -1105,6 +1137,12 @@ class Config:
     _raw_pipeline_mode = _normalize_pipeline_mode(os.getenv(PIPELINE_MODE_ENV))
     PIPELINE_MODE: str = _raw_pipeline_mode or derive_pipeline_mode(AUDIO_INPUT_BACKEND, AUDIO_OUTPUT_BACKEND)
 
+    # 5th dial: FACTORY_PATH (legacy | composable). Phase 4b of #337. Default
+    # legacy preserves today's concrete handler classes; composable routes the
+    # (moonshine, llama, elevenlabs) triple through ComposableConversationHandler
+    # so the new pipeline can soak in parallel with the legacy one.
+    FACTORY_PATH: str = _normalize_factory_path(os.getenv(FACTORY_PATH_ENV))
+
     logger.debug(
         "Backend provider: %s, Model: %s, HF mode: %s, HF session URL set: %s, HF direct URL set: %s, HF_HOME: %s, Vision Model: %s, Local STT: %s/%s/%s response=%s cache=%s",
         BACKEND_PROVIDER,
@@ -1283,6 +1321,7 @@ def refresh_runtime_config_from_env() -> None:
     config.PIPELINE_MODE = _refresh_pipeline_mode or derive_pipeline_mode(
         config.AUDIO_INPUT_BACKEND, config.AUDIO_OUTPUT_BACKEND
     )
+    config.FACTORY_PATH = _normalize_factory_path(os.getenv(FACTORY_PATH_ENV))
 
 
 def get_backend_choice(model_name: str | None = None) -> str:

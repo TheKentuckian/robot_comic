@@ -1,0 +1,386 @@
+# Pipeline Refactor — Epic #337
+
+**Status:** in progress. **Approach:** Option C (incremental retirement) from `docs/superpowers/specs/2026-05-15-phase-4-exploration.md`.
+
+This document is the operating manual for the remaining sub-phases. It is the
+authoritative roadmap; per-sub-phase specs and TDD plans live under
+`docs/superpowers/specs/` and `docs/superpowers/plans/`.
+
+## Status table
+
+| Sub-phase | Goal | Status | PR / branch |
+|-----------|------|--------|-------------|
+| 4a | `ComposableConversationHandler(ConversationHandler)` wrapper over `ComposablePipeline` | ✅ Done | #355 (commit c8de597) |
+| 4b | Factory dual path behind `REACHY_MINI_FACTORY_PATH` for `(moonshine, llama, elevenlabs)` | ⏳ In flight | `claude/phase-4b-factory-dual-path-TsCMu` |
+| 4c | Expand composable to remaining triples + build `ChatterboxTTSAdapter`, `GeminiLLMAdapter`, `GeminiTTSAdapter` | ⏸ Pending | — |
+| 4c-tris | `HybridRealtimePipeline` for `LocalSTTOpenAIRealtimeHandler` / `LocalSTTHuggingFaceRealtimeHandler` | ⏸ Pending (needs design memo first) | — |
+| 4d | Flip default `FACTORY_PATH=composable` | ⏸ Pending | — |
+| 4e | Delete legacy concrete handlers + the dual-path dial + rewrite tests | ⏸ Pending | — |
+| 4f | Retire `BACKEND_PROVIDER` / `LOCAL_STT_RESPONSE_BACKEND` config dials | ⏸ Pending | — |
+
+Between sub-phases: small lifecycle-hook follow-up PRs (see "Deferred
+lifecycle hooks" below).
+
+---
+
+## How the sub-phases run
+
+This work is now **automated through a manager session**. See "Automation
+note" at the bottom of this file for the loop shape.
+
+Each sub-phase still follows the same pattern as 4a/4b:
+
+1. Write a spec at `docs/superpowers/specs/<date>-phase-Nx-<slug>.md`.
+2. Write a TDD plan at `docs/superpowers/plans/<date>-phase-Nx-<slug>.md`.
+3. Execute TDD: failing test → minimum implementation → green → commit, one
+   task at a time. Match the 4a/4b commit cadence.
+4. Run `.venv/bin/ruff check` + `.venv/bin/ruff format --check` from the
+   **repo root**, then `.venv/bin/mypy --pretty` on changed files, then
+   `.venv/bin/pytest tests/ -q`.
+5. Push to a branch named like `claude/phase-Nx-<slug>`.
+6. Open a single PR. No stacking. Squash-merge with `--delete-branch`.
+7. Pause for operator hardware validation **before 4d** (default flip) and
+   **before 4e** (legacy deletion). Other sub-phases can ride straight
+   through.
+
+Memory files to honour every session (under `docs/superpowers/memory/`):
+
+- `feedback_ruff_check_whole_repo_locally.md` — always ruff from repo root,
+  never per-file (I001 only triggers on whole-repo).
+- `feedback_ci_runs_against_pull_request_merge_commit.md` — diagnose green
+  push + red pull_request as main being broken, fix main first.
+- `feedback_pr_354_merged_red_branch_protection_check.md` — branch
+  protection audit reminder.
+- `project_session_2026_05_15_phase4a_landed_plan_for_phase4.md` — the
+  expanded plan, deferred lifecycle hooks, container bootstrap recipe.
+
+Container bootstrap (no `/venvs/apps_venv` in remote execution containers):
+
+```
+apt-get install -y libgirepository1.0-dev
+uv sync --frozen --all-extras --group dev
+```
+
+---
+
+## Sub-phase 4c — Expand composable to remaining triples
+
+**Goal:** route every composable triple through `ComposableConversationHandler`
+behind the `REACHY_MINI_FACTORY_PATH=composable` flag, so the only legacy
+classes still reachable from the factory are the bundled-realtime handlers
+and the two `LocalSTT*RealtimeHandler` hybrids (those are 4c-tris).
+
+**Triples to migrate (one PR per triple, no stacking):**
+
+| Triple | Today's class | Adapter work needed |
+|--------|---------------|---------------------|
+| `(moonshine, chatterbox, llama)` | `LocalSTTChatterboxHandler` | **`ChatterboxTTSAdapter`** (new ~120 LOC); reuse `LlamaLLMAdapter` + `MoonshineSTTAdapter` |
+| `(moonshine, chatterbox, gemini)` | `GeminiTextChatterboxHandler` | **`GeminiLLMAdapter`** (new ~150 LOC) + `ChatterboxTTSAdapter` |
+| `(moonshine, elevenlabs, gemini)` | `GeminiTextElevenLabsHandler` | `GeminiLLMAdapter` + `ElevenLabsTTSAdapter` (broaden annotation to accept the duck-typed surface — 4b's TODO) |
+| `(moonshine, elevenlabs, gemini-fallback)` | `LocalSTTGeminiElevenLabsHandler` | Same as above; the Gemini-hardcoded `_prepare_startup_credentials` is what the adapter delegates into |
+| `(moonshine, gemini_tts)` | `LocalSTTGeminiTTSHandler` | **`GeminiTTSAdapter`** (new ~120 LOC). Gemini-native LLM+TTS uses one `genai` client; the adapter wraps both the LLM call and the TTS stream. |
+
+**New adapters (each in its own commit before the routing flip):**
+
+- `ChatterboxTTSAdapter` — wraps `ChatterboxTTSResponseHandler._stream_tts_to_queue`. Pattern mirrors `ElevenLabsTTSAdapter` (temp queue + sentinel + task cleanup). First-audio marker and tags TODO per Phase 4 plan.
+- `GeminiLLMAdapter` — wraps `GeminiTextResponseHandler._call_llm`. Mirrors `LlamaLLMAdapter` (history swap, tool-call conversion). Gemini's tool-call shape differs from llama-server's — convert at the adapter boundary, don't leak it to the orchestrator.
+- `GeminiTTSAdapter` — wraps `GeminiTTSResponseHandler`. Both LLM and TTS run through the same `genai.Client`; the adapter handles the temp-queue pattern for the TTS half and exposes the LLM half via a partner `GeminiLLMAdapter` instance (or a single `GeminiBundledAdapter` — design decision for the sub-phase).
+
+**Factory wiring:** one new `_build_composable_<output>_<llm>` helper per
+triple in `handler_factory.py`, gated on `FACTORY_PATH=composable` inside
+each existing per-triple branch. Pattern is exactly 4b's
+`_build_composable_llama_elevenlabs`.
+
+**Out of scope for 4c:**
+
+- The `LocalSTT*RealtimeHandler` hybrids (4c-tris).
+- Lifecycle-hook plumbing (telemetry, boot-timeline events, joke history,
+  history trim, echo-guard). Each is a small follow-up PR between phases.
+- Default flip (4d).
+- BACKEND_PROVIDER retirement (4f).
+
+**Open design questions for the 4c sub-agent to answer in its spec:**
+
+1. Does `GeminiTTSAdapter` cover LLM+TTS as one adapter, or do we ship a
+   separate `GeminiLLMAdapter` even for the Gemini-native-bundled case?
+2. How does `ChatterboxTTSAdapter` surface the auto-gain / target-dBFS
+   knobs? The legacy handler reads them from `config.py`; the adapter
+   should keep doing that.
+3. `change_voice` / `get_available_voices` for the Gemini and Chatterbox
+   variants — the wrapper forwards to `_tts_handler`. Confirm that
+   `GeminiTTSResponseHandler` and `ChatterboxTTSResponseHandler` both
+   expose those methods today (they should — they inherit from
+   `ConversationHandler`).
+
+**Acceptance criteria:**
+
+- All five triples above return `ComposableConversationHandler` under
+  `FACTORY_PATH=composable`, the same concrete legacy class under
+  `FACTORY_PATH=legacy`.
+- Per-triple integration tests for transcript→audio round trip via real
+  `ComposablePipeline` + the new adapters (stubbed network).
+- All existing tests still pass.
+- New `ruff check`, `ruff format`, `mypy`, `pytest` green from repo root.
+
+**Estimated PRs:** five — one per triple. Plus one each for any new adapter
+that ships separately (if the operator wants finer granularity, the
+manager can split adapter-build PRs from routing PRs).
+
+---
+
+## Sub-phase 4c-tris — `HybridRealtimePipeline`
+
+**Goal:** introduce a sibling pipeline class so `LocalSTTOpenAIRealtimeHandler`
+and `LocalSTTHuggingFaceRealtimeHandler` can be routed through the same
+`ComposableConversationHandler`-shaped wrapper, even though their LLM+TTS
+half lives inside a single websocket session.
+
+**Why a sibling class:** the STT/LLM/TTS Protocol from `backends.py` doesn't
+fit — the realtime endpoint owns LLM+TTS as one unit. `HybridRealtimePipeline`
+exposes `STTBackend` for the Moonshine half and a single `RealtimeBackend`
+Protocol for the bundled half. The wrapper's interface stays the same so
+the factory doesn't need a third dispatch path beyond
+`FACTORY_PATH=composable`.
+
+**Predecessor:** 4c must land first (we need the wrapper proven on the
+non-hybrid composable triples).
+
+**Required deliverables:**
+
+1. A separate **design memo** at
+   `docs/superpowers/specs/<date>-phase-4c-tris-hybrid-realtime-design.md`
+   exploring whether this class is worth shipping or whether the two
+   hybrid handlers should stay legacy forever. The exploration memo
+   §6.6 already flags the question. **Do not implement until the
+   operator signs off on the memo.**
+2. If the memo says ship: one PR per hybrid handler migration.
+
+**Acceptance criteria (only if the memo green-lights implementation):**
+
+- `RealtimeBackend` Protocol defined alongside the existing three.
+- `HybridRealtimePipeline` class with the same lifecycle surface as
+  `ComposablePipeline` (`start_up` / `feed_audio` / `output_queue`).
+- Factory routes the two hybrid triples through `ComposableConversationHandler`
+  under `FACTORY_PATH=composable`.
+- All existing tests still pass.
+
+---
+
+## Sub-phase 4d — Flip default to composable
+
+**Prerequisites:**
+
+- All 4c sub-phases merged and operator-validated on hardware.
+- 4c-tris memo answered (ship or skip). If shipping, those PRs merged.
+- All deferred lifecycle-hook follow-up PRs that the operator deemed
+  blocking for the default flip are merged.
+
+**Change:**
+
+- Single-line: `DEFAULT_FACTORY_PATH = FACTORY_PATH_COMPOSABLE` in
+  `src/robot_comic/config.py`.
+- Update `.env.example` to match (`REACHY_MINI_FACTORY_PATH=composable`).
+- Update `test_config_factory_path.py::test_config_field_default` to assert
+  the new default.
+
+**Soak window:** operator runs the robot for at least one full session
+(estimated ≥1 hour of real conversation) on the new default before
+moving to 4e. **Hard pause** between 4d's merge and 4e's start — the
+manager session must wait for explicit operator green-light.
+
+**Acceptance criteria:**
+
+- `config.FACTORY_PATH` defaults to `composable` under unset env-var.
+- All existing tests pass with the new default; any test that hard-coded
+  `legacy` is parametrised over both values.
+
+---
+
+## Sub-phase 4e — Delete legacy concrete handlers + retire `FACTORY_PATH`
+
+**Prerequisites:** operator has explicitly green-lit 4d's soak, with no
+regressions in the issue tracker for at least one robot session.
+
+**Files to delete:**
+
+- `src/robot_comic/llama_elevenlabs_tts.py::LocalSTTLlamaElevenLabsHandler` (lines 359–366).
+- `src/robot_comic/chatterbox_tts.py::LocalSTTChatterboxHandler`.
+- `src/robot_comic/elevenlabs_tts.py::LocalSTTGeminiElevenLabsHandler` + the legacy alias `LocalSTTElevenLabsHandler`.
+- `src/robot_comic/gemini_tts.py::LocalSTTGeminiTTSHandler`.
+- `src/robot_comic/gemini_text_handlers.py::GeminiTextChatterboxHandler` and `GeminiTextElevenLabsHandler` + their `*ResponseHandler` diamond bases (if no longer referenced).
+- `src/robot_comic/llama_gemini_tts.py::LocalSTTLlamaGeminiTTSHandler` (the "orphan" — already unreachable from the factory; confirm with a final grep before deletion).
+
+**Files to keep:**
+
+- `BaseLlamaResponseHandler` *internals* (`_call_llm`, `_prepare_startup_credentials`, etc.) — adapters call these.
+- `ElevenLabsTTSResponseHandler` internals (`_stream_tts_to_queue`, etc.) — same.
+- `ChatterboxTTSResponseHandler` internals — same.
+- `GeminiTTSResponseHandler` internals — same.
+- `GeminiTextResponseHandler` internals — same.
+- `LocalSTTInputMixin` — `MoonshineSTTAdapter` depends on it.
+
+**Factory cleanup:**
+
+- Remove `FACTORY_PATH` constants from `config.py` and the dial logic.
+- Remove the `if FACTORY_PATH == composable:` branches in
+  `handler_factory.py`; the composable path becomes the only path.
+- Delete the `LLM_BACKEND_LLAMA` / `LLM_BACKEND_GEMINI` branching in the
+  factory if the per-triple `_build_*` helpers absorb it.
+
+**Test rewrites:**
+
+The exploration memo §5 has the full list. Big ones:
+
+- `test_handler_factory.py` / `test_handler_factory_llama_llm.py` /
+  `test_handler_factory_gemini_llm.py` — rewrite to assert
+  `ComposableConversationHandler` is the return value with the right
+  adapter chain.
+- `test_handler_factory_factory_path.py` — delete (the dial is gone).
+- `test_llama_base.py` (28.7 KB) — keep ~50%, the orchestration tests go.
+- `test_elevenlabs_tts.py` (45.8 KB) — keep ~70%, orchestration goes.
+- `test_llama_elevenlabs_tts.py` — most of this goes.
+- `test_elevenlabs_start_up_supporting_events.py` — migrate to the wrapper
+  (or to whichever component fires the events post-4e).
+
+**Risk:** this is the biggest PR of the lot — 2k+ LOC delta. Manager
+should consider splitting per-handler-deletion into separate PRs (one for
+chatterbox, one for elevenlabs, etc.) if the diff gets too unwieldy for
+review. The exploration memo recommended that, and the operator's
+"one-PR-per-sub-phase" rule has wiggle room here.
+
+**Acceptance criteria:**
+
+- No file under `src/robot_comic/` still defines a class named
+  `LocalSTT*Handler` (except the underlying mixin / response-handler
+  bases that survive).
+- The factory's source-of-truth dispatch matrix lives entirely in the
+  composable helpers.
+- All tests still pass.
+- `git grep "LocalSTTLlamaElevenLabsHandler\|LocalSTTChatterboxHandler\|LocalSTTGeminiElevenLabsHandler\|LocalSTTGeminiTTSHandler\|GeminiTextChatterboxHandler\|GeminiTextElevenLabsHandler\|LocalSTTLlamaGeminiTTSHandler"` returns nothing inside `src/`.
+
+---
+
+## Sub-phase 4f — Retire `BACKEND_PROVIDER` / `LOCAL_STT_RESPONSE_BACKEND`
+
+**Prerequisites:** 4e merged. All legacy class names are gone from `src/`.
+
+**Why this is its own sub-phase:** the exploration memo §3 calls this out
+explicitly — `BACKEND_PROVIDER` is woven into profile validation, model-name
+derivation (`_resolve_model_name`), operator-facing `.env.example`, deploy
+scripts under `deploy/`, and `main.py:240-251`'s HF-specific logging paths.
+Cutting it is its own mini-refactor.
+
+**Scope:**
+
+- `config.py` — delete `BACKEND_PROVIDER`, `LOCAL_STT_RESPONSE_BACKEND`,
+  `DEFAULT_BACKEND_PROVIDER`, `_normalize_backend_provider`, the
+  `derive_audio_backends` / `resolve_audio_backends` machinery if it
+  becomes orphaned.
+- `main.py:240-251` — remove the HF-specific logging branches that
+  switch on `config.BACKEND_PROVIDER`.
+- `profiles/` — audit every profile's `instructions.txt` and any per-profile
+  config for `BACKEND_PROVIDER` references; rewrite.
+- `.env.example` — remove the dial documentation.
+- `deploy/` — audit the systemd unit, the `reachy-app-autostart` install
+  script, and any env-template files for the dial.
+- `external_content/` — same audit if external profiles reference the dial.
+
+**Acceptance criteria:**
+
+- `git grep "BACKEND_PROVIDER\|LOCAL_STT_RESPONSE_BACKEND"` returns nothing
+  in `src/`, `profiles/`, `deploy/`, `.env.example`, `pyproject.toml`,
+  or any test file.
+- Existing deployment still boots on the robot without those env vars set.
+- All tests still pass.
+
+---
+
+## Deferred lifecycle hooks — follow-up PRs between sub-phases
+
+These were deliberately left out of 4a/4b to keep those sub-phases small.
+Each one is a small follow-up PR; the manager can interleave them between
+the main sub-phases or batch them right before 4d (default flip), where
+their absence would actually affect behaviour.
+
+| Hook | Where it fires today | New home |
+|------|----------------------|----------|
+| `telemetry.record_llm_duration` | Inside legacy `_call_llm` paths | `LlamaLLMAdapter.chat` / `GeminiLLMAdapter.chat` (wrap timing in the adapter) |
+| Boot-timeline supporting events (#321) | `start_up()` of bundled handlers | `ComposableConversationHandler.start_up()` before delegating to pipeline |
+| `record_joke_history` (`llama_base.py:553-568`) | After LLM response in legacy `_run_response_loop` | `LlamaLLMAdapter.chat` post-call, or as a `ComposablePipeline` hook |
+| `history_trim.trim_history_in_place` | Inside `_call_llm` before each request | Orchestrator-level in `ComposablePipeline._run_llm_loop_and_speak` |
+| `_speaking_until` echo-guard timestamps (`elevenlabs_tts.py:471-473`) | Inside `_stream_tts_to_queue` — already lives on legacy TTS handler | "For free" — adapter delegation preserves it. Confirm with a test; if confirmed, no PR needed. |
+
+**Recommended order:** echo-guard confirmation first (probably no work),
+then telemetry, then boot-timeline events, then joke history, then history
+trim. The last two are the most likely to need ABC / Protocol changes.
+
+---
+
+## Automation note — Phase 4 manager session pattern
+
+Starting at 4c, this work is driven by a **manager session** that does not
+do the implementation itself. The pattern:
+
+1. Manager session opens (operator launches it from `claude.ai/code`).
+2. Manager reads `PIPELINE_REFACTOR.md` to find the next pending sub-phase.
+3. Manager spawns a sub-agent via the `Agent` tool with
+   `subagent_type=general-purpose` (or `claude`), briefed with the full
+   sub-phase scope from this document, the relevant memory files, and
+   the predecessor specs/plans. The sub-agent owns the per-sub-phase
+   context.
+4. Manager **monitors** the sub-agent via the `Monitor` tool (or
+   `run_in_background`) so notifications surface as the sub-agent makes
+   progress. The manager's own context window stays light — sub-agent
+   results return as a single summary at the end.
+5. When the sub-agent reports "branch pushed, ready to PR," manager
+   uses the GitHub MCP tools to:
+   - Verify CI is green on the branch (no green push + red pull_request
+     mismatch — see the memory file).
+   - Open the PR with the sub-agent's summary as the body.
+   - Watch for CI completion via `subscribe_pr_activity`.
+   - On green CI, squash-merge with `--delete-branch`.
+   - Sync the manager's local main (`git fetch origin && git checkout main && git reset --hard origin/main`).
+6. Manager **pauses** for operator hardware validation **only at
+   designated checkpoints** (currently: before 4d, before 4e). For other
+   sub-phases the manager proceeds straight to the next one.
+7. Manager loops to step 2 until the status table is all ✅.
+
+**Hard rules for the manager:**
+
+- One PR per sub-phase. **No stacking.** If a sub-phase has multiple
+  triples (4c does), it becomes multiple PRs — one per triple, merged
+  sequentially.
+- Never run `git push --force` to main. Never disable CI checks. Never
+  merge with red CI. (Branch protection should enforce this, but the
+  feedback memory shows it doesn't always — be paranoid.)
+- Never bypass the `--no-verify` flag or the pre-commit hook.
+- Never touch the upstream fork (`pollen-robotics/reachy_mini_conversation_app`).
+- Memory files take precedence over this document if they conflict.
+
+**Sub-agent context to inject every spawn:**
+
+- The full text of this section of `PIPELINE_REFACTOR.md`.
+- The four memory files under `docs/superpowers/memory/`.
+- The exploration memo `docs/superpowers/specs/2026-05-15-phase-4-exploration.md`.
+- The 4a + 4b specs and plans (as style templates).
+- The current branch / commit on origin/main.
+- The container bootstrap recipe.
+
+**When to stop the loop and check with the operator:**
+
+- Before 4d's default flip — **mandatory hardware validation**.
+- Before 4e's legacy deletion — **mandatory operator green-light** after 4d soak.
+- Any sub-phase whose acceptance criteria can't be met without an
+  architecture decision the spec doesn't already answer.
+- Any sub-phase that produces a 2k+ LOC delta in a single PR (4e is a
+  candidate — split per-handler-deletion if so).
+
+---
+
+## Out of scope for Phase 4 (the whole epic, not just 4c)
+
+- Bundled-realtime handlers (`OpenaiRealtimeHandler`, `HuggingFaceRealtimeHandler`, `GeminiLiveHandler`) — they stay as-is.
+- The `LocalSTTInputMixin` survives untouched; `MoonshineSTTAdapter` depends on it.
+- Any new STT backend (Whisper, Deepgram) — Phase 5 territory.
+- Tool-system refactors. The adapter-level "ignore the orchestrator's tools arg" pattern stays; the orchestrator's `tool_dispatcher` callback wiring is a separate refactor (also Phase 5).
+- Voice / personality method redesign. The wrapper forwards to the legacy TTS handler; that contract survives into 4e and only changes if `ConversationHandler`'s ABC is rewritten (Phase 5).
