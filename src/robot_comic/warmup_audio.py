@@ -30,6 +30,7 @@ import io
 import os
 import sys
 import math
+import time
 import wave
 import shutil
 import struct
@@ -358,7 +359,17 @@ def play_warmup_wav(path: str | Path | None = None) -> None:
     tone (:func:`play_warmup_blip`) is played first for instant "alive"
     feedback, then the welcome WAV(s) follow as usual.
     """
+    from robot_comic import telemetry as _telemetry
     from robot_comic.startup_timer import log_checkpoint
+
+    _wav_started_at = time.monotonic()
+
+    def _emit_supporting(dur_s: float) -> None:
+        """Surface ``welcome.wav.played`` on the monitor boot-timeline (#301)."""
+        try:
+            _telemetry.emit_supporting_event("welcome.wav.played", dur_ms=dur_s * 1000)
+        except Exception:
+            pass
 
     # ``main.py`` dispatches the welcome WAV before any non-stdlib import so
     # the operator hears it within ~1s of ``systemctl start`` (vs ~5-15s for
@@ -384,6 +395,8 @@ def play_warmup_wav(path: str | Path | None = None) -> None:
         wav_path = Path(path)
         dispatched = _dispatch_single_wav(wav_path)
         log_checkpoint("warmup wav dispatched" if dispatched else "warmup wav skipped", logger)
+        if dispatched:
+            _emit_supporting(time.monotonic() - _wav_started_at)
         return
 
     # --- default: prefer split intro+picker; fall back to legacy welcome.wav
@@ -399,6 +412,7 @@ def play_warmup_wav(path: str | Path | None = None) -> None:
         if _is_persona_locked():
             logger.info("Persona locked; skipping welcome picker prompt")
             log_checkpoint("warmup wav dispatched", logger)
+            _emit_supporting(time.monotonic() - _wav_started_at)
             return
 
         # Chain picker after intro on a daemon thread so we don't block boot.
@@ -410,6 +424,7 @@ def play_warmup_wav(path: str | Path | None = None) -> None:
         )
         t.start()
         log_checkpoint("warmup wav dispatched", logger)
+        _emit_supporting(time.monotonic() - _wav_started_at)
         return
 
     # Legacy fallback: either split file missing — play the old single welcome.wav
@@ -422,6 +437,8 @@ def play_warmup_wav(path: str | Path | None = None) -> None:
     )
     dispatched = _dispatch_single_wav(legacy_path)
     log_checkpoint("warmup wav dispatched" if dispatched else "warmup wav skipped", logger)
+    if dispatched:
+        _emit_supporting(time.monotonic() - _wav_started_at)
 
 
 def _chain_intro_then_picker_after_dispatch(intro: Path, picker: Path) -> None:
