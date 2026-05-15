@@ -51,6 +51,7 @@ from robot_comic.history_trim import trim_history_in_place
 from robot_comic.tools.core_tools import ToolDependencies, dispatch_tool_call, get_active_tool_specs
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.conversation_handler import ConversationHandler
+from robot_comic.tools.name_validation import record_user_transcript
 
 
 logger = logging.getLogger(__name__)
@@ -311,6 +312,8 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
     async def _dispatch_completed_transcript(self, transcript: str) -> None:
         """Gemini-native response cycle: LLM → tools → TTS → audio frames."""
         self._conversation_history.append({"role": "user", "parts": [{"text": transcript}]})
+        # Record for tool-side name-validation guard (#287).
+        record_user_transcript(self.deps.recent_user_transcripts, transcript)
         # Trim BEFORE building the next request so long sessions don't blow the
         # model's context window or rack up token cost.
         trim_history_in_place(self._conversation_history, role_key="role")

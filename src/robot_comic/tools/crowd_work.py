@@ -11,6 +11,7 @@ from datetime import datetime
 import numpy as np
 
 from robot_comic.tools.core_tools import Tool, ToolDependencies
+from robot_comic.tools.name_validation import validate_name_or_warn
 
 
 logger = logging.getLogger(__name__)
@@ -187,8 +188,22 @@ class CrowdWork(Tool):
         logger.info("Tool call: crowd_work action=%s", action)
 
         if action == "update":
+            rejected_name: str | None = None
             if kwargs.get("name"):
-                self._state["name"] = kwargs["name"]
+                candidate = str(kwargs["name"]).strip()
+                # Hallucination guard (#287): only persist a name that the user
+                # actually spoke recently.  Anything else is dropped so a
+                # fabricated name cannot be written to disk via the session
+                # file.  Other fields (job, hometown, details, embedding) are
+                # still accepted so partial updates are not lost.
+                if candidate and validate_name_or_warn(
+                    candidate,
+                    deps.recent_user_transcripts,
+                    tool_name="crowd_work.update",
+                ):
+                    self._state["name"] = candidate
+                elif candidate:
+                    rejected_name = candidate
             if kwargs.get("job"):
                 self._state["job"] = kwargs["job"]
             if kwargs.get("hometown"):
@@ -218,7 +233,7 @@ class CrowdWork(Tool):
                 except Exception as exc:
                     logger.warning("crowd_work: failed to persist face embedding: %s", exc)
 
-            return {
+            response: Dict[str, Any] = {
                 "status": "updated",
                 "stored": {
                     "name": self._state["name"],
@@ -228,6 +243,14 @@ class CrowdWork(Tool):
                     "roast_targets_used": self._state["roast_targets_used"],
                 },
             }
+            if rejected_name is not None:
+                response["name_rejected"] = rejected_name
+                response["needs_name"] = True
+                response["note"] = (
+                    "Refused to store name: not heard in recent user speech. "
+                    "Ask the visitor for their name before calling update again."
+                )
+            return response
 
         if action == "query":
             return {

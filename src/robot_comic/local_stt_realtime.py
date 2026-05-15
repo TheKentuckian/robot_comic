@@ -37,6 +37,7 @@ from robot_comic.base_realtime import to_realtime_tools_config
 from robot_comic.openai_realtime import OpenaiRealtimeHandler
 from robot_comic.tools.core_tools import ToolDependencies, get_active_tool_specs
 from robot_comic.huggingface_realtime import HuggingFaceRealtimeHandler
+from robot_comic.tools.name_validation import record_user_transcript
 
 
 logger = logging.getLogger(__name__)
@@ -576,6 +577,9 @@ class LocalSTTInputMixin:
         self._turn_user_done_at = now
         self._turn_response_created_at = None
         self._turn_first_audio_at = None
+
+        # Record for tool-side name-validation guard (#287).
+        record_user_transcript(self.deps.recent_user_transcripts, transcript)
 
         await self.output_queue.put(AdditionalOutputs({"role": "user", "content": transcript}))
 

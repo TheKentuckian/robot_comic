@@ -38,6 +38,7 @@ from robot_comic.config import (
 from robot_comic.guardrail import SOFTEN_NOTE, EngagementMonitor
 from robot_comic.tools.core_tools import ToolDependencies
 from robot_comic.conversation_handler import ConversationHandler
+from robot_comic.tools.name_validation import record_user_transcript
 from robot_comic.tools.background_tool_manager import (
     ToolCallRoutine,
     ToolNotification,
@@ -933,6 +934,9 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
                         if not transcript:
                             logger.debug("Ignoring empty user transcript")
                             continue
+
+                        # Record for tool-side name-validation guard (#287).
+                        record_user_transcript(self.deps.recent_user_transcripts, transcript)
 
                         now_pc = time.perf_counter()
                         self._turn_user_done_at = now_pc

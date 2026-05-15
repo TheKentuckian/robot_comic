@@ -43,8 +43,13 @@ def fuzzy_match(greet_mod):
     return greet_mod._fuzzy_match
 
 
-def make_deps() -> MagicMock:
-    """Build a minimal mock ToolDependencies with a blank camera frame."""
+def make_deps(recent_user_transcripts: list[str] | None = None) -> MagicMock:
+    """Build a minimal mock ToolDependencies with a blank camera frame.
+
+    By default seeds ``recent_user_transcripts`` with the names existing tests
+    pass as the ``name`` argument so the hallucination guard (#287) does not
+    reject them.  Tests that need to exercise the guard pass their own list.
+    """
     deps = MagicMock()
     deps.motion_duration_s = 0.0
     frame = np.zeros((32, 32, 3), dtype=np.uint8)
@@ -54,6 +59,10 @@ def make_deps() -> MagicMock:
     deps.reachy_mini = MagicMock()
     deps.reachy_mini.get_current_head_pose.return_value = MagicMock()
     deps.reachy_mini.get_current_joint_positions.return_value = ([0.0] * 7, [0.0, 0.0])
+    if recent_user_transcripts is None:
+        # Cover the names used across this module's positive-path tests.
+        recent_user_transcripts = ["Hi I'm Tony", "It's Jon", "Call me John"]
+    deps.recent_user_transcripts = recent_user_transcripts
     return deps
 
 
@@ -379,3 +388,98 @@ def test_fuzzy_match_below_threshold_returns_none(fuzzy_match, tmp_path):
     name, path, score = fuzzy_match("Tony", [("Xiomara", p)])
     assert name is None
     assert path is None
+
+
+# ── name-hallucination guard (#287) ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_identify_rejects_name_not_in_transcripts(Greet, tmp_path, caplog):
+    """LLM passes a name the user never spoke — rejected, returns needs_name=true."""
+    import logging
+
+    session_dir = tmp_path / ".comedy_sessions"
+    session_dir.mkdir()
+    # Even though a stored session for "John" exists, the user never said
+    # "John" in the recent transcripts, so the guard must reject the LLM's
+    # fabricated name before the fuzzy-match path even runs.
+    (session_dir / "session_20260504_120000.json").write_text(
+        json.dumps(
+            {
+                "session_id": "20260504_120000",
+                "name": "John",
+                "job": "plumber",
+                "hometown": "Brooklyn",
+                "details": [],
+                "last_updated": "2026-05-04T12:00:00",
+                "roast_targets_used": [],
+            }
+        )
+    )
+    deps = make_deps(recent_user_transcripts=["Hello there", "What's up"])
+    with caplog.at_level(logging.WARNING):
+        result = await Greet(session_dir=session_dir)(deps, action="identify", name="John")
+    assert result["returning"] is False
+    assert result["name_received"] is None
+    assert result["needs_name"] is True
+    # Forensic data should be in the warning log per #287.
+    assert any("rejected name" in rec.message and "John" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_identify_accepts_name_present_in_recent_transcript(Greet, tmp_path):
+    """Name appears verbatim in a recent user transcript — accepted, fuzzy-match runs."""
+    session_dir = tmp_path / ".comedy_sessions"
+    session_dir.mkdir()
+    (session_dir / "session_20260504_120000.json").write_text(
+        json.dumps(
+            {
+                "session_id": "20260504_120000",
+                "name": "Tony",
+                "job": "engineer",
+                "hometown": "Pittsburgh",
+                "details": [],
+                "last_updated": "2026-05-04T12:00:00",
+                "roast_targets_used": [],
+            }
+        )
+    )
+    deps = make_deps(recent_user_transcripts=["Hi I'm Tony, nice to meet you"])
+    result = await Greet(session_dir=session_dir)(deps, action="identify", name="Tony")
+    assert result["returning"] is True
+    assert result["name"] == "Tony"
+
+
+@pytest.mark.asyncio
+async def test_identify_case_insensitive_match(Greet, tmp_path):
+    """User said 'tony' (lowercase), LLM passed 'Tony' — accepted."""
+    session_dir = tmp_path / ".comedy_sessions"
+    session_dir.mkdir()
+    (session_dir / "session_20260504_120000.json").write_text(
+        json.dumps(
+            {
+                "session_id": "20260504_120000",
+                "name": "Tony",
+                "job": "engineer",
+                "hometown": "Pittsburgh",
+                "details": [],
+                "last_updated": "2026-05-04T12:00:00",
+                "roast_targets_used": [],
+            }
+        )
+    )
+    deps = make_deps(recent_user_transcripts=["tony here"])
+    result = await Greet(session_dir=session_dir)(deps, action="identify", name="Tony")
+    assert result["returning"] is True
+
+
+@pytest.mark.asyncio
+async def test_identify_rejects_substring_without_word_boundary(Greet, tmp_path):
+    """User said 'Antonio', LLM passed 'Anton' — rejected (no word-boundary match)."""
+    session_dir = tmp_path / ".comedy_sessions"
+    session_dir.mkdir()
+    deps = make_deps(recent_user_transcripts=["I'm Antonio from Rome"])
+    result = await Greet(session_dir=session_dir)(deps, action="identify", name="Anton")
+    assert result["returning"] is False
+    assert result["name_received"] is None
+    assert result["needs_name"] is True

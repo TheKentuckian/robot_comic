@@ -10,7 +10,7 @@ import importlib
 import importlib.util
 from typing import TYPE_CHECKING, Any, Dict, List
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import field, dataclass
 
 from reachy_mini import ReachyMini
 from robot_comic.config import DEFAULT_PROFILES_DIRECTORY as DEFAULT_PROFILES_PATH  # noqa: F401
@@ -74,6 +74,13 @@ class ToolDependencies:
     # httpx.AsyncClient; None in sim/dev mode or handlers without a local LLM.
     http_client: Any | None = None  # httpx.AsyncClient
     llama_url: str | None = None  # base URL of the llama-server instance
+    # Recent finalised user transcripts (most-recent last).  Handlers append to
+    # this list on each completed user turn and keep it bounded to the last few
+    # entries (see ``RECENT_USER_TRANSCRIPTS_MAXLEN``).  Tools that accept a
+    # ``name`` argument from the LLM use these transcripts to validate the name
+    # was actually spoken by the user — see ``tools.name_validation`` and
+    # issue #287.
+    recent_user_transcripts: List[str] = field(default_factory=list)
 
 
 # Tool base class

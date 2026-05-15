@@ -26,6 +26,7 @@ from robot_comic.history_trim import trim_history_in_place
 from robot_comic.joke_history import JokeHistory, default_history_path, extract_punchline_via_llm
 from robot_comic.tools.core_tools import ToolDependencies, get_active_tool_specs
 from robot_comic.conversation_handler import ConversationHandler
+from robot_comic.tools.name_validation import record_user_transcript
 from robot_comic.tools.background_tool_manager import (
     BackgroundTool,
     ToolCallRoutine,
@@ -432,6 +433,8 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
     async def _dispatch_completed_transcript(self, transcript: str) -> None:
         """LLM → tool dispatch → TTS → PCM frames (two-phase with query-tool feedback)."""
         self._conversation_history.append({"role": "user", "content": transcript})
+        # Record for tool-side name-validation guard (#287).
+        record_user_transcript(self.deps.recent_user_transcripts, transcript)
         # Trim BEFORE building the next LLM request so unbounded sessions don't
         # blow up the context window mid-turn.
         trim_history_in_place(self._conversation_history)
