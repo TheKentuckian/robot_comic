@@ -1048,7 +1048,13 @@ class LocalStream:
             except Exception as e:
                 logger.warning("set_speed_factor(%r) failed: %s", value, e)
                 return JSONResponse({"ok": False, "error": "set_failed"}, status_code=500)
-            return JSONResponse({"ok": True, "value": float(self._movement_manager.speed_factor)})
+            persisted_value = float(self._movement_manager.speed_factor)
+            if self._instance_path:
+                try:
+                    write_startup_settings(self._instance_path, movement_speed=persisted_value)
+                except Exception as e:
+                    logger.warning("Failed to persist movement_speed=%r: %s", persisted_value, e)
+            return JSONResponse({"ok": True, "value": persisted_value})
 
         self._settings_initialized = True
 
