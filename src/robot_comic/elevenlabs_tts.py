@@ -461,23 +461,30 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         """Yield the next audio frame or status message from the output queue."""
         from fastrtc import wait_for_item  # deferred: fastrtc pulls gradio at boot
 
-        item = await wait_for_item(self.output_queue)
-        if isinstance(item, tuple):
-            # Update the speaking deadline using total bytes enqueued so far.
-            # This is more accurate than the queue-size heuristic because it
-            # accounts for all PCM audio pushed during this response, not just
-            # how many frames happen to be sitting in the queue right now.
-            cooldown_s = config.ECHO_COOLDOWN_MS / 1000.0
-            bytes_per_second = ELEVENLABS_OUTPUT_SAMPLE_RATE * _BYTES_PER_SAMPLE
-            playback_end = self._response_start_ts + self._response_audio_bytes / bytes_per_second
-            self._speaking_until = playback_end + cooldown_s
-        return item
+        # _speaking_until is now derived inside _enqueue_audio_frame so the
+        # composable factory path (which bypasses this emit()) still updates
+        # the echo guard. See docs/superpowers/specs/2026-05-15-lifecycle-echo-guard-fix.md.
+        return await wait_for_item(self.output_queue)
 
     async def _enqueue_audio_frame(self, frame: "np.ndarray[Any, Any]") -> None:
-        """Update byte-count accumulators and enqueue one audio frame (async)."""
+        """Update byte-count accumulators, derive _speaking_until, and enqueue one audio frame.
+
+        Single source of truth for the echo-guard deadline. The legacy ``emit()``
+        path and the composable ``ElevenLabsTTSAdapter.synthesize()`` path both
+        push frames through here, so ``_speaking_until`` fires regardless of
+        which consumer is downstream. See spec
+        ``docs/superpowers/specs/2026-05-15-lifecycle-echo-guard-fix.md``.
+        """
         if self._response_audio_bytes == 0:
             self._response_start_ts = time.perf_counter()
         self._response_audio_bytes += frame.nbytes
+        # Derive the playback deadline from the cumulative byte count. Same
+        # formula the legacy emit() site used; preserved here so behaviour is
+        # identical on the legacy path.
+        cooldown_s = config.ECHO_COOLDOWN_MS / 1000.0
+        bytes_per_second = ELEVENLABS_OUTPUT_SAMPLE_RATE * _BYTES_PER_SAMPLE
+        playback_end = self._response_start_ts + self._response_audio_bytes / bytes_per_second
+        self._speaking_until = playback_end + cooldown_s
         await self.output_queue.put((ELEVENLABS_OUTPUT_SAMPLE_RATE, frame))
 
     async def apply_personality(self, profile: str | None) -> str:
