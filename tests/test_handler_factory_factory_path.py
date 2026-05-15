@@ -831,3 +831,35 @@ def test_composable_path_copy_constructs_fresh_legacy_for_gemini_fallback_eleven
     assert copy is not original
     assert copy._tts_handler is not original._tts_handler
     assert copy.pipeline is not original.pipeline
+
+
+# ---------------------------------------------------------------------------
+# Phase 4c.5 — (moonshine, gemini_tts) composable path
+# ---------------------------------------------------------------------------
+#
+# Last 4c triple. The bundled Gemini LLM+TTS handler ``LocalSTTGeminiTTSHandler``
+# is wrapped by three adapters that share one ``genai.Client`` instance:
+# ``MoonshineSTTAdapter``, ``GeminiBundledLLMAdapter``, ``GeminiTTSAdapter``.
+# The bundled-LLM adapter is a 4c.5-specific adapter (NOT the 4c.2
+# ``GeminiLLMAdapter``) because the handler exposes ``_run_llm_with_tools``
+# rather than ``_call_llm``; see Phase 4c.5 spec Q1 for the rationale.
+
+
+def test_legacy_path_returns_legacy_handler_for_gemini_tts(
+    monkeypatch: pytest.MonkeyPatch, mock_deps: MagicMock
+) -> None:
+    """``FACTORY_PATH=legacy`` (default) keeps today's LocalSTTGeminiTTSHandler."""
+    from robot_comic import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_LEGACY)
+
+    fake = _fake_cls("LocalSTTGeminiTTSHandler")
+    with patch("robot_comic.gemini_tts.LocalSTTGeminiTTSHandler", fake):
+        result = HandlerFactory.build(
+            AUDIO_INPUT_MOONSHINE,
+            AUDIO_OUTPUT_GEMINI_TTS,
+            mock_deps,
+            pipeline_mode=PIPELINE_MODE_COMPOSABLE,
+        )
+
+    assert isinstance(result, fake)
