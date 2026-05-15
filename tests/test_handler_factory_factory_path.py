@@ -70,6 +70,27 @@ def test_legacy_path_returns_legacy_handler_for_llama_elevenlabs(
     assert isinstance(result, fake)
 
 
+def test_legacy_path_returns_legacy_handler_for_llama_chatterbox(
+    monkeypatch: pytest.MonkeyPatch, mock_deps: MagicMock
+) -> None:
+    """``FACTORY_PATH=legacy`` (default) keeps today's chatterbox handler."""
+    from robot_comic import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod.config, "LLM_BACKEND", LLM_BACKEND_LLAMA)
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_LEGACY)
+
+    fake = _fake_cls("LocalSTTChatterboxHandler")
+    with patch("robot_comic.chatterbox_tts.LocalSTTChatterboxHandler", fake):
+        result = HandlerFactory.build(
+            AUDIO_INPUT_MOONSHINE,
+            AUDIO_OUTPUT_CHATTERBOX,
+            mock_deps,
+            pipeline_mode=PIPELINE_MODE_COMPOSABLE,
+        )
+
+    assert isinstance(result, fake)
+
+
 def test_composable_path_returns_wrapper_for_llama_elevenlabs(
     monkeypatch: pytest.MonkeyPatch, mock_deps: MagicMock
 ) -> None:
