@@ -49,16 +49,24 @@ class ComposableConversationHandler(ConversationHandler):
         raise NotImplementedError
 
     async def start_up(self) -> None:
-        raise NotImplementedError
+        """Delegate to :meth:`ComposablePipeline.start_up` — blocks until shutdown."""
+        # TODO(phase4-lifecycle): emit the four boot-timeline supporting events
+        # from #321 before delegating; composable mode currently drops them.
+        await self.pipeline.start_up()
 
     async def shutdown(self) -> None:
-        raise NotImplementedError
+        """Delegate to :meth:`ComposablePipeline.shutdown`."""
+        await self.pipeline.shutdown()
 
     async def receive(self, frame: AudioFrame) -> None:
-        raise NotImplementedError
+        """Forward a captured input frame to the pipeline's STT backend."""
+        await self.pipeline.feed_audio(frame)
 
     async def emit(self) -> HandlerOutput:
-        raise NotImplementedError
+        """Pull the next output item from the pipeline's output queue."""
+        from fastrtc import wait_for_item  # deferred — fastrtc pulls gradio at boot
+
+        return await wait_for_item(self.pipeline.output_queue)
 
     async def apply_personality(self, profile: str | None) -> str:
         raise NotImplementedError

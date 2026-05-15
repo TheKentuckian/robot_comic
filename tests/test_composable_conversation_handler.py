@@ -39,3 +39,34 @@ def _make_wrapper() -> Any:
 def test_wrapper_implements_conversation_handler_abc() -> None:
     wrapper = _make_wrapper()
     assert isinstance(wrapper, ConversationHandler)
+
+
+@pytest.mark.asyncio
+async def test_start_up_delegates_to_pipeline() -> None:
+    wrapper = _make_wrapper()
+    await wrapper.start_up()
+    wrapper.pipeline.start_up.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_delegates_to_pipeline() -> None:
+    wrapper = _make_wrapper()
+    await wrapper.shutdown()
+    wrapper.pipeline.shutdown.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_receive_forwards_to_feed_audio() -> None:
+    wrapper = _make_wrapper()
+    frame: AudioFrame = (16000, np.zeros(160, dtype=np.int16))
+    await wrapper.receive(frame)
+    wrapper.pipeline.feed_audio.assert_awaited_once_with(frame)
+
+
+@pytest.mark.asyncio
+async def test_emit_pulls_from_output_queue() -> None:
+    wrapper = _make_wrapper()
+    sentinel = (24000, np.ones(48, dtype=np.int16))
+    await wrapper.pipeline.output_queue.put(sentinel)
+    result = await wrapper.emit()
+    assert result is sentinel
