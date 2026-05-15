@@ -236,6 +236,88 @@ async def test_shutdown_with_no_open_http_is_safe() -> None:
 
 
 # ---------------------------------------------------------------------------
+# telemetry — record_llm_duration (Lifecycle Hook #2, #337)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_chat_records_llm_duration_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``chat()`` must record ``telemetry.record_llm_duration`` after each call.
+
+    The legacy ``BaseLlamaResponseHandler._run_response_loop`` (which the
+    Gemini-text handler inherits) brackets ``_call_llm`` with
+    ``time.perf_counter()`` and calls ``telemetry.record_llm_duration``. The
+    composable path goes through ``GeminiLLMAdapter.chat()`` instead, which
+    calls ``_call_llm`` directly and therefore bypasses the legacy site.
+    The adapter must wrap its own timing so the
+    gen_ai.client.operation.duration histogram fires regardless of path.
+
+    Note: the adapter emits ``gen_ai.system="gemini"`` even though the
+    legacy ``_run_response_loop`` inherits ``"llama_cpp"`` from the
+    Llama-base loop. The new value is semantically correct
+    (``elevenlabs_tts.py:244`` also uses ``"gemini"``); the legacy mismatch
+    is a latent bug Phase 4e cleanup will retire.
+    """
+    from robot_comic.adapters import gemini_llm_adapter as mod
+
+    records: list[tuple[float, dict[str, Any]]] = []
+
+    def _recorder(duration_s: float, attrs: dict[str, Any]) -> None:
+        records.append((duration_s, attrs))
+
+    monkeypatch.setattr(mod.telemetry, "record_llm_duration", _recorder)
+
+    handler = _StubGeminiHandler(responses=[("ok", [], {})])
+    adapter = GeminiLLMAdapter(handler)  # type: ignore[arg-type]
+    await adapter.chat([{"role": "user", "content": "hi"}])
+
+    assert len(records) == 1, "expected exactly one telemetry record per chat() call"
+    duration_s, attrs = records[0]
+    assert duration_s >= 0.0
+    assert attrs == {"gen_ai.system": "gemini", "gen_ai.operation.name": "chat"}
+
+
+@pytest.mark.asyncio
+async def test_chat_records_llm_duration_on_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exception path still records duration — legacy parity.
+
+    The legacy ``_run_response_loop`` records inside a ``finally`` so the
+    histogram reflects failed calls too. The adapter must do the same.
+    """
+    from robot_comic.adapters import gemini_llm_adapter as mod
+
+    records: list[tuple[float, dict[str, Any]]] = []
+
+    def _recorder(duration_s: float, attrs: dict[str, Any]) -> None:
+        records.append((duration_s, attrs))
+
+    monkeypatch.setattr(mod.telemetry, "record_llm_duration", _recorder)
+
+    class _Boom:
+        def __init__(self) -> None:
+            self._conversation_history: list[dict[str, Any]] = []
+            self._http = None
+
+        async def _prepare_startup_credentials(self) -> None: ...
+
+        async def _call_llm(self, extra_messages=None):  # noqa: ANN001
+            raise RuntimeError("kaboom")
+
+    handler = _Boom()
+    adapter = GeminiLLMAdapter(handler)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="kaboom"):
+        await adapter.chat([{"role": "user", "content": "y"}])
+
+    assert len(records) == 1, "telemetry must fire even when the LLM call raises"
+    _, attrs = records[0]
+    assert attrs == {"gen_ai.system": "gemini", "gen_ai.operation.name": "chat"}
+
+
+# ---------------------------------------------------------------------------
 # Protocol conformance
 # ---------------------------------------------------------------------------
 

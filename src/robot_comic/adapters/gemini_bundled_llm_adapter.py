@@ -56,9 +56,11 @@ translation:
 """
 
 from __future__ import annotations
+import time
 import logging
 from typing import Any
 
+from robot_comic import telemetry
 from robot_comic.backends import LLMResponse
 from robot_comic.adapters.gemini_tts_adapter import _GeminiTTSCompatibleHandler
 
@@ -142,10 +144,21 @@ class GeminiBundledLLMAdapter:
 
         saved_history = self._handler._conversation_history
         self._handler._conversation_history = _orchestrator_messages_to_gemini(messages)
+        # Lifecycle Hook #2 (#337): legacy ``GeminiTTSResponseHandler._run_llm_with_tools``
+        # (``gemini_tts.py:469``) never recorded LLM duration — only its
+        # ElevenLabs cousin did. The composable surface routes through this
+        # adapter, so we wrap timing here to bring the bundled-Gemini triple
+        # in line with the other two LLM adapters. Same attribute shape as
+        # :class:`GeminiLLMAdapter`.
+        _llm_start = time.perf_counter()
         try:
             text = await self._handler._run_llm_with_tools()
         finally:
             self._handler._conversation_history = saved_history
+            telemetry.record_llm_duration(
+                time.perf_counter() - _llm_start,
+                {"gen_ai.system": "gemini", "gen_ai.operation.name": "chat"},
+            )
         return LLMResponse(text=text, tool_calls=())
 
     async def shutdown(self) -> None:
