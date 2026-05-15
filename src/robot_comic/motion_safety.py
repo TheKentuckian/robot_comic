@@ -125,6 +125,20 @@ HEAD_PITCH_MAX_VEL_RAD_S: float = _env_float("REACHY_MINI_HEAD_PITCH_MAX_VEL_RAD
 HEAD_YAW_MAX_VEL_RAD_S: float = _env_float("REACHY_MINI_HEAD_YAW_MAX_VEL_RAD_S", HEAD_MAX_VEL_RAD_S)
 HEAD_ROLL_MAX_VEL_RAD_S: float = _env_float("REACHY_MINI_HEAD_ROLL_MAX_VEL_RAD_S", HEAD_MAX_VEL_RAD_S)
 
+# Continuous-tracker safe envelope (#308 hypothesis 3): the head tracker can
+# push the composed pose to the edge of the global envelope on every frame;
+# composition with breathing / wobbler can then tip over into IK-invalid
+# territory and the daemon logs "Collision detected or head pose not
+# achievable!". Constraining the tracker OFFSET before composition cuts those
+# warnings off at the source. Defaults match the global envelope so this is a
+# no-op until operators tighten per-unit via env.
+HEAD_TRACKER_PITCH_MIN_RAD: float = _env_deg("REACHY_MINI_HEAD_TRACKER_PITCH_MIN_DEG", -30.0)
+HEAD_TRACKER_PITCH_MAX_RAD: float = _env_deg("REACHY_MINI_HEAD_TRACKER_PITCH_MAX_DEG", 25.0)
+HEAD_TRACKER_YAW_MIN_RAD: float = _env_deg("REACHY_MINI_HEAD_TRACKER_YAW_MIN_DEG", -45.0)
+HEAD_TRACKER_YAW_MAX_RAD: float = _env_deg("REACHY_MINI_HEAD_TRACKER_YAW_MAX_DEG", 45.0)
+HEAD_TRACKER_ROLL_MIN_RAD: float = _env_deg("REACHY_MINI_HEAD_TRACKER_ROLL_MIN_DEG", -20.0)
+HEAD_TRACKER_ROLL_MAX_RAD: float = _env_deg("REACHY_MINI_HEAD_TRACKER_ROLL_MAX_DEG", 20.0)
+
 # Track which axes have been clamped so we only emit one DEBUG per session.
 _clamped_axes_seen: Set[str] = set()
 
@@ -136,18 +150,24 @@ _clamped_axes_seen: Set[str] = set()
 
 @dataclass
 class ClampStats:
-    """Running counts of pose-clamp and velocity-cap events since last reset."""
+    """Running counts of pose-clamp, velocity-cap, and tracker-clamp events."""
 
     pose_clamps: Dict[str, int]  # axis name → count of clamps applied this window
     velocity_caps: int  # total velocity-cap engagements this window
+    tracker_clamps: int = 0  # tracker safe-envelope engagements this window (#308)
 
     def is_empty(self) -> bool:
         """Return True when no clamps or caps fired in the window."""
-        return self.velocity_caps == 0 and not any(self.pose_clamps.values())
+        return (
+            self.velocity_caps == 0
+            and self.tracker_clamps == 0
+            and not any(self.pose_clamps.values())
+        )
 
 
 _pose_clamp_counts: Dict[str, int] = {"roll": 0, "pitch": 0, "yaw": 0}
 _velocity_cap_count: int = 0
+_tracker_clamp_count: int = 0
 
 
 def get_and_reset_clamp_stats() -> ClampStats:
@@ -156,15 +176,37 @@ def get_and_reset_clamp_stats() -> ClampStats:
     The MovementManager tick loop calls this on a periodic schedule to emit a
     summary log line; tests use it to assert clamps fired.
     """
-    global _velocity_cap_count
+    global _velocity_cap_count, _tracker_clamp_count
     snapshot = ClampStats(
         pose_clamps=dict(_pose_clamp_counts),
         velocity_caps=_velocity_cap_count,
+        tracker_clamps=_tracker_clamp_count,
     )
     for key in _pose_clamp_counts:
         _pose_clamp_counts[key] = 0
     _velocity_cap_count = 0
+    _tracker_clamp_count = 0
     return snapshot
+
+
+def clamp_tracker_rotation_offsets(
+    rotation_xyz_rad: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    """Clamp tracker rotation offsets (roll, pitch, yaw) to the tracker envelope (#308).
+
+    Applied to the camera-worker face-tracking offset before it joins the
+    secondary-move composition, so the daemon never sees an out-of-envelope
+    target from the continuous tracker. Increments ``_tracker_clamp_count``
+    when any axis is clamped so the periodic summary surfaces the activity.
+    """
+    global _tracker_clamp_count
+    roll, pitch, yaw = rotation_xyz_rad
+    new_roll = max(HEAD_TRACKER_ROLL_MIN_RAD, min(HEAD_TRACKER_ROLL_MAX_RAD, roll))
+    new_pitch = max(HEAD_TRACKER_PITCH_MIN_RAD, min(HEAD_TRACKER_PITCH_MAX_RAD, pitch))
+    new_yaw = max(HEAD_TRACKER_YAW_MIN_RAD, min(HEAD_TRACKER_YAW_MAX_RAD, yaw))
+    if new_roll != roll or new_pitch != pitch or new_yaw != yaw:
+        _tracker_clamp_count += 1
+    return (new_roll, new_pitch, new_yaw)
 
 
 # ---------------------------------------------------------------------------

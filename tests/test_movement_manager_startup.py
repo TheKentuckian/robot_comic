@@ -108,6 +108,24 @@ def test_maybe_log_clamp_stats_silent_when_no_activity(caplog) -> None:
     assert not [r for r in caplog.records if "motion_safety clamps" in r.message]
 
 
+def test_maybe_log_clamp_stats_includes_tracker_clamps(caplog) -> None:
+    """Summary surfaces tracker-clamp activity (#308) alongside the other counters."""
+    import logging
+
+    from robot_comic import motion_safety
+
+    manager, _ = _make_manager()
+    motion_safety.get_and_reset_clamp_stats()
+    motion_safety._tracker_clamp_count = 7
+
+    with caplog.at_level(logging.INFO, logger="robot_comic.moves"):
+        manager._maybe_log_clamp_stats(loop_count=10, summary_interval_loops=10)
+
+    msgs = [r.message for r in caplog.records if "motion_safety clamps" in r.message]
+    assert msgs
+    assert "tracker_clamps=7" in msgs[0]
+
+
 def test_maybe_log_clamp_stats_respects_interval(caplog) -> None:
     """Only every Nth tick emits — interim ticks stay silent."""
     import logging
