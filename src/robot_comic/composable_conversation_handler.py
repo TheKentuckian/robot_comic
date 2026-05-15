@@ -20,7 +20,9 @@ import logging
 from typing import Callable
 
 from robot_comic.composable_pipeline import ComposablePipeline
+from robot_comic.config import set_custom_profile
 from robot_comic.conversation_handler import AudioFrame, ConversationHandler, HandlerOutput
+from robot_comic.prompts import get_session_instructions
 from robot_comic.tools.core_tools import ToolDependencies
 
 
@@ -69,7 +71,20 @@ class ComposableConversationHandler(ConversationHandler):
         return await wait_for_item(self.pipeline.output_queue)
 
     async def apply_personality(self, profile: str | None) -> str:
-        raise NotImplementedError
+        """Switch personality, reset pipeline history, re-seed system prompt."""
+        # TODO(phase4-lifecycle): legacy handlers also clear joke history and
+        # per-session echo-guard state on persona switch. Compose those in when
+        # the corresponding hooks land in follow-up PRs.
+        try:
+            set_custom_profile(profile)
+        except Exception as exc:
+            logger.error("Error applying personality %r: %s", profile, exc)
+            return f"Failed to apply personality: {exc}"
+        self.pipeline.reset_history(keep_system=False)
+        self.pipeline._conversation_history.append(
+            {"role": "system", "content": get_session_instructions()}
+        )
+        return f"Applied personality {profile!r}. Conversation history reset."
 
     async def get_available_voices(self) -> list[str]:
         return await self._tts_handler.get_available_voices()

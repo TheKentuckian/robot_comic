@@ -93,3 +93,60 @@ async def test_change_voice_delegates() -> None:
     wrapper._tts_handler.change_voice = AsyncMock(return_value="Voice changed to X.")
     assert await wrapper.change_voice("X") == "Voice changed to X."
     wrapper._tts_handler.change_voice.assert_awaited_once_with("X")
+
+
+@pytest.mark.asyncio
+async def test_apply_personality_resets_history_and_reseeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrapper = _make_wrapper()
+    # Pre-seed some history that should be wiped.
+    wrapper.pipeline._conversation_history = [
+        {"role": "system", "content": "old"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    # Make the MagicMock reset_history actually clear the list so the
+    # post-append assertion is meaningful.
+    def _real_reset(*, keep_system: bool = True) -> None:
+        wrapper.pipeline._conversation_history.clear()
+
+    wrapper.pipeline.reset_history.side_effect = _real_reset
+
+    monkeypatch.setattr(
+        "robot_comic.composable_conversation_handler.set_custom_profile",
+        lambda profile: None,
+    )
+    monkeypatch.setattr(
+        "robot_comic.composable_conversation_handler.get_session_instructions",
+        lambda: "fresh instructions",
+    )
+
+    result = await wrapper.apply_personality("rodney")
+
+    assert "Applied personality 'rodney'" in result
+    wrapper.pipeline.reset_history.assert_called_once_with(keep_system=False)
+    assert wrapper.pipeline._conversation_history == [
+        {"role": "system", "content": "fresh instructions"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_personality_returns_failure_message_on_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrapper = _make_wrapper()
+
+    def _boom(profile: str | None) -> None:
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(
+        "robot_comic.composable_conversation_handler.set_custom_profile",
+        _boom,
+    )
+
+    result = await wrapper.apply_personality("broken")
+
+    assert "Failed to apply personality" in result
+    assert "nope" in result
+    wrapper.pipeline.reset_history.assert_not_called()
