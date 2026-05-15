@@ -193,6 +193,47 @@ def test_warmup_audio_skips_when_early_flag_set(monkeypatch: pytest.MonkeyPatch,
     mock_popen.assert_not_called()
 
 
+def test_emits_welcome_wav_played_after_successful_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """After a successful Popen, ``welcome.wav.played`` must be emitted (#337).
+
+    Prior to this fix the in-process ``play_warmup_wav`` returned early once
+    ``REACHY_MINI_EARLY_WELCOME_PLAYED=1`` was set, and the early-play helper
+    in ``main.py`` never emitted the event itself — so the monitor's boot
+    timeline lost the dispatch row entirely whenever the early-play path was
+    taken (i.e. always in the default config).
+    """
+
+    def _is_file(self: Path) -> bool:
+        return self.name == "welcome.wav"
+
+    monkeypatch.setattr(Path, "is_file", _is_file)
+    with (
+        patch("robot_comic.main.subprocess.Popen") as mock_popen,
+        patch("robot_comic.telemetry.emit_supporting_event") as emit,
+    ):
+        _play_welcome_early()
+
+    mock_popen.assert_called_once()
+    # The .played emit happens once, after the Popen returns.
+    played_calls = [c for c in emit.call_args_list if c.args and c.args[0] == "welcome.wav.played"]
+    assert len(played_calls) == 1, f"expected one welcome.wav.played emit, got {emit.call_args_list}"
+    args, kwargs = played_calls[0]
+    assert args[0] == "welcome.wav.played"
+    assert "dur_ms" in kwargs
+    # Dispatch is essentially instantaneous in a mocked Popen, but it must
+    # be a non-negative float.
+    assert isinstance(kwargs["dur_ms"], float) and kwargs["dur_ms"] >= 0
+
+
+def test_no_welcome_wav_played_when_dispatch_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the early-play helper short-circuits (no asset / aplay missing), no event fires."""
+    monkeypatch.setattr(Path, "is_file", lambda self: False)
+    with patch("robot_comic.telemetry.emit_supporting_event") as emit:
+        _play_welcome_early()
+    played_calls = [c for c in emit.call_args_list if c.args and c.args[0] == "welcome.wav.played"]
+    assert played_calls == []
+
+
 def test_subprocess_call_is_nonblocking(monkeypatch: pytest.MonkeyPatch) -> None:
     """The helper must use Popen (non-blocking), never run/check_call/check_output.
 
