@@ -438,6 +438,101 @@ async def test_dispatch_rate_limited_message_when_all_429(monkeypatch: pytest.Mo
 
 
 # ---------------------------------------------------------------------------
+# [Skipped TTS:] status markers must not leak into _conversation_history.
+# See issue #306 — these strings are monitor-visibility cues, not LLM turns.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dispatch_tool_call_limit_marker_not_in_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    """[Skipped TTS: tool-call limit reached] goes to output queue, not history."""
+    from robot_comic import elevenlabs_tts as mod
+
+    handler = _make_handler()
+
+    async def raising_llm(self):  # type: ignore[no-untyped-def]
+        raise mod._LLMToolCallLimitExceeded("tool-call limit reached")
+
+    monkeypatch.setattr(mod.ElevenLabsTTSResponseHandler, "_run_llm_with_tools", raising_llm)
+
+    await handler._dispatch_completed_transcript("hi")
+
+    # Marker reaches the monitor.
+    items: list[Any] = []
+    while not handler.output_queue.empty():
+        items.append(handler.output_queue.get_nowait())
+    marker_items = [i for i in items if isinstance(i, AdditionalOutputs) and "[Skipped TTS:" in str(i.args)]
+    assert marker_items, f"Expected [Skipped TTS:] AdditionalOutputs, got {items!r}"
+
+    # … but never reaches LLM history.
+    history_texts = [
+        (turn.get("parts") or [{}])[0].get("text", "")
+        for turn in handler._conversation_history
+        if turn.get("role") == "model"
+    ]
+    assert all("[Skipped TTS:" not in t for t in history_texts), history_texts
+
+
+@pytest.mark.asyncio
+async def test_dispatch_synthetic_response_text_skipped_from_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the LLM (hypothetically) returns a marker string, it is filtered out of history."""
+    from robot_comic import elevenlabs_tts as mod
+
+    handler = _make_handler()
+
+    async def fake_llm(self):  # type: ignore[no-untyped-def]
+        # Simulate any future code path that ends up putting a status marker
+        # into response_text — the guard at the history-append site stops it
+        # from being persisted to _conversation_history.
+        return "[Skipped TTS: empty LLM response]"
+
+    async def fake_stream(self, text: str, first_audio_marker=None, tags=None, target_queue=None):  # type: ignore[no-untyped-def]
+        return True
+
+    monkeypatch.setattr(mod.ElevenLabsTTSResponseHandler, "_run_llm_with_tools", fake_llm)
+    monkeypatch.setattr(mod.ElevenLabsTTSResponseHandler, "_stream_tts_to_queue", fake_stream)
+
+    await handler._dispatch_completed_transcript("hi")
+
+    # Monitor still saw the marker.
+    items: list[Any] = []
+    while not handler.output_queue.empty():
+        items.append(handler.output_queue.get_nowait())
+    assistant_outputs = [i for i in items if isinstance(i, AdditionalOutputs) and "[Skipped TTS:" in str(i.args)]
+    assert assistant_outputs
+
+    # History only carries the user turn; no model marker.
+    model_turns = [t for t in handler._conversation_history if t.get("role") == "model"]
+    assert model_turns == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_real_llm_text_is_persisted_to_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression guard: normal LLM-emitted content STILL lands in history."""
+    from robot_comic import elevenlabs_tts as mod
+
+    handler = _make_handler()
+
+    async def fake_llm(self):  # type: ignore[no-untyped-def]
+        return "Hello, friend."
+
+    async def fake_stream(self, text: str, first_audio_marker=None, tags=None, target_queue=None):  # type: ignore[no-untyped-def]
+        return True
+
+    monkeypatch.setattr(mod.ElevenLabsTTSResponseHandler, "_run_llm_with_tools", fake_llm)
+    monkeypatch.setattr(mod.ElevenLabsTTSResponseHandler, "_stream_tts_to_queue", fake_stream)
+
+    await handler._dispatch_completed_transcript("hi")
+
+    model_turns = [
+        (turn.get("parts") or [{}])[0].get("text", "")
+        for turn in handler._conversation_history
+        if turn.get("role") == "model"
+    ]
+    assert model_turns == ["Hello, friend."]
+
+
+# ---------------------------------------------------------------------------
 # Delivery tag → voice_settings mapping
 # ---------------------------------------------------------------------------
 

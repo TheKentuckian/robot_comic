@@ -9,8 +9,50 @@ from robot_comic.history_trim import (
     DEFAULT_MAX_HISTORY_TURNS,
     get_max_history_turns,
     trim_history_in_place,
+    is_synthetic_status_marker,
 )
 from robot_comic.tools.core_tools import ToolDependencies
+
+
+# ---------------------------------------------------------------------------
+# is_synthetic_status_marker — see issue #306
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "[Skipped TTS: tool-call limit reached]",
+        "[Skipped TTS: empty LLM response]",
+        "[Skipped: anything]",
+        "[TTS error — could not generate audio]",
+        "[TTS error]",
+        "[ElevenLabs TTS rate-limited; try again later]",
+        "[Gemini TTS rate-limited (quota=foo); try again later]",
+        "[error] connection refused",
+        "   [Skipped TTS: leading whitespace tolerated]",
+    ],
+)
+def test_is_synthetic_status_marker_matches_known_prefixes(marker: str) -> None:
+    assert is_synthetic_status_marker(marker) is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "Hello there, friend.",
+        "Yeah. I'm here.",
+        "",
+        "   ",
+        "[fast] You hockey puck!",
+        "[short pause] go on.",
+        "The robot said [Skipped TTS: something] in passing.",  # not prefix
+        None,
+        123,
+    ],
+)
+def test_is_synthetic_status_marker_rejects_real_content(content) -> None:  # type: ignore[no-untyped-def]
+    assert is_synthetic_status_marker(content) is False
 
 
 # ---------------------------------------------------------------------------
