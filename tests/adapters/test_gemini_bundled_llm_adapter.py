@@ -200,6 +200,73 @@ async def test_shutdown_is_noop() -> None:
 
 
 # ---------------------------------------------------------------------------
+# telemetry — record_llm_duration (Lifecycle Hook #2, #337)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_chat_records_llm_duration_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``chat()`` must record ``telemetry.record_llm_duration`` after each call.
+
+    The legacy ``GeminiTTSResponseHandler._run_llm_with_tools``
+    (``gemini_tts.py:469``) never recorded LLM duration — only its
+    ElevenLabs cousin (``elevenlabs_tts.py:799, 829``) did. The composable
+    surface routes through ``GeminiBundledLLMAdapter.chat()``; the adapter
+    is the single observable LLM site post-4d default-flip, so we wrap
+    timing here to bring this triple in line with the other two LLM
+    adapters. Same attribute shape as ``GeminiLLMAdapter``.
+    """
+    from robot_comic.adapters import gemini_bundled_llm_adapter as mod
+
+    records: list[tuple[float, dict[str, Any]]] = []
+
+    def _recorder(duration_s: float, attrs: dict[str, Any]) -> None:
+        records.append((duration_s, attrs))
+
+    monkeypatch.setattr(mod.telemetry, "record_llm_duration", _recorder)
+
+    handler = _StubGeminiBundledHandler(llm_return="ok")
+    adapter = GeminiBundledLLMAdapter(handler)  # type: ignore[arg-type]
+    await adapter.chat([{"role": "user", "content": "hi"}])
+
+    assert len(records) == 1, "expected exactly one telemetry record per chat() call"
+    duration_s, attrs = records[0]
+    assert duration_s >= 0.0
+    assert attrs == {"gen_ai.system": "gemini", "gen_ai.operation.name": "chat"}
+
+
+@pytest.mark.asyncio
+async def test_chat_records_llm_duration_on_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exception path still records duration — parity with the other two adapters.
+
+    Even though legacy bundled-Gemini never recorded duration on success or
+    failure, the adapter records on both paths so dashboards see consistent
+    behaviour across all three LLM adapters.
+    """
+    from robot_comic.adapters import gemini_bundled_llm_adapter as mod
+
+    records: list[tuple[float, dict[str, Any]]] = []
+
+    def _recorder(duration_s: float, attrs: dict[str, Any]) -> None:
+        records.append((duration_s, attrs))
+
+    monkeypatch.setattr(mod.telemetry, "record_llm_duration", _recorder)
+
+    handler = _StubGeminiBundledHandler(raise_exc=RuntimeError("llm boom"))
+    adapter = GeminiBundledLLMAdapter(handler)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="llm boom"):
+        await adapter.chat([{"role": "user", "content": "hi"}])
+
+    assert len(records) == 1, "telemetry must fire even when the LLM call raises"
+    _, attrs = records[0]
+    assert attrs == {"gen_ai.system": "gemini", "gen_ai.operation.name": "chat"}
+
+
+# ---------------------------------------------------------------------------
 # Protocol conformance
 # ---------------------------------------------------------------------------
 
