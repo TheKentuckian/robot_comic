@@ -593,9 +593,9 @@ def _build_composable_gemini_tts(**handler_kwargs: Any) -> Any:
     """
     from robot_comic.prompts import get_session_instructions
     from robot_comic.adapters import (
-        GeminiBundledLLMAdapter,
         GeminiTTSAdapter,
         MoonshineSTTAdapter,
+        GeminiBundledLLMAdapter,
     )
     from robot_comic.gemini_tts import LocalSTTGeminiTTSHandler
     from robot_comic.composable_pipeline import ComposablePipeline

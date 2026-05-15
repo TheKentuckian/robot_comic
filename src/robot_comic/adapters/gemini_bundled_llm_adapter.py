@@ -141,9 +141,7 @@ class GeminiBundledLLMAdapter:
             )
 
         saved_history = self._handler._conversation_history
-        self._handler._conversation_history = _orchestrator_messages_to_gemini(
-            messages
-        )
+        self._handler._conversation_history = _orchestrator_messages_to_gemini(messages)
         try:
             text = await self._handler._run_llm_with_tools()
         finally:

@@ -62,9 +62,7 @@ class _StubGeminiTTSHandler:
     async def _prepare_startup_credentials(self) -> None:
         self.prepare_called = True
 
-    async def _call_tts_with_retry(
-        self, text: str, system_instruction: str | None = None
-    ) -> bytes | None:
+    async def _call_tts_with_retry(self, text: str, system_instruction: str | None = None) -> bytes | None:
         self.tts_calls.append((text, system_instruction))
         if self._tts_results:
             return self._tts_results.pop(0)
@@ -113,17 +111,10 @@ async def test_synthesize_yields_audio_frames_for_one_sentence() -> None:
 @pytest.mark.asyncio
 async def test_synthesize_yields_audio_frames_for_multiple_sentences() -> None:
     """Multi-sentence text → multiple TTS calls; total frames concatenate."""
-    handler = _StubGeminiTTSHandler(
-        tts_results=[_pcm_bytes(2400), _pcm_bytes(2400), _pcm_bytes(2400)]
-    )
+    handler = _StubGeminiTTSHandler(tts_results=[_pcm_bytes(2400), _pcm_bytes(2400), _pcm_bytes(2400)])
     adapter = GeminiTTSAdapter(handler)  # type: ignore[arg-type]
 
-    out = [
-        frame
-        async for frame in adapter.synthesize(
-            "First sentence. Second sentence. Third sentence."
-        )
-    ]
+    out = [frame async for frame in adapter.synthesize("First sentence. Second sentence. Third sentence.")]
 
     assert len(out) == 3
     assert len(handler.tts_calls) == 3
@@ -157,16 +148,11 @@ async def test_synthesize_inserts_silence_for_short_pause_tag() -> None:
     handler = _StubGeminiTTSHandler(tts_results=[pcm])
     adapter = GeminiTTSAdapter(handler)  # type: ignore[arg-type]
 
-    out = [
-        frame
-        async for frame in adapter.synthesize("[short pause] Now I speak.")
-    ]
+    out = [frame async for frame in adapter.synthesize("[short pause] Now I speak.")]
 
     # silence_pcm at SHORT_PAUSE_MS (400 ms) = 9600 samples → 4 chunks of
     # _CHUNK_SAMPLES=2400. Plus 1 chunk of spoken audio = 5 frames total.
-    expected_silence_samples = int(
-        GEMINI_TTS_OUTPUT_SAMPLE_RATE * SHORT_PAUSE_MS / 1000
-    )
+    expected_silence_samples = int(GEMINI_TTS_OUTPUT_SAMPLE_RATE * SHORT_PAUSE_MS / 1000)
     expected_silence_chunks = (expected_silence_samples + 2400 - 1) // 2400
     assert len(out) == expected_silence_chunks + 1
 
@@ -213,10 +199,7 @@ async def test_synthesize_skips_sentence_when_tts_returns_none() -> None:
     handler = _StubGeminiTTSHandler(tts_results=[None, _pcm_bytes(2400)])
     adapter = GeminiTTSAdapter(handler)  # type: ignore[arg-type]
 
-    out = [
-        frame
-        async for frame in adapter.synthesize("First. Second.")
-    ]
+    out = [frame async for frame in adapter.synthesize("First. Second.")]
 
     # First sentence → None → 0 frames. Second sentence → 1 frame.
     assert len(out) == 1

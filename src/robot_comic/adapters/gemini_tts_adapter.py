@@ -169,17 +169,11 @@ class GeminiTTSAdapter:
                 continue
             sentence_tags = extract_delivery_tags(sentence)
             if SHORT_PAUSE_TAG in sentence_tags:
-                for frame in GeminiTTSResponseHandler._pcm_to_frames(
-                    _silence_pcm(SHORT_PAUSE_MS)
-                ):
-                    yield AudioFrame(
-                        samples=frame, sample_rate=GEMINI_TTS_OUTPUT_SAMPLE_RATE
-                    )
+                for frame in GeminiTTSResponseHandler._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS)):
+                    yield AudioFrame(samples=frame, sample_rate=GEMINI_TTS_OUTPUT_SAMPLE_RATE)
             instruction = build_tts_system_instruction(base_instruction, sentence_tags)
             try:
-                pcm_bytes = await self._handler._call_tts_with_retry(
-                    spoken, system_instruction=instruction
-                )
+                pcm_bytes = await self._handler._call_tts_with_retry(spoken, system_instruction=instruction)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # pragma: no cover — defensive
@@ -192,9 +186,7 @@ class GeminiTTSAdapter:
             if pcm_bytes is None:
                 continue
             for frame in GeminiTTSResponseHandler._pcm_to_frames(pcm_bytes):
-                yield AudioFrame(
-                    samples=frame, sample_rate=GEMINI_TTS_OUTPUT_SAMPLE_RATE
-                )
+                yield AudioFrame(samples=frame, sample_rate=GEMINI_TTS_OUTPUT_SAMPLE_RATE)
 
     async def shutdown(self) -> None:
         """No-op — ``genai.Client`` has no explicit close path here."""

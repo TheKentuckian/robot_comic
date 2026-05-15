@@ -115,9 +115,7 @@ async def test_chat_swaps_history_for_duration_of_call() -> None:
     assert handler.history_during_call[1]["parts"] == [{"text": "earlier reply"}]
 
     # After the call, the original history is restored.
-    assert handler._conversation_history == [
-        {"role": "user", "parts": [{"text": "PRE"}]}
-    ]
+    assert handler._conversation_history == [{"role": "user", "parts": [{"text": "PRE"}]}]
 
 
 @pytest.mark.asyncio
@@ -130,9 +128,7 @@ async def test_chat_restores_history_on_exception() -> None:
     with pytest.raises(RuntimeError, match="llm boom"):
         await adapter.chat([{"role": "user", "content": "hi"}])
 
-    assert handler._conversation_history == [
-        {"role": "user", "parts": [{"text": "PRE"}]}
-    ]
+    assert handler._conversation_history == [{"role": "user", "parts": [{"text": "PRE"}]}]
 
 
 @pytest.mark.asyncio
