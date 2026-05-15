@@ -58,7 +58,8 @@ These combinations map 1:1 to an existing handler class and work today.
 | `gemini_live_input` | `gemini_live_output` | `GeminiLiveHandler` | `BACKEND_PROVIDER=gemini` |
 | `moonshine` | `chatterbox` | `LocalSTTChatterboxHandler` | `local_stt` + `LOCAL_STT_RESPONSE_BACKEND=chatterbox` |
 | `moonshine` | `gemini_tts` | `LocalSTTGeminiTTSHandler` | `local_stt` + `LOCAL_STT_RESPONSE_BACKEND=gemini_tts` |
-| `moonshine` | `elevenlabs` | `LocalSTTElevenLabsHandler` | `local_stt` + `LOCAL_STT_RESPONSE_BACKEND=elevenlabs` |
+| `moonshine` | `elevenlabs` (llama LLM) | `LocalSTTLlamaElevenLabsHandler` | `local_stt` + `LOCAL_STT_RESPONSE_BACKEND=elevenlabs` (default LLM_BACKEND=llama) |
+| `moonshine` | `elevenlabs` (gemini LLM) | `LocalSTTGeminiElevenLabsHandler` | `local_stt` + `LOCAL_STT_RESPONSE_BACKEND=elevenlabs` + `REACHY_MINI_LLM_BACKEND=gemini` |
 | `moonshine` | `openai_realtime_output` | `LocalSTTOpenAIRealtimeHandler` | `local_stt` + `LOCAL_STT_RESPONSE_BACKEND=openai` |
 | `moonshine` | `hf_output` | `LocalSTTHuggingFaceRealtimeHandler` | `local_stt` + `LOCAL_STT_RESPONSE_BACKEND=huggingface` |
 

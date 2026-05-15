@@ -7,7 +7,7 @@ management machinery from the base class unchanged.
 
 Concrete subclasses supply ``_synthesize_and_enqueue()`` (TTS half) via an
 additional mixin — exactly as ``LocalSTTChatterboxHandler`` and
-``LocalSTTElevenLabsHandler`` do.
+``LocalSTTGeminiElevenLabsHandler`` do.
 """
 
 from __future__ import annotations

@@ -1050,9 +1050,24 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         ]
 
 
-class LocalSTTElevenLabsHandler(LocalSTTInputMixin, ElevenLabsTTSResponseHandler):
-    """Moonshine STT input + ElevenLabs TTS voice output."""
+class LocalSTTGeminiElevenLabsHandler(LocalSTTInputMixin, ElevenLabsTTSResponseHandler):
+    """Moonshine STT + Gemini LLM (hardcoded) + ElevenLabs TTS.
+
+    The Gemini hardcode lives in ``ElevenLabsTTSResponseHandler._prepare_startup_credentials``
+    (``genai.Client(...)``), which this class inherits. Use ``LocalSTTLlamaElevenLabsHandler``
+    (in ``llama_elevenlabs_tts.py``) for the llama-LLM variant — they share the
+    elevenlabs TTS path but diverge on the LLM phase.
+
+    Renamed from ``LocalSTTElevenLabsHandler`` to reflect its actual LLM
+    behaviour. The old name is kept as a backward-compat alias at the
+    bottom of this module.
+    """
 
     async def _dispatch_completed_transcript(self, transcript: str) -> None:
         # Route explicitly past LocalSTTInputMixin's OpenAI-specific override.
         await ElevenLabsTTSResponseHandler._dispatch_completed_transcript(self, transcript)
+
+
+# Backward-compat alias for callers that imported the old name. Safe to remove
+# once nothing outside the repo references it.
+LocalSTTElevenLabsHandler = LocalSTTGeminiElevenLabsHandler

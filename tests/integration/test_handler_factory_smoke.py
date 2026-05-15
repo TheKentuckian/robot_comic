@@ -97,7 +97,10 @@ def _expected_handler_name(input_b: str, output_b: str, llm_backend: str) -> str
         if output_b == AUDIO_OUTPUT_GEMINI_TTS:
             return "LocalSTTGeminiTTSHandler"
         if output_b == AUDIO_OUTPUT_ELEVENLABS:
-            return "LocalSTTElevenLabsHandler"
+            # LLM_BACKEND=llama + elevenlabs uses the llama-aware variant.
+            # The Gemini-LLM hardcoded LocalSTTElevenLabsHandler is reserved
+            # for the LLM_BACKEND=gemini fallback branch.
+            return "LocalSTTLlamaElevenLabsHandler"
         if output_b == AUDIO_OUTPUT_OPENAI_REALTIME:
             return "LocalSTTOpenAIRealtimeHandler"
         if output_b == AUDIO_OUTPUT_HF:

@@ -404,14 +404,16 @@ def run(
     log_checkpoint("tool deps ready", logger)
 
     logger.info(
-        "Using audio backends: input=%r output=%r",
+        "Using audio backends: input=%r output=%r pipeline_mode=%r",
         config.AUDIO_INPUT_BACKEND,
         config.AUDIO_OUTPUT_BACKEND,
+        config.PIPELINE_MODE,
     )
     handler = HandlerFactory.build(
         config.AUDIO_INPUT_BACKEND,
         config.AUDIO_OUTPUT_BACKEND,
         deps,
+        pipeline_mode=config.PIPELINE_MODE,
         sim_mode=args.sim,
         instance_path=instance_path,
         startup_voice=startup_settings.voice,

@@ -171,12 +171,17 @@ class TestHandlerFactorySupportedCombinations:
         )
 
     def test_moonshine_elevenlabs(self, mock_deps: MagicMock) -> None:
+        """Default LLM_BACKEND=llama routes to the llama-aware handler.
+
+        The Gemini-backed variant is covered in
+        ``test_handler_factory_gemini_llm.py`` (which sets LLM_BACKEND=gemini).
+        """
         self._assert_combo(
             AUDIO_INPUT_MOONSHINE,
             AUDIO_OUTPUT_ELEVENLABS,
             mock_deps,
-            "elevenlabs_tts",
-            "LocalSTTElevenLabsHandler",
+            "llama_elevenlabs_tts",
+            "LocalSTTLlamaElevenLabsHandler",
         )
 
     def test_moonshine_openai_realtime_output(self, mock_deps: MagicMock) -> None:
