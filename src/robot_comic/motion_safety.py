@@ -39,14 +39,22 @@ tightened or relaxed without a code change:
   REACHY_MINI_HEAD_YAW_MAX_DEG     (default  45)
   REACHY_MINI_HEAD_ROLL_MIN_DEG    (default −20)
   REACHY_MINI_HEAD_ROLL_MAX_DEG    (default  20)
-  REACHY_MINI_HEAD_MAX_VEL_RAD_S   (default 1.5)
+  REACHY_MINI_HEAD_MAX_VEL_RAD_S   (default 1.5; back-compat fallback)
+
+Per-axis velocity caps (#272) override the single ``HEAD_MAX_VEL_RAD_S`` knob
+when set, so operators can tune each axis independently:
+
+  REACHY_MINI_HEAD_PITCH_MAX_VEL_RAD_S   (default = HEAD_MAX_VEL_RAD_S)
+  REACHY_MINI_HEAD_YAW_MAX_VEL_RAD_S     (default = HEAD_MAX_VEL_RAD_S)
+  REACHY_MINI_HEAD_ROLL_MAX_VEL_RAD_S    (default = HEAD_MAX_VEL_RAD_S)
 """
 
 from __future__ import annotations
 import os
 import math
 import logging
-from typing import TYPE_CHECKING, Set
+from typing import TYPE_CHECKING, Set, Dict
+from dataclasses import dataclass
 
 
 if TYPE_CHECKING:
@@ -105,12 +113,58 @@ HEAD_YAW_MAX_RAD: float = _env_deg("REACHY_MINI_HEAD_YAW_MAX_DEG", 45.0)  # left
 HEAD_ROLL_MIN_RAD: float = _env_deg("REACHY_MINI_HEAD_ROLL_MIN_DEG", -20.0)
 HEAD_ROLL_MAX_RAD: float = _env_deg("REACHY_MINI_HEAD_ROLL_MAX_DEG", 20.0)
 
-# Maximum angular velocity for any single RPY axis (rad/s).
-# At 60 Hz, 1.5 rad/s → ≈0.025 rad per tick ≈ 1.4 deg per tick.
+# Maximum angular velocity for any single RPY axis (rad/s) — back-compat knob
+# used as the per-axis default. At 60 Hz, 1.5 rad/s → ≈0.025 rad per tick ≈ 1.4
+# deg per tick.
 HEAD_MAX_VEL_RAD_S: float = _env_float("REACHY_MINI_HEAD_MAX_VEL_RAD_S", 1.5)
+
+# Per-axis caps (#272): operators can tune pitch/yaw/roll independently.
+# Defaults fall through to HEAD_MAX_VEL_RAD_S so behaviour is unchanged unless
+# an axis-specific override is set.
+HEAD_PITCH_MAX_VEL_RAD_S: float = _env_float("REACHY_MINI_HEAD_PITCH_MAX_VEL_RAD_S", HEAD_MAX_VEL_RAD_S)
+HEAD_YAW_MAX_VEL_RAD_S: float = _env_float("REACHY_MINI_HEAD_YAW_MAX_VEL_RAD_S", HEAD_MAX_VEL_RAD_S)
+HEAD_ROLL_MAX_VEL_RAD_S: float = _env_float("REACHY_MINI_HEAD_ROLL_MAX_VEL_RAD_S", HEAD_MAX_VEL_RAD_S)
 
 # Track which axes have been clamped so we only emit one DEBUG per session.
 _clamped_axes_seen: Set[str] = set()
+
+
+# ---------------------------------------------------------------------------
+# Clamp-event counters (#272)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ClampStats:
+    """Running counts of pose-clamp and velocity-cap events since last reset."""
+
+    pose_clamps: Dict[str, int]  # axis name → count of clamps applied this window
+    velocity_caps: int  # total velocity-cap engagements this window
+
+    def is_empty(self) -> bool:
+        """Return True when no clamps or caps fired in the window."""
+        return self.velocity_caps == 0 and not any(self.pose_clamps.values())
+
+
+_pose_clamp_counts: Dict[str, int] = {"roll": 0, "pitch": 0, "yaw": 0}
+_velocity_cap_count: int = 0
+
+
+def get_and_reset_clamp_stats() -> ClampStats:
+    """Return clamp counters since last call, then zero them.
+
+    The MovementManager tick loop calls this on a periodic schedule to emit a
+    summary log line; tests use it to assert clamps fired.
+    """
+    global _velocity_cap_count
+    snapshot = ClampStats(
+        pose_clamps=dict(_pose_clamp_counts),
+        velocity_caps=_velocity_cap_count,
+    )
+    for key in _pose_clamp_counts:
+        _pose_clamp_counts[key] = 0
+    _velocity_cap_count = 0
+    return snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -166,8 +220,12 @@ def cap_head_velocity(
     target_pose: NDArray[np.floating],
     dt: float,
     max_vel_rad_s: float = HEAD_MAX_VEL_RAD_S,
+    *,
+    max_vel_roll_rad_s: float | None = None,
+    max_vel_pitch_rad_s: float | None = None,
+    max_vel_yaw_rad_s: float | None = None,
 ) -> NDArray[np.floating]:
-    """Advance *current_pose* toward *target_pose* by at most *max_vel_rad_s* × *dt* rad per axis.
+    """Advance *current_pose* toward *target_pose* by at most max-vel × dt per axis.
 
     This prevents step-changes in commanded pose from arriving at the servo at
     maximum velocity, which is the root cause of the cowling impact.
@@ -181,22 +239,32 @@ def cap_head_velocity(
     dt:
         Elapsed time since the previous tick (seconds).
     max_vel_rad_s:
-        Per-axis angular velocity cap (rad/s).
+        Default per-axis cap (rad/s) applied to any axis without an override.
+    max_vel_roll_rad_s:
+        Optional roll-axis override (rad/s). When None, ``max_vel_rad_s`` is used.
+    max_vel_pitch_rad_s:
+        Optional pitch-axis override (rad/s). When None, ``max_vel_rad_s`` is used.
+    max_vel_yaw_rad_s:
+        Optional yaw-axis override (rad/s). When None, ``max_vel_rad_s`` is used.
 
     Returns
     -------
     NDArray
-        A 4×4 pose matrix advanced no more than *max_vel_rad_s* × *dt* per
-        RPY axis toward the target.  Falls back to *target_pose* on error.
+        A 4×4 pose matrix advanced no more than its per-axis budget toward
+        the target.  Falls back to *target_pose* on error.
 
     """
+    global _velocity_cap_count
     if dt <= 0.0:
         return target_pose
 
     import numpy as np
     from scipy.spatial.transform import Rotation
 
-    max_step = max_vel_rad_s * dt
+    roll_cap = max_vel_roll_rad_s if max_vel_roll_rad_s is not None else max_vel_rad_s
+    pitch_cap = max_vel_pitch_rad_s if max_vel_pitch_rad_s is not None else max_vel_rad_s
+    yaw_cap = max_vel_yaw_rad_s if max_vel_yaw_rad_s is not None else max_vel_rad_s
+    max_steps = (roll_cap * dt, pitch_cap * dt, yaw_cap * dt)
 
     try:
         r_cur = Rotation.from_matrix(current_pose[:3, :3])
@@ -205,10 +273,15 @@ def cap_head_velocity(
         cur_rpy = r_cur.as_euler("xyz", degrees=False)
         tgt_rpy = r_tgt.as_euler("xyz", degrees=False)
 
-        stepped = np.array([_step_toward(cur, tgt, max_step) for cur, tgt in zip(cur_rpy, tgt_rpy)], dtype=float)
+        stepped = np.array(
+            [_step_toward(cur, tgt, step) for cur, tgt, step in zip(cur_rpy, tgt_rpy, max_steps)],
+            dtype=float,
+        )
 
         if np.allclose(stepped, tgt_rpy, atol=1e-9):
             return target_pose  # fast path — already at target
+
+        _velocity_cap_count += 1
 
         new_rot = Rotation.from_euler("xyz", stepped, degrees=False)
         result = target_pose.copy()
@@ -239,12 +312,18 @@ def cap_head_velocity(
 
 
 def _clamp_axis(name: str, value: float, lo: float, hi: float) -> float:
-    """Clamp *value* to [lo, hi].  Emits one DEBUG log per axis per session."""
+    """Clamp *value* to [lo, hi].  Emits one DEBUG log per axis per session.
+
+    Each clamp also increments ``_pose_clamp_counts[name]`` so the periodic
+    summary in MovementManager can surface clamp activity (#272).
+    """
     if value < lo:
         _maybe_log_clamp(name, value, lo)
+        _pose_clamp_counts[name] = _pose_clamp_counts.get(name, 0) + 1
         return lo
     if value > hi:
         _maybe_log_clamp(name, value, hi)
+        _pose_clamp_counts[name] = _pose_clamp_counts.get(name, 0) + 1
         return hi
     return value
 
