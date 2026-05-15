@@ -343,6 +343,121 @@ def test_composable_path_copy_constructs_fresh_legacy_for_chatterbox(
     assert copy.pipeline is not original.pipeline
 
 
+# ---------------------------------------------------------------------------
+# Phase 4c.2 — (moonshine, chatterbox, gemini) composable path
+# ---------------------------------------------------------------------------
+
+
+def test_composable_path_returns_wrapper_for_gemini_chatterbox(
+    monkeypatch: pytest.MonkeyPatch, mock_deps: MagicMock
+) -> None:
+    """``FACTORY_PATH=composable`` + gemini-chatterbox triple → ComposableConversationHandler."""
+    from robot_comic import config as cfg_mod
+    from robot_comic.composable_pipeline import ComposablePipeline
+    from robot_comic.composable_conversation_handler import ComposableConversationHandler
+
+    monkeypatch.setattr(cfg_mod.config, "LLM_BACKEND", LLM_BACKEND_GEMINI)
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_COMPOSABLE)
+
+    fake_legacy = _fake_cls("GeminiTextChatterboxHandler")
+    with patch("robot_comic.gemini_text_handlers.GeminiTextChatterboxHandler", fake_legacy):
+        result = HandlerFactory.build(
+            AUDIO_INPUT_MOONSHINE,
+            AUDIO_OUTPUT_CHATTERBOX,
+            mock_deps,
+            pipeline_mode=PIPELINE_MODE_COMPOSABLE,
+        )
+
+    assert isinstance(result, ComposableConversationHandler)
+    assert isinstance(result.pipeline, ComposablePipeline)
+    assert isinstance(result._tts_handler, fake_legacy)
+
+
+def test_composable_path_wires_three_adapters_for_gemini_chatterbox(
+    monkeypatch: pytest.MonkeyPatch, mock_deps: MagicMock
+) -> None:
+    """All three adapters wrap the same single GeminiTextChatterboxHandler instance."""
+    from robot_comic import config as cfg_mod
+    from robot_comic.adapters import (
+        ChatterboxTTSAdapter,
+        GeminiLLMAdapter,
+        MoonshineSTTAdapter,
+    )
+
+    monkeypatch.setattr(cfg_mod.config, "LLM_BACKEND", LLM_BACKEND_GEMINI)
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_COMPOSABLE)
+
+    fake_legacy = _fake_cls("GeminiTextChatterboxHandler")
+    with patch("robot_comic.gemini_text_handlers.GeminiTextChatterboxHandler", fake_legacy):
+        result = HandlerFactory.build(
+            AUDIO_INPUT_MOONSHINE,
+            AUDIO_OUTPUT_CHATTERBOX,
+            mock_deps,
+            pipeline_mode=PIPELINE_MODE_COMPOSABLE,
+        )
+
+    pipe = result.pipeline
+    assert isinstance(pipe.stt, MoonshineSTTAdapter)
+    assert isinstance(pipe.llm, GeminiLLMAdapter)
+    assert isinstance(pipe.tts, ChatterboxTTSAdapter)
+    # All three adapters share the same legacy handler instance.
+    assert pipe.stt._handler is pipe.llm._handler
+    assert pipe.llm._handler is pipe.tts._handler
+    assert pipe.stt._handler is result._tts_handler
+
+
+def test_composable_path_seeds_system_prompt_for_gemini_chatterbox(
+    monkeypatch: pytest.MonkeyPatch, mock_deps: MagicMock
+) -> None:
+    """The pipeline's system prompt is sourced from prompts.get_session_instructions."""
+    from robot_comic import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod.config, "LLM_BACKEND", LLM_BACKEND_GEMINI)
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_COMPOSABLE)
+    monkeypatch.setattr(
+        "robot_comic.prompts.get_session_instructions",
+        lambda: "TEST INSTRUCTIONS",
+    )
+
+    fake_legacy = _fake_cls("GeminiTextChatterboxHandler")
+    with patch("robot_comic.gemini_text_handlers.GeminiTextChatterboxHandler", fake_legacy):
+        result = HandlerFactory.build(
+            AUDIO_INPUT_MOONSHINE,
+            AUDIO_OUTPUT_CHATTERBOX,
+            mock_deps,
+            pipeline_mode=PIPELINE_MODE_COMPOSABLE,
+        )
+
+    assert result.pipeline._conversation_history[0] == {
+        "role": "system",
+        "content": "TEST INSTRUCTIONS",
+    }
+
+
+def test_composable_path_copy_constructs_fresh_legacy_for_gemini_chatterbox(
+    monkeypatch: pytest.MonkeyPatch, mock_deps: MagicMock
+) -> None:
+    """copy() must produce an independent wrapper + fresh GeminiTextChatterboxHandler."""
+    from robot_comic import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod.config, "LLM_BACKEND", LLM_BACKEND_GEMINI)
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_COMPOSABLE)
+
+    fake_legacy = _fake_cls("GeminiTextChatterboxHandler")
+    with patch("robot_comic.gemini_text_handlers.GeminiTextChatterboxHandler", fake_legacy):
+        original = HandlerFactory.build(
+            AUDIO_INPUT_MOONSHINE,
+            AUDIO_OUTPUT_CHATTERBOX,
+            mock_deps,
+            pipeline_mode=PIPELINE_MODE_COMPOSABLE,
+        )
+        copy = original.copy()
+
+    assert copy is not original
+    assert copy._tts_handler is not original._tts_handler
+    assert copy.pipeline is not original.pipeline
+
+
 @pytest.mark.parametrize(
     "output_backend, target_module, target_class",
     [
