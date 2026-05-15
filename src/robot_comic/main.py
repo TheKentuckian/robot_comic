@@ -70,6 +70,24 @@ def _play_welcome_early() -> None:
     # and then start over again.
     os.environ["REACHY_MINI_EARLY_WELCOME_PLAYED"] = "1"
 
+    # Fire ``welcome.wav.played`` for the dispatch row on the monitor
+    # boot-timeline (#301 / #337). The in-process ``play_warmup_wav`` skips
+    # when our env flag is set, so the early path is solely responsible for
+    # this event. The emit is queued by ``telemetry`` until ``init()`` runs
+    # later in ``run()`` (#337), so calling it before instrumentation is up
+    # is safe and the row still lands on the timeline.
+    try:
+        from robot_comic import telemetry as _telemetry  # noqa: PLC0415
+
+        _telemetry.emit_supporting_event(
+            "welcome.wav.played",
+            dur_ms=(_time.monotonic() - started_at) * 1000,
+        )
+    except Exception:
+        # Telemetry must never break boot — drop the dispatch span if anything
+        # in the wiring throws (import error, sys.path quirk, etc).
+        pass
+
     # Fire a ``welcome.wav.completed`` span when aplay actually exits (#324).
     # ``warmup_audio`` is stdlib-only at module top, so importing it here
     # doesn't dent the early-welcome budget; the helper itself defers the

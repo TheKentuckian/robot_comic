@@ -1137,24 +1137,19 @@ class LocalStream:
             from robot_comic.startup_timer import log_checkpoint
 
             async def _start_up_with_checkpoints() -> None:
-                from robot_comic import telemetry as _telemetry
-
+                # The ``handler.start_up.complete`` supporting event is now
+                # emitted by the handler itself the moment it becomes ready
+                # to accept audio (#337). Emitting it here was wrong because
+                # ``await _handler.start_up()`` blocks for the handler's full
+                # lifetime, so the row only landed at shutdown.
                 log_checkpoint("handler.start_up begin", logger)
-                _hsu_started_at = time.monotonic()
                 try:
                     await _handler.start_up()
                 except Exception:
-                    log_checkpoint("handler.start_up complete", logger)
+                    log_checkpoint("handler.start_up end", logger)
                     raise
                 else:
-                    log_checkpoint("handler.start_up complete", logger)
-                    try:
-                        _telemetry.emit_supporting_event(
-                            "handler.start_up.complete",
-                            dur_ms=(time.monotonic() - _hsu_started_at) * 1000,
-                        )
-                    except Exception:
-                        pass
+                    log_checkpoint("handler.start_up end", logger)
 
             _startup_task = asyncio.create_task(_start_up_with_checkpoints(), name="openai-handler")
             # Emit a dispatched checkpoint immediately so the startup timeline

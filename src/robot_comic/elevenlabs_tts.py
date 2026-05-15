@@ -345,10 +345,28 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         )
 
     async def start_up(self) -> None:
-        """Initialise credentials and block until shutdown() is called."""
+        """Initialise credentials and block until shutdown() is called.
+
+        Emits ``handler.start_up.complete`` (#301/#337) once credentials are
+        prepared and the startup-trigger task is scheduled — i.e. the moment
+        the handler is ready to accept user audio. The console.py wrapper
+        used to emit this event *after* ``start_up`` returned, but
+        ``start_up`` blocks for the handler's entire lifetime, so the row
+        previously only landed at shutdown.
+        """
         await self._prepare_startup_credentials()
         self._stop_event.clear()
         asyncio.create_task(self._send_startup_trigger(), name="elevenlabs-tts-startup-trigger")
+        try:
+            from robot_comic.startup_timer import since_startup
+
+            telemetry.emit_supporting_event(
+                "handler.start_up.complete",
+                dur_ms=since_startup() * 1000,
+            )
+        except Exception:
+            # Telemetry must never break boot.
+            pass
         await self._stop_event.wait()
 
     async def _send_startup_trigger(self) -> None:
@@ -968,6 +986,11 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
                                         time.perf_counter() - first_audio_marker[0],
                                         {"gen_ai.system": self._TTS_SYSTEM},
                                     )
+                                    # Close the boot timeline with the
+                                    # first-audio-out event (#301/#337). The
+                                    # once-guard inside the helper makes this
+                                    # safe to call on every turn.
+                                    telemetry.emit_first_greeting_audio_once()
                                     first_audio_marker.clear()
                             leftover += chunk
                             while len(leftover) >= frame_bytes:
