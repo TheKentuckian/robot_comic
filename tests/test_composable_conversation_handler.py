@@ -311,3 +311,37 @@ def test_clear_queue_assignment_handles_none() -> None:
     wrapper._clear_queue = None
     assert wrapper._clear_queue is None
     assert wrapper._tts_handler._clear_queue is None
+
+
+def test_output_queue_getter_returns_pipeline_queue() -> None:
+    """The wrapper reads output_queue through to the pipeline, no caching."""
+    wrapper = _make_wrapper()
+    fresh: asyncio.Queue[Any] = asyncio.Queue()
+    wrapper.pipeline.output_queue = fresh
+    assert wrapper.output_queue is fresh
+
+
+def test_output_queue_setter_replaces_pipeline_queue() -> None:
+    """Rebinding wrapper.output_queue must replace the pipeline's queue
+    (what emit() actually reads). Otherwise console.clear_audio_queue is a
+    no-op on the composable path: it would swap the wrapper's queue while
+    leaving stale TTS frames on the pipeline's queue for emit() to drain."""
+    wrapper = _make_wrapper()
+    fresh: asyncio.Queue[Any] = asyncio.Queue()
+    wrapper.output_queue = fresh
+    assert wrapper.pipeline.output_queue is fresh
+
+
+@pytest.mark.asyncio
+async def test_emit_reads_from_replaced_queue_after_clear() -> None:
+    """End-to-end: after clear_audio_queue rebinds output_queue, emit() reads
+    from the new queue and ignores stale frames on the old queue."""
+    wrapper = _make_wrapper()
+    # Stale frame on the original queue — must NOT be returned.
+    await wrapper.pipeline.output_queue.put("stale")
+    # Simulate console.clear_audio_queue's rebind.
+    wrapper.output_queue = asyncio.Queue()
+    # Fresh frame on the new queue.
+    await wrapper.output_queue.put("fresh")
+    result = await asyncio.wait_for(wrapper.emit(), timeout=1.0)
+    assert result == "fresh"

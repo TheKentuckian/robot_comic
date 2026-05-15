@@ -16,8 +16,9 @@ follow-up PR between 4b and 4d:
 """
 
 from __future__ import annotations
+import asyncio
 import logging
-from typing import Callable
+from typing import Any, Callable
 
 from robot_comic.config import set_custom_profile
 from robot_comic.prompts import get_session_instructions
@@ -52,7 +53,24 @@ class ComposableConversationHandler(ConversationHandler):
         self.__clear_queue: Callable[[], None] | None = None
 
     @property
-    def _clear_queue(self) -> Callable[[], None] | None:  # type: ignore[override]
+    def output_queue(self) -> asyncio.Queue[Any]:
+        """Read-through to the pipeline's queue (what ``emit()`` drains)."""
+        return self.pipeline.output_queue
+
+    @output_queue.setter
+    def output_queue(self, queue: asyncio.Queue[Any]) -> None:
+        """Replace the pipeline's queue.
+
+        ``LocalStream.clear_audio_queue`` does
+        ``handler.output_queue = asyncio.Queue()`` to drop queued TTS frames
+        on barge-in. The pipeline owns the read queue, so the assignment has
+        to land there or the rebind is a no-op and ``emit()`` keeps draining
+        the stale queue.
+        """
+        self.pipeline.output_queue = queue
+
+    @property
+    def _clear_queue(self) -> Callable[[], None] | None:
         """The queue-flush callback. Mirrors onto the wrapped TTS handler."""
         return self.__clear_queue
 

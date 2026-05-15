@@ -29,7 +29,7 @@ attempted here.
 
 from __future__ import annotations
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from robot_comic.config import (
     AUDIO_INPUT_HF,
@@ -338,7 +338,11 @@ def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
         legacy = LocalSTTLlamaElevenLabsHandler(**handler_kwargs)
         stt = MoonshineSTTAdapter(legacy)
         llm = LlamaLLMAdapter(legacy)
-        tts = ElevenLabsTTSAdapter(legacy)
+        # LlamaElevenLabsTTSResponseHandler has the same _stream_tts_to_queue +
+        # _prepare_startup_credentials surface as ElevenLabsTTSResponseHandler
+        # but doesn't share the inheritance chain; the adapter is duck-typed
+        # at runtime. Phase 4c will broaden the adapter's annotation.
+        tts = ElevenLabsTTSAdapter(cast(Any, legacy))
         pipeline = ComposablePipeline(
             stt,
             llm,
