@@ -22,3 +22,10 @@ is the canary.
 
 The operator can bypass the hook for a single command with
 `CLAUDE_HOOK_BYPASS=1` in the environment.
+
+The hook command in `.claude/settings.json` is wrapped so that it exits 0
+silently if `.claude/hooks/check_worktree_cwd.py` is missing on the
+current branch (e.g., after checking out an old branch that predates
+PR #325). The wrapper avoids the "can't open file" harness error that
+otherwise fires on every Bash call when Claude Code's in-memory hook
+config outlives the script file on disk.
