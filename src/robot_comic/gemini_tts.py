@@ -31,6 +31,7 @@ from robot_comic.config import (
     config,
     set_custom_profile,
 )
+from robot_comic.openers import get_canned_opener
 from robot_comic.llama_base import split_sentences
 from robot_comic.joke_history import JokeHistory, default_history_path, extract_punchline_via_llm
 from robot_comic.chatterbox_tag_translator import strip_gemini_tags
@@ -260,8 +261,47 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         await self._stop_event.wait()
 
     async def _send_startup_trigger(self) -> None:
-        """Kick off the opening sequence defined in the profile instructions."""
+        """Kick off the opening sequence.
+
+        Default mode ("canned", #290): bypass the LLM and synthesize a
+        per-persona line read from ``profiles/<persona>/openers.txt``.
+        Legacy mode ("llm"): keep the synthetic ``[conversation started]``
+        round-trip available for A/B comparison.
+        """
+        mode = getattr(config, "STARTUP_TRIGGER_MODE", "canned")
+        if mode == "canned":
+            await self._speak_canned_opener(get_canned_opener())
+            return
         await self._dispatch_completed_transcript("[conversation started]")
+
+    async def _speak_canned_opener(self, text: str) -> None:
+        """Enqueue *text* directly to Gemini TTS and record it as a model turn."""
+        if not text or not text.strip():
+            logger.warning("Canned opener was empty; skipping startup speak.")
+            return
+        logger.info("Canned startup opener: %r", text)
+        self._conversation_history.append({"role": "model", "parts": [{"text": text}]})
+        await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": text}))
+
+        try:
+            base_instruction = load_profile_tts_instruction()
+            sentences = split_sentences(text) or [text]
+            for sentence in sentences:
+                spoken = strip_gemini_tags(sentence)
+                if not spoken:
+                    continue
+                tags = extract_delivery_tags(sentence)
+                if SHORT_PAUSE_TAG in tags:
+                    for frame in self._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS)):
+                        await self.output_queue.put((GEMINI_TTS_OUTPUT_SAMPLE_RATE, frame))
+                instruction = build_tts_system_instruction(base_instruction, tags)
+                pcm_bytes = await self._call_tts_with_retry(spoken, system_instruction=instruction)
+                if pcm_bytes is None:
+                    continue
+                for frame in self._pcm_to_frames(pcm_bytes):
+                    await self.output_queue.put((GEMINI_TTS_OUTPUT_SAMPLE_RATE, frame))
+        except Exception as exc:
+            logger.warning("Canned opener TTS failed: %s", exc)
 
     async def shutdown(self) -> None:
         """Signal start_up to return and drain the output queue."""

@@ -21,6 +21,7 @@ from opentelemetry import context as _otel_context
 
 from robot_comic import telemetry
 from robot_comic.config import config
+from robot_comic.openers import get_canned_opener
 from robot_comic.prompts import get_session_instructions
 from robot_comic.history_trim import trim_history_in_place
 from robot_comic.joke_history import JokeHistory, default_history_path, extract_punchline_via_llm
@@ -150,7 +151,40 @@ class BaseLlamaResponseHandler(AsyncStreamHandler, ConversationHandler):
         await self._stop_event.wait()
 
     async def _send_startup_trigger(self) -> None:
+        """Speak the boot greeting.
+
+        Default mode ("canned", #290): bypass the LLM and synthesize a
+        per-persona line read from ``profiles/<persona>/openers.txt``.
+        Legacy mode ("llm"): keep the synthetic ``[conversation started]``
+        round-trip available for A/B comparison.
+        """
+        mode = getattr(config, "STARTUP_TRIGGER_MODE", "canned")
+        if mode == "canned":
+            await self._speak_canned_opener(get_canned_opener())
+            return
         await self._dispatch_completed_transcript("[conversation started]")
+
+    async def _speak_canned_opener(self, text: str) -> None:
+        """Enqueue *text* directly to TTS and record it as a model-role turn.
+
+        This skips the LLM entirely so a flaky backend cannot wedge the boot
+        greeting. The opener is still written to ``_conversation_history`` so
+        subsequent LLM calls see what the robot already "said".
+        """
+        if not text or not text.strip():
+            logger.warning("Canned opener was empty; skipping startup speak.")
+            return
+        logger.info("Canned startup opener: %r", text)
+        self._conversation_history.append({"role": "assistant", "content": text})
+        await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": text}))
+        # Reset byte-count echo-guard accumulators for this new response turn.
+        self._response_audio_bytes = 0
+        self._response_start_ts = 0.0
+        try:
+            for sentence in split_sentences(text) or [text]:
+                await self._synthesize_and_enqueue(sentence)
+        except Exception as exc:
+            logger.warning("Canned opener TTS failed: %s", exc)
 
     async def shutdown(self) -> None:
         self._stop_event.set()
