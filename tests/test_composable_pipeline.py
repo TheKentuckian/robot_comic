@@ -258,8 +258,13 @@ async def test_shutdown_before_start_up_is_safe() -> None:
 
     await pipeline.shutdown()
     assert not stt.stopped
-    # Subsequent start_up returns immediately because stop_event is set.
+    # Subsequent start_up returns immediately because stop_event is set,
+    # AND it must not have prepared any backends — those would never get
+    # torn down (shutdown's "not started" early-return already ran).
     await asyncio.wait_for(pipeline.start_up(), timeout=1.0)
+    assert not stt.started
+    assert not llm.prepared
+    assert not tts.prepared
 
 
 # ---------------------------------------------------------------------------

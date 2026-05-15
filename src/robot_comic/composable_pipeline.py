@@ -131,6 +131,11 @@ class ComposablePipeline:
         coroutine runs for the entire lifetime of the pipeline. Returns
         only when :meth:`shutdown` is called.
         """
+        # If shutdown() already fired (stop_event is set), don't prepare any
+        # backends — they'd never be torn down because shutdown's
+        # ``if not self._started`` early-return has already run.
+        if self._stop_event.is_set():
+            return
         await self.llm.prepare()
         await self.tts.prepare()
         await self.stt.start(on_completed=self._on_transcript_completed)
@@ -250,5 +255,11 @@ class ComposablePipeline:
             logger.warning("Assistant returned empty text; nothing to speak")
             return
         self._conversation_history.append({"role": "assistant", "content": text})
+        # TODO(phase3): plumb delivery tags from ``response.metadata`` into
+        # ``tts.synthesize(text, tags=...)``. The TTS Protocol accepts a
+        # ``tags`` tuple (``fast``/``slow``/``annoyance``/etc.) that the
+        # existing ElevenLabs handler uses, but it has no channel here yet
+        # — adapters in Phase 3 will surface the existing handlers' tag
+        # extraction and we'll thread it through metadata at that point.
         async for frame in self.tts.synthesize(text):
             await self.output_queue.put(frame)
