@@ -150,3 +150,50 @@ async def test_apply_personality_returns_failure_message_on_error(
     assert "Failed to apply personality" in result
     assert "nope" in result
     wrapper.pipeline.reset_history.assert_not_called()
+
+
+def _make_fake_pipeline() -> Any:
+    p = MagicMock()
+    p.output_queue = asyncio.Queue()
+    p._conversation_history = []
+    return p
+
+
+def test_copy_returns_new_instance_from_build_closure() -> None:
+    from robot_comic.composable_conversation_handler import ComposableConversationHandler
+
+    build_count = {"n": 0}
+
+    def _build() -> ComposableConversationHandler:
+        build_count["n"] += 1
+        return ComposableConversationHandler(
+            pipeline=_make_fake_pipeline(),
+            tts_handler=MagicMock(),
+            deps=MagicMock(),
+            build=_build,
+        )
+
+    original = _build()
+    build_count["n"] = 0  # reset after constructing the original
+    copy = original.copy()
+    assert copy is not original
+    assert build_count["n"] == 1
+
+
+def test_copy_does_not_share_pipeline_state() -> None:
+    from robot_comic.composable_conversation_handler import ComposableConversationHandler
+
+    def _build() -> ComposableConversationHandler:
+        return ComposableConversationHandler(
+            pipeline=_make_fake_pipeline(),
+            tts_handler=MagicMock(),
+            deps=MagicMock(),
+            build=_build,
+        )
+
+    original = _build()
+    copy = original.copy()
+
+    original.pipeline._conversation_history.append({"role": "user", "content": "hi"})
+    assert copy.pipeline._conversation_history == []
+    assert copy.pipeline is not original.pipeline

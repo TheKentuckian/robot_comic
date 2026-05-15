@@ -48,7 +48,12 @@ class ComposableConversationHandler(ConversationHandler):
         self._clear_queue = None
 
     def copy(self) -> "ComposableConversationHandler":
-        raise NotImplementedError
+        """Build a fresh wrapper + pipeline via the injected factory closure.
+
+        FastRTC clones the handler per peer; the new instance must own
+        independent pipeline state (history, stop event, adapter sessions).
+        """
+        return self._build()
 
     async def start_up(self) -> None:
         """Delegate to :meth:`ComposablePipeline.start_up` — blocks until shutdown."""
