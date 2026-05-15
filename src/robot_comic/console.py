@@ -1336,7 +1336,13 @@ class LocalStream:
         )
 
         while not self._stop_event.is_set():
-            audio_frame = self._audio_source.get_audio_sample()
+            # Snapshot the source per-iteration: close() nulls _audio_source
+            # before setting _stop_event, so a naked attribute read can race
+            # to AttributeError on shutdown.
+            source = self._audio_source
+            if source is None:
+                break
+            audio_frame = source.get_audio_sample()
             if audio_frame is not None:
                 await self.handler.receive((input_sample_rate, audio_frame))
             await asyncio.sleep(0)  # avoid busy loop

@@ -1,9 +1,12 @@
 """Unit tests for LocalStream._build_audio_source selection logic."""
 
 from __future__ import annotations
-from unittest.mock import MagicMock
+import asyncio
+import threading
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
+import pytest
 
 from robot_comic.console import LocalStream, _DaemonAudioSource
 
@@ -77,3 +80,33 @@ def test_build_audio_source_falls_back_to_daemon_when_robot_is_none(monkeypatch)
     # must not call robot.media.* (because robot is None).  None is
     # acceptable — record_loop's assert catches misuse loudly in real mode.
     assert src is None
+
+
+@pytest.mark.asyncio
+async def test_record_loop_tolerates_audio_source_nulled_during_shutdown():
+    """close() nulls _audio_source before setting _stop_event; record_loop
+    must snapshot the source per-iteration so the racing read can't raise
+    AttributeError on shutdown.
+    """
+    frame = np.zeros((256,), dtype=np.int16)
+    source = MagicMock()
+    source.sample_rate = 16000
+    source.get_audio_sample.return_value = frame
+
+    stream = LocalStream.__new__(LocalStream)
+    stream._robot = MagicMock()
+    stream.handler = MagicMock()
+    stream.handler.receive = AsyncMock()
+    stream._audio_source = source
+    stream._stop_event = threading.Event()
+
+    async def kill_source_then_stop() -> None:
+        # Let record_loop iterate a few times, then mimic close()'s order:
+        # null the source first, then set the stop event.
+        await asyncio.sleep(0.01)
+        stream._audio_source = None
+        await asyncio.sleep(0.005)
+        stream._stop_event.set()
+
+    await asyncio.gather(stream.record_loop(), kill_source_then_stop())
+    assert stream.handler.receive.await_count > 0
