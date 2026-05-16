@@ -288,6 +288,59 @@ class TestHandlerFactoryComposableCombinations:
         assert isinstance(result, ComposableConversationHandler)
         assert isinstance(result._tts_handler, GeminiTTSResponseHandler)
 
+    def test_moonshine_gemini_chatterbox_uses_standalone_moonshine_adapter(self, mock_deps: MagicMock) -> None:
+        """Phase 5e.4: the migrated triple constructs a standalone STT adapter.
+
+        Before 5e.4 the (moonshine, gemini, chatterbox) builder
+        constructed ``MoonshineSTTAdapter(host)`` (host-coupled,
+        ``_handler`` set). Post-5e.4 it constructs
+        ``MoonshineSTTAdapter()`` (standalone, ``_handler is None``)
+        just like the 5e.2 / 5e.3 siblings.
+        """
+        with patch("robot_comic.handler_factory.config") as mock_cfg:
+            mock_cfg.LLM_BACKEND = "gemini"
+            mock_cfg.WELCOME_GATE_ENABLED = False
+            result = HandlerFactory.build(
+                AUDIO_INPUT_MOONSHINE,
+                AUDIO_OUTPUT_CHATTERBOX,
+                mock_deps,
+            )
+
+        stt_adapter = result.pipeline.stt
+        assert stt_adapter._handler is None, (
+            "Phase 5e.4 migrated triple must construct standalone "
+            "MoonshineSTTAdapter (handler=None); got host-coupled."
+        )
+
+    def test_moonshine_gemini_chatterbox_wires_should_drop_frame_callback(self, mock_deps: MagicMock) -> None:
+        """The factory wires the echo-guard ``should_drop_frame`` closure."""
+        with patch("robot_comic.handler_factory.config") as mock_cfg:
+            mock_cfg.LLM_BACKEND = "gemini"
+            mock_cfg.WELCOME_GATE_ENABLED = False
+            result = HandlerFactory.build(
+                AUDIO_INPUT_MOONSHINE,
+                AUDIO_OUTPUT_CHATTERBOX,
+                mock_deps,
+            )
+
+        stt_adapter = result.pipeline.stt
+        assert stt_adapter._should_drop_frame is not None
+        # Closure consults host._speaking_until; default 0.0 → falsy.
+        assert stt_adapter._should_drop_frame() is False
+
+    def test_moonshine_gemini_chatterbox_passes_deps_to_pipeline(self, mock_deps: MagicMock) -> None:
+        """The pipeline receives ``deps`` so the host-concern callbacks fire."""
+        with patch("robot_comic.handler_factory.config") as mock_cfg:
+            mock_cfg.LLM_BACKEND = "gemini"
+            mock_cfg.WELCOME_GATE_ENABLED = False
+            result = HandlerFactory.build(
+                AUDIO_INPUT_MOONSHINE,
+                AUDIO_OUTPUT_CHATTERBOX,
+                mock_deps,
+            )
+
+        assert result.pipeline.deps is mock_deps
+
 
 # ---------------------------------------------------------------------------
 # Unsupported combinations
