@@ -1,14 +1,18 @@
-"""Tests for HandlerFactory dispatch on PIPELINE_MODE (Phase 0 of pipeline refactor).
+"""Tests for HandlerFactory dispatch on PIPELINE_MODE (post-Phase 4e).
 
-The factory now branches on PIPELINE_MODE at the top:
-- ``composable`` (default) — falls through to the existing (input, output)
-  selection logic for moonshine-based 3-phase pipelines.
+The factory branches on PIPELINE_MODE at the top:
+- ``composable`` (default) — falls through to the (input, output, llm) dispatch
+  for moonshine-based 3-phase pipelines; returns a
+  :class:`ComposableConversationHandler`.
 - ``openai_realtime`` / ``gemini_live`` / ``hf_realtime`` — bundled
-  speech-to-speech sessions; ignore the input/output dials.
+  speech-to-speech sessions; return the concrete realtime handlers; ignore
+  the input/output dials.
 
 When the ``pipeline_mode`` kwarg is omitted, the factory derives it from the
-(input, output) pair (backwards-compat: existing main.py call sites and the
-legacy handler_factory tests pass).
+(input, output) pair (backwards-compat: existing main.py call sites pass).
+
+Phase 4e (#337) removed the FACTORY_PATH dial; the composable path is the
+only path for the (moonshine, *, *) triples.
 """
 
 from __future__ import annotations
@@ -16,11 +20,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from robot_comic import config as cfg_mod
 from robot_comic.config import (
     AUDIO_INPUT_HF,
     AUDIO_OUTPUT_HF,
-    FACTORY_PATH_LEGACY,
     AUDIO_INPUT_MOONSHINE,
     AUDIO_OUTPUT_ELEVENLABS,
     PIPELINE_MODE_COMPOSABLE,
@@ -31,18 +33,8 @@ from robot_comic.config import (
     PIPELINE_MODE_OPENAI_REALTIME,
 )
 from robot_comic.handler_factory import HandlerFactory
-
-
-@pytest.fixture(autouse=True)
-def _pin_factory_path_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pin ``FACTORY_PATH=legacy`` for this module — see test_handler_factory.py.
-
-    Phase 4d (#337) flipped the default to ``composable``; the assertions
-    in this module target the legacy concrete-handler classes and stay on
-    the legacy path until 4e retires them. ``test_handler_factory_factory_path.py``
-    covers the composable branch.
-    """
-    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_LEGACY)
+from robot_comic.llama_elevenlabs_tts import LlamaElevenLabsTTSResponseHandler
+from robot_comic.composable_conversation_handler import ComposableConversationHandler
 
 
 @pytest.fixture()
@@ -108,15 +100,16 @@ def test_explicit_composable_uses_input_output_selection(mock_deps: MagicMock) -
     With default LLM_BACKEND=llama, (moonshine, elevenlabs) picks the llama
     variant. The Gemini variant is exercised in test_handler_factory_gemini_llm.py.
     """
-    fake = _fake_cls("LocalSTTLlamaElevenLabsHandler")
-    with patch("robot_comic.llama_elevenlabs_tts.LocalSTTLlamaElevenLabsHandler", fake):
+    with patch("robot_comic.handler_factory.config") as mock_cfg:
+        mock_cfg.LLM_BACKEND = "llama"
         result = HandlerFactory.build(
             AUDIO_INPUT_MOONSHINE,
             AUDIO_OUTPUT_ELEVENLABS,
             mock_deps,
             pipeline_mode=PIPELINE_MODE_COMPOSABLE,
         )
-    assert isinstance(result, fake)
+    assert isinstance(result, ComposableConversationHandler)
+    assert isinstance(result._tts_handler, LlamaElevenLabsTTSResponseHandler)
 
 
 # ---------------------------------------------------------------------------
@@ -139,16 +132,17 @@ def test_pipeline_mode_omitted_derives_from_bundled_pair(mock_deps: MagicMock) -
 def test_pipeline_mode_omitted_falls_through_to_composable(mock_deps: MagicMock) -> None:
     """(moonshine, elevenlabs) without explicit mode goes to the composable branch.
 
-    Default LLM_BACKEND=llama → LocalSTTLlamaElevenLabsHandler.
+    Default LLM_BACKEND=llama → composable llama+elevenlabs.
     """
-    fake = _fake_cls("LocalSTTLlamaElevenLabsHandler")
-    with patch("robot_comic.llama_elevenlabs_tts.LocalSTTLlamaElevenLabsHandler", fake):
+    with patch("robot_comic.handler_factory.config") as mock_cfg:
+        mock_cfg.LLM_BACKEND = "llama"
         result = HandlerFactory.build(
             AUDIO_INPUT_MOONSHINE,
             AUDIO_OUTPUT_ELEVENLABS,
             mock_deps,
         )
-    assert isinstance(result, fake)
+    assert isinstance(result, ComposableConversationHandler)
+    assert isinstance(result._tts_handler, LlamaElevenLabsTTSResponseHandler)
 
 
 # ---------------------------------------------------------------------------

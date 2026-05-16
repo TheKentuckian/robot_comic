@@ -1,8 +1,18 @@
-"""Tests for HandlerFactory — issue #219.
+"""Tests for HandlerFactory — issue #219 (post-Phase 4e rewrite).
 
-Verifies that HandlerFactory.build() selects the correct handler class for every
-supported (input_backend, output_backend) combination, and raises NotImplementedError
-with a useful message for unsupported pairs.
+Verifies that HandlerFactory.build() selects the correct handler shape for
+every supported (input_backend, output_backend) combination, and raises
+NotImplementedError with a useful message for unsupported pairs.
+
+Phase 4e (#337) retired the FACTORY_PATH dial and deleted the legacy
+``LocalSTT*Handler`` concrete classes. The composable triples now return a
+:class:`ComposableConversationHandler` wrapping a host that combines
+``LocalSTTInputMixin`` with the surviving ``*ResponseHandler`` base.
+
+Bundled-realtime triples (HF / OpenAI Realtime / Gemini Live) and the
+LocalSTT+realtime-output hybrids (`LocalSTTOpenAIRealtimeHandler`,
+`LocalSTTHuggingFaceRealtimeHandler`) still return the legacy concrete
+classes — out of scope for the composable refactor.
 
 All handler __init__ methods are mocked so these tests have no network or SDK
 dependencies.
@@ -13,11 +23,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from robot_comic import config as cfg_mod
 from robot_comic.config import (
     AUDIO_INPUT_HF,
     AUDIO_OUTPUT_HF,
-    FACTORY_PATH_LEGACY,
     AUDIO_INPUT_MOONSHINE,
     AUDIO_INPUT_BACKEND_ENV,
     AUDIO_INPUT_GEMINI_LIVE,
@@ -30,19 +38,7 @@ from robot_comic.config import (
     AUDIO_OUTPUT_OPENAI_REALTIME,
 )
 from robot_comic.handler_factory import HandlerFactory
-
-
-@pytest.fixture(autouse=True)
-def _pin_factory_path_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pin ``FACTORY_PATH=legacy`` for this module.
-
-    Phase 4d (#337) flipped the default to ``composable``. The tests in
-    this file pin the legacy concrete-handler dispatch matrix and stay
-    pinned to ``legacy`` until those handlers are deleted in 4e — at
-    which point this whole module is rewritten/retired. The composable
-    branches are covered by ``test_handler_factory_factory_path.py``.
-    """
-    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_LEGACY)
+from robot_comic.composable_conversation_handler import ComposableConversationHandler
 
 
 # ---------------------------------------------------------------------------
@@ -56,73 +52,15 @@ def mock_deps() -> MagicMock:
     return MagicMock(name="ToolDependencies")
 
 
-def _build(input_backend: str, output_backend: str, deps: MagicMock) -> object:
-    """Call HandlerFactory.build with sim_mode=False, no paths, no voice."""
-    return HandlerFactory.build(input_backend, output_backend, deps)
-
-
 # ---------------------------------------------------------------------------
-# Helpers: mock a handler class so __init__ doesn't need real SDK deps
+# Bundled-realtime fast paths (legacy concrete handlers)
 # ---------------------------------------------------------------------------
 
 
-def _patch_handler(module_path: str, class_name: str):  # type: ignore[no-untyped-def]
-    """Return a context manager that patches <module>.<class> with a lightweight mock."""
-    return patch(f"{module_path}.{class_name}", autospec=False, new_callable=lambda: _make_mock_class(class_name))
+class TestHandlerFactoryRealtimeCombinations:
+    """Realtime pairs return the bundled-handler classes unchanged by 4e."""
 
-
-def _make_mock_class(name: str):  # type: ignore[no-untyped-def]
-    """Return a factory for a mock class that records instantiation."""
-
-    class _MockHandler:
-        _class_name = name
-
-        def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
-            pass
-
-    _MockHandler.__name__ = name
-    _MockHandler.__qualname__ = name
-    return lambda: _MockHandler  # new_callable must return a callable that returns the value
-
-
-# Because patch(new_callable=...) is awkward here, we use patch() with new= directly.
-
-
-def _patch(module_path: str, class_name: str, sentinel_cls):  # type: ignore[no-untyped-def]
-    return patch(f"{module_path}.{class_name}", new=sentinel_cls)
-
-
-# ---------------------------------------------------------------------------
-# Supported combinations — one test per combination
-# ---------------------------------------------------------------------------
-
-
-class TestHandlerFactorySupportedCombinations:
-    """Each supported (input, output) pair should return the expected handler type."""
-
-    def test_hf_pair_returns_huggingface_handler(self, mock_deps: MagicMock) -> None:
-        class _FakeHF:
-            def __init__(self, *a, **kw):
-                pass
-
-        with patch("robot_comic.handler_factory.HuggingFaceRealtimeHandler", _FakeHF, create=True):
-            with patch("robot_comic.huggingface_realtime.HuggingFaceRealtimeHandler", _FakeHF, create=True):
-                # Import after patch
-                import robot_comic.handler_factory as hf_mod
-
-                original = getattr(hf_mod, "HuggingFaceRealtimeHandler", None)
-                hf_mod.HuggingFaceRealtimeHandler = _FakeHF  # type: ignore[attr-defined]
-                try:
-                    with patch("robot_comic.huggingface_realtime.HuggingFaceRealtimeHandler", _FakeHF):
-                        result = HandlerFactory.build(AUDIO_INPUT_HF, AUDIO_OUTPUT_HF, mock_deps)
-                    assert isinstance(result, _FakeHF)
-                finally:
-                    if original is not None:
-                        hf_mod.HuggingFaceRealtimeHandler = original  # type: ignore[attr-defined]
-                    elif hasattr(hf_mod, "HuggingFaceRealtimeHandler"):
-                        delattr(hf_mod, "HuggingFaceRealtimeHandler")
-
-    def _assert_combo(
+    def _assert_realtime(
         self,
         input_b: str,
         output_b: str,
@@ -130,8 +68,6 @@ class TestHandlerFactorySupportedCombinations:
         handler_module: str,
         handler_class: str,
     ) -> None:
-        """Patch the class at import time inside HandlerFactory and verify the returned type."""
-
         class _FakeCls:
             def __init__(self, *a, **kw):
                 pass
@@ -145,10 +81,17 @@ class TestHandlerFactorySupportedCombinations:
             f"Expected instance of {handler_class} for ({input_b}, {output_b}), got {type(result).__name__}"
         )
 
-    # ----- realtime pairs -----
+    def test_hf_pair_returns_huggingface_handler(self, mock_deps: MagicMock) -> None:
+        self._assert_realtime(
+            AUDIO_INPUT_HF,
+            AUDIO_OUTPUT_HF,
+            mock_deps,
+            "huggingface_realtime",
+            "HuggingFaceRealtimeHandler",
+        )
 
     def test_openai_realtime_pair(self, mock_deps: MagicMock) -> None:
-        self._assert_combo(
+        self._assert_realtime(
             AUDIO_INPUT_OPENAI_REALTIME,
             AUDIO_OUTPUT_OPENAI_REALTIME,
             mock_deps,
@@ -157,7 +100,7 @@ class TestHandlerFactorySupportedCombinations:
         )
 
     def test_gemini_live_pair(self, mock_deps: MagicMock) -> None:
-        self._assert_combo(
+        self._assert_realtime(
             AUDIO_INPUT_GEMINI_LIVE,
             AUDIO_OUTPUT_GEMINI_LIVE,
             mock_deps,
@@ -165,42 +108,8 @@ class TestHandlerFactorySupportedCombinations:
             "GeminiLiveHandler",
         )
 
-    # ----- moonshine pairs -----
-
-    def test_moonshine_chatterbox(self, mock_deps: MagicMock) -> None:
-        self._assert_combo(
-            AUDIO_INPUT_MOONSHINE,
-            AUDIO_OUTPUT_CHATTERBOX,
-            mock_deps,
-            "chatterbox_tts",
-            "LocalSTTChatterboxHandler",
-        )
-
-    def test_moonshine_gemini_tts(self, mock_deps: MagicMock) -> None:
-        self._assert_combo(
-            AUDIO_INPUT_MOONSHINE,
-            AUDIO_OUTPUT_GEMINI_TTS,
-            mock_deps,
-            "gemini_tts",
-            "LocalSTTGeminiTTSHandler",
-        )
-
-    def test_moonshine_elevenlabs(self, mock_deps: MagicMock) -> None:
-        """Default LLM_BACKEND=llama routes to the llama-aware handler.
-
-        The Gemini-backed variant is covered in
-        ``test_handler_factory_gemini_llm.py`` (which sets LLM_BACKEND=gemini).
-        """
-        self._assert_combo(
-            AUDIO_INPUT_MOONSHINE,
-            AUDIO_OUTPUT_ELEVENLABS,
-            mock_deps,
-            "llama_elevenlabs_tts",
-            "LocalSTTLlamaElevenLabsHandler",
-        )
-
     def test_moonshine_openai_realtime_output(self, mock_deps: MagicMock) -> None:
-        self._assert_combo(
+        self._assert_realtime(
             AUDIO_INPUT_MOONSHINE,
             AUDIO_OUTPUT_OPENAI_REALTIME,
             mock_deps,
@@ -209,13 +118,70 @@ class TestHandlerFactorySupportedCombinations:
         )
 
     def test_moonshine_hf_output(self, mock_deps: MagicMock) -> None:
-        self._assert_combo(
+        self._assert_realtime(
             AUDIO_INPUT_MOONSHINE,
             AUDIO_OUTPUT_HF,
             mock_deps,
             "local_stt_realtime",
             "LocalSTTHuggingFaceRealtimeHandler",
         )
+
+
+# ---------------------------------------------------------------------------
+# Composable triples — return ComposableConversationHandler
+# ---------------------------------------------------------------------------
+
+
+class TestHandlerFactoryComposableCombinations:
+    """Each composable (moonshine, *, *) triple returns a wrapper.
+
+    The factory builds a host that combines ``LocalSTTInputMixin`` with one
+    of the surviving ``*ResponseHandler`` bases. We assert on
+    ``result._tts_handler`` (the host instance the adapters wrap) to verify
+    the correct host was composed.
+    """
+
+    def test_moonshine_chatterbox_default_llama_routes_to_composable(self, mock_deps: MagicMock) -> None:
+        from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
+
+        with patch("robot_comic.handler_factory.config") as mock_cfg:
+            mock_cfg.LLM_BACKEND = "llama"
+            result = HandlerFactory.build(
+                AUDIO_INPUT_MOONSHINE,
+                AUDIO_OUTPUT_CHATTERBOX,
+                mock_deps,
+            )
+
+        assert isinstance(result, ComposableConversationHandler)
+        assert isinstance(result._tts_handler, ChatterboxTTSResponseHandler)
+
+    def test_moonshine_elevenlabs_default_llama_routes_to_composable(self, mock_deps: MagicMock) -> None:
+        from robot_comic.llama_elevenlabs_tts import LlamaElevenLabsTTSResponseHandler
+
+        with patch("robot_comic.handler_factory.config") as mock_cfg:
+            mock_cfg.LLM_BACKEND = "llama"
+            result = HandlerFactory.build(
+                AUDIO_INPUT_MOONSHINE,
+                AUDIO_OUTPUT_ELEVENLABS,
+                mock_deps,
+            )
+
+        assert isinstance(result, ComposableConversationHandler)
+        assert isinstance(result._tts_handler, LlamaElevenLabsTTSResponseHandler)
+
+    def test_moonshine_gemini_tts_routes_to_composable(self, mock_deps: MagicMock) -> None:
+        from robot_comic.gemini_tts import GeminiTTSResponseHandler
+
+        with patch("robot_comic.handler_factory.config") as mock_cfg:
+            mock_cfg.LLM_BACKEND = "llama"
+            result = HandlerFactory.build(
+                AUDIO_INPUT_MOONSHINE,
+                AUDIO_OUTPUT_GEMINI_TTS,
+                mock_deps,
+            )
+
+        assert isinstance(result, ComposableConversationHandler)
+        assert isinstance(result._tts_handler, GeminiTTSResponseHandler)
 
 
 # ---------------------------------------------------------------------------

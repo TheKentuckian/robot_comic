@@ -1,20 +1,26 @@
 """HandlerFactory: select a concrete conversation handler from the resolved audio backend pair.
 
-This module is the bridge between the modular audio config scaffold introduced
-in PR #215 and the concrete handler classes that were previously selected via a
-BACKEND_PROVIDER conditional in main.py.
+This module routes the (input, output, LLM) triple to either a bundled-realtime
+handler (HuggingFace / OpenAI Realtime / Gemini Live) or a composable wrapper
+(:class:`~robot_comic.composable_conversation_handler.ComposableConversationHandler`)
+that hosts the three Phase 3 adapters (STT, LLM, TTS) over the surviving
+``*ResponseHandler`` bases. Sub-phase 4e of #337 retired the
+``FACTORY_PATH`` dial — composable is now the only path for every triple
+except the bundled-realtime fast paths and the LocalSTT+realtime-output
+hybrids.
 
 Supported (input, output) → handler-class matrix
 --------------------------------------------------
-  (hf_input,             hf_output)             → HuggingFaceRealtimeHandler
-  (openai_realtime_input, openai_realtime_output)→ OpenaiRealtimeHandler
-  (gemini_live_input,    gemini_live_output)     → GeminiLiveHandler
-  (moonshine,            chatterbox)             → LocalSTTChatterboxHandler
-  (moonshine,            gemini_tts)             → LocalSTTGeminiTTSHandler
-  (moonshine,            elevenlabs, llama)      → LocalSTTLlamaElevenLabsHandler
-  (moonshine,            elevenlabs, gemini)     → LocalSTTGeminiElevenLabsHandler
-  (moonshine,            openai_realtime_output) → LocalSTTOpenAIRealtimeHandler
-  (moonshine,            hf_output)              → LocalSTTHuggingFaceRealtimeHandler
+  (hf_input,              hf_output)              → HuggingFaceRealtimeHandler
+  (openai_realtime_input, openai_realtime_output) → OpenaiRealtimeHandler
+  (gemini_live_input,     gemini_live_output)     → GeminiLiveHandler
+  (moonshine,             chatterbox, llama)      → ComposableConversationHandler(ChatterboxTTSResponseHandler)
+  (moonshine,             chatterbox, gemini)     → ComposableConversationHandler(GeminiTextChatterboxResponseHandler)
+  (moonshine,             elevenlabs, llama)      → ComposableConversationHandler(LlamaElevenLabsTTSResponseHandler)
+  (moonshine,             elevenlabs, gemini)     → ComposableConversationHandler(GeminiTextElevenLabsResponseHandler)
+  (moonshine,             gemini_tts)             → ComposableConversationHandler(GeminiTTSResponseHandler)
+  (moonshine,             openai_realtime_output) → LocalSTTOpenAIRealtimeHandler
+  (moonshine,             hf_output)              → LocalSTTHuggingFaceRealtimeHandler
 
 Unsupported combinations raise ``NotImplementedError`` with a message that names
 the requested pair and points to docs/audio-backends.md.
@@ -23,7 +29,7 @@ Out-of-scope
 ------------
 Arbitrary cross-combinations beyond the supported set would require a proper
 Mixin-based handler decomposition.  This factory is strictly a routing layer
-over the *existing* handler classes; cross-combo work is intentionally not
+over the existing handler classes; cross-combo work is intentionally not
 attempted here.
 """
 
@@ -37,14 +43,12 @@ from robot_comic.config import (
     LLM_BACKEND_ENV,
     LLM_BACKEND_LLAMA,
     LLM_BACKEND_GEMINI,
-    FACTORY_PATH_LEGACY,
     AUDIO_INPUT_MOONSHINE,
     AUDIO_INPUT_BACKEND_ENV,
     AUDIO_INPUT_GEMINI_LIVE,
     AUDIO_OUTPUT_CHATTERBOX,
     AUDIO_OUTPUT_ELEVENLABS,
     AUDIO_OUTPUT_GEMINI_TTS,
-    FACTORY_PATH_COMPOSABLE,
     AUDIO_OUTPUT_BACKEND_ENV,
     AUDIO_OUTPUT_GEMINI_LIVE,
     PIPELINE_MODE_COMPOSABLE,
@@ -56,6 +60,14 @@ from robot_comic.config import (
     config,
     derive_pipeline_mode,
 )
+from robot_comic.gemini_tts import GeminiTTSResponseHandler
+from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
+from robot_comic.local_stt_realtime import LocalSTTInputMixin
+from robot_comic.gemini_text_handlers import (
+    GeminiTextChatterboxResponseHandler,
+    GeminiTextElevenLabsResponseHandler,
+)
+from robot_comic.llama_elevenlabs_tts import LlamaElevenLabsTTSResponseHandler
 
 
 if TYPE_CHECKING:
@@ -91,6 +103,47 @@ _SUPPORTED_MATRIX_DOC = (
     f"  ({AUDIO_INPUT_MOONSHINE}, {AUDIO_OUTPUT_HF})\n"
     "See docs/audio-backends.md for details."
 )
+
+
+# ---------------------------------------------------------------------------
+# Factory-private mixin host classes.
+#
+# Each one combines :class:`LocalSTTInputMixin` (the Moonshine STT listener
+# the ``MoonshineSTTAdapter`` monkey-patches into) with a surviving
+# ``*ResponseHandler`` base (the LLM + TTS implementation the LLM/TTS
+# adapters delegate into).
+#
+# These replace the deleted ``LocalSTT*Handler`` subclasses retired in
+# Phase 4e of #337. They are not exported — the composable factory builders
+# are their only call site.
+#
+# The legacy ``_dispatch_completed_transcript`` MRO shim
+# (``await ResponseHandler._dispatch_completed_transcript(self, transcript)``)
+# is *not* re-added: ``MoonshineSTTAdapter.start()`` monkey-patches
+# ``_dispatch_completed_transcript`` to its bridge callback before any
+# transcript can flow, so the mixin's OpenAI-realtime default is never
+# reached on the composable path.
+# ---------------------------------------------------------------------------
+
+
+class _LocalSTTLlamaElevenLabsHost(LocalSTTInputMixin, LlamaElevenLabsTTSResponseHandler):
+    """Composable host: Moonshine STT input + Llama LLM + ElevenLabs TTS."""
+
+
+class _LocalSTTLlamaChatterboxHost(LocalSTTInputMixin, ChatterboxTTSResponseHandler):
+    """Composable host: Moonshine STT input + Llama LLM + Chatterbox TTS."""
+
+
+class _LocalSTTGeminiChatterboxHost(LocalSTTInputMixin, GeminiTextChatterboxResponseHandler):
+    """Composable host: Moonshine STT input + Gemini text LLM + Chatterbox TTS."""
+
+
+class _LocalSTTGeminiElevenLabsHost(LocalSTTInputMixin, GeminiTextElevenLabsResponseHandler):
+    """Composable host: Moonshine STT input + Gemini text LLM + ElevenLabs TTS."""
+
+
+class _LocalSTTGeminiTTSHost(LocalSTTInputMixin, GeminiTTSResponseHandler):
+    """Composable host: Moonshine STT input + bundled Gemini LLM + Gemini TTS."""
 
 
 class HandlerFactory:
@@ -173,110 +226,61 @@ class HandlerFactory:
         # ------------------------------------------------------------------
         assert pipeline_mode == PIPELINE_MODE_COMPOSABLE, f"Unhandled pipeline_mode={pipeline_mode!r}"
 
-        # ------------------------------------------------------------------
-        # Local STT (Moonshine) + TTS output pairs — Gemini text-LLM variants
-        # ------------------------------------------------------------------
-
         if input_backend == AUDIO_INPUT_MOONSHINE:
             _llm_backend = getattr(config, "LLM_BACKEND", LLM_BACKEND_LLAMA)
 
-            # LLM_BACKEND=llama variants. The orphan-handler bug was here:
-            # before this branch existed the factory ignored LLM_BACKEND=llama
-            # for the elevenlabs output and fell through to the
-            # Gemini-hardcoded LocalSTTElevenLabsHandler. The llama-specific
-            # handlers actually call llama-server for the LLM phase.
+            # LLM_BACKEND=llama composable triples.
             if _llm_backend == LLM_BACKEND_LLAMA:
                 if output_backend == AUDIO_OUTPUT_ELEVENLABS:
-                    if getattr(config, "FACTORY_PATH", FACTORY_PATH_LEGACY) == FACTORY_PATH_COMPOSABLE:
-                        logger.info(
-                            "HandlerFactory: selecting ComposableConversationHandler "
-                            "(%s → %s, llm=%s, factory_path=composable)",
-                            input_backend,
-                            output_backend,
-                            LLM_BACKEND_LLAMA,
-                        )
-                        return _build_composable_llama_elevenlabs(**handler_kwargs)
-                    from robot_comic.llama_elevenlabs_tts import LocalSTTLlamaElevenLabsHandler
-
                     logger.info(
-                        "HandlerFactory: selecting LocalSTTLlamaElevenLabsHandler (%s → %s, llm=%s)",
+                        "HandlerFactory: selecting ComposableConversationHandler (%s → %s, llm=%s)",
                         input_backend,
                         output_backend,
                         LLM_BACKEND_LLAMA,
                     )
-                    return LocalSTTLlamaElevenLabsHandler(**handler_kwargs)
-                if output_backend == AUDIO_OUTPUT_CHATTERBOX:
-                    # Phase 4c.1 (#337): chatterbox+llama is routed through
-                    # ComposableConversationHandler when FACTORY_PATH=composable.
-                    # Default FACTORY_PATH=legacy falls through to the existing
-                    # LocalSTTChatterboxHandler selection in the moonshine block
-                    # below.
-                    if getattr(config, "FACTORY_PATH", FACTORY_PATH_LEGACY) == FACTORY_PATH_COMPOSABLE:
-                        logger.info(
-                            "HandlerFactory: selecting ComposableConversationHandler "
-                            "(%s → %s, llm=%s, factory_path=composable)",
-                            input_backend,
-                            output_backend,
-                            LLM_BACKEND_LLAMA,
-                        )
-                        return _build_composable_llama_chatterbox(**handler_kwargs)
-                    # else: fall through to LocalSTTChatterboxHandler below.
-                # Other llama+TTS combos (chatterbox legacy path below;
-                # gemini_tts has LocalSTTLlamaGeminiTTSHandler) fall through to
-                # the existing composable selection below, which picks the
-                # correct llama-aware handler for those outputs.
+                    return _build_composable_llama_elevenlabs(**handler_kwargs)
 
+                if output_backend == AUDIO_OUTPUT_CHATTERBOX:
+                    logger.info(
+                        "HandlerFactory: selecting ComposableConversationHandler (%s → %s, llm=%s)",
+                        input_backend,
+                        output_backend,
+                        LLM_BACKEND_LLAMA,
+                    )
+                    return _build_composable_llama_chatterbox(**handler_kwargs)
+
+                # Llama + gemini_tts is not a supported composable triple
+                # today (the GeminiTTSResponseHandler's bundled LLM+TTS
+                # design owns its own LLM call and ignores LLM_BACKEND).
+                # Fall through to the gemini_tts arm below, which routes
+                # via the bundled GeminiBundledLLMAdapter regardless of
+                # LLM_BACKEND. Llama + openai_realtime_output and
+                # llama + hf_output also fall through to their hybrid
+                # selectors below.
+
+            # LLM_BACKEND=gemini composable triples for Chatterbox / ElevenLabs.
             if _llm_backend == LLM_BACKEND_GEMINI:
                 if output_backend == AUDIO_OUTPUT_CHATTERBOX:
-                    # Phase 4c.2 (#337): gemini+chatterbox is routed through
-                    # ComposableConversationHandler when FACTORY_PATH=composable.
-                    # Default FACTORY_PATH=legacy keeps the existing
-                    # GeminiTextChatterboxHandler selection below.
-                    if getattr(config, "FACTORY_PATH", FACTORY_PATH_LEGACY) == FACTORY_PATH_COMPOSABLE:
-                        logger.info(
-                            "HandlerFactory: selecting ComposableConversationHandler "
-                            "(%s → %s, llm=%s, factory_path=composable)",
-                            input_backend,
-                            output_backend,
-                            LLM_BACKEND_GEMINI,
-                        )
-                        return _build_composable_gemini_chatterbox(**handler_kwargs)
-                    from robot_comic.gemini_text_handlers import GeminiTextChatterboxHandler
-
                     logger.info(
-                        "HandlerFactory: selecting GeminiTextChatterboxHandler (%s → %s, llm=%s)",
+                        "HandlerFactory: selecting ComposableConversationHandler (%s → %s, llm=%s)",
                         input_backend,
                         output_backend,
                         LLM_BACKEND_GEMINI,
                     )
-                    return GeminiTextChatterboxHandler(**handler_kwargs)
+                    return _build_composable_gemini_chatterbox(**handler_kwargs)
 
                 if output_backend == AUDIO_OUTPUT_ELEVENLABS:
-                    # Phase 4c.3 (#337): gemini+elevenlabs is routed through
-                    # ComposableConversationHandler when FACTORY_PATH=composable.
-                    # Default FACTORY_PATH=legacy keeps the existing
-                    # GeminiTextElevenLabsHandler selection below.
-                    if getattr(config, "FACTORY_PATH", FACTORY_PATH_LEGACY) == FACTORY_PATH_COMPOSABLE:
-                        logger.info(
-                            "HandlerFactory: selecting ComposableConversationHandler "
-                            "(%s → %s, llm=%s, factory_path=composable)",
-                            input_backend,
-                            output_backend,
-                            LLM_BACKEND_GEMINI,
-                        )
-                        return _build_composable_gemini_elevenlabs(**handler_kwargs)
-                    from robot_comic.gemini_text_handlers import GeminiTextElevenLabsHandler
-
                     logger.info(
-                        "HandlerFactory: selecting GeminiTextElevenLabsHandler (%s → %s, llm=%s)",
+                        "HandlerFactory: selecting ComposableConversationHandler (%s → %s, llm=%s)",
                         input_backend,
                         output_backend,
                         LLM_BACKEND_GEMINI,
                     )
-                    return GeminiTextElevenLabsHandler(**handler_kwargs)
+                    return _build_composable_gemini_elevenlabs(**handler_kwargs)
 
-                # Gemini TTS: already uses Gemini for LLM natively — fall through
-                # to the llama routing so LocalSTTGeminiTTSHandler is selected.
+                # Gemini TTS uses its bundled Gemini LLM natively — fall
+                # through to the gemini_tts arm below regardless of
+                # LLM_BACKEND.
                 if output_backend != AUDIO_OUTPUT_GEMINI_TTS:
                     raise NotImplementedError(
                         f"{LLM_BACKEND_ENV}={LLM_BACKEND_GEMINI!r} is not yet implemented "
@@ -286,77 +290,53 @@ class HandlerFactory:
                         f"Set {LLM_BACKEND_ENV}=llama to use the existing llama-server path."
                     )
 
-        # ------------------------------------------------------------------
-        # Local STT (Moonshine) + TTS output pairs
-        # ------------------------------------------------------------------
-
-        if input_backend == AUDIO_INPUT_MOONSHINE:
-            if output_backend == AUDIO_OUTPUT_CHATTERBOX:
-                from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
-
-                logger.info(
-                    "HandlerFactory: selecting LocalSTTChatterboxHandler (%s → %s)",
-                    input_backend,
-                    output_backend,
-                )
-                return LocalSTTChatterboxHandler(**handler_kwargs)
-
+            # ------------------------------------------------------------------
+            # gemini_tts — bundled Gemini LLM + TTS via GeminiTTSResponseHandler.
+            # ------------------------------------------------------------------
             if output_backend == AUDIO_OUTPUT_GEMINI_TTS:
-                # Phase 4c.5 (#337): bundled Gemini LLM+TTS is routed through
-                # ComposableConversationHandler when FACTORY_PATH=composable.
-                # Default FACTORY_PATH=legacy keeps the existing
-                # LocalSTTGeminiTTSHandler selection below. Both adapters
-                # wrap the SAME LocalSTTGeminiTTSHandler instance so a single
-                # ``genai.Client`` backs both Protocol surfaces. The bundled
-                # GeminiBundledLLMAdapter (NOT the 4c.2 GeminiLLMAdapter) is
-                # used here because the handler exposes ``_run_llm_with_tools``
-                # rather than ``_call_llm`` — see Phase 4c.5 spec Q1.
-                if getattr(config, "FACTORY_PATH", FACTORY_PATH_LEGACY) == FACTORY_PATH_COMPOSABLE:
-                    logger.info(
-                        "HandlerFactory: selecting ComposableConversationHandler "
-                        "(%s → %s, llm=gemini-bundled, factory_path=composable)",
-                        input_backend,
-                        output_backend,
-                    )
-                    return _build_composable_gemini_tts(**handler_kwargs)
-                from robot_comic.gemini_tts import LocalSTTGeminiTTSHandler
-
                 logger.info(
-                    "HandlerFactory: selecting LocalSTTGeminiTTSHandler (%s → %s)",
+                    "HandlerFactory: selecting ComposableConversationHandler (%s → %s, llm=gemini-bundled)",
                     input_backend,
                     output_backend,
                 )
-                return LocalSTTGeminiTTSHandler(**handler_kwargs)
+                return _build_composable_gemini_tts(**handler_kwargs)
 
+            # ------------------------------------------------------------------
+            # Llama-fallback chatterbox (LLM_BACKEND neither llama nor gemini).
+            # Today's _normalize_llm_backend rejects unknown values so this is
+            # the lone "_llm_backend was something exotic" arm — route through
+            # the llama-chatterbox builder so behaviour matches the documented
+            # default.
+            # ------------------------------------------------------------------
+            if output_backend == AUDIO_OUTPUT_CHATTERBOX:
+                logger.info(
+                    "HandlerFactory: selecting ComposableConversationHandler (%s → %s, llm=llama-fallback)",
+                    input_backend,
+                    output_backend,
+                )
+                return _build_composable_llama_chatterbox(**handler_kwargs)
+
+            # ------------------------------------------------------------------
+            # Moonshine + ElevenLabs with no llama/gemini selector: route via
+            # the gemini-elevenlabs builder. Mirrors the legacy
+            # LocalSTTGeminiElevenLabsHandler fallback (Gemini was hardcoded
+            # in ElevenLabsTTSResponseHandler._prepare_startup_credentials).
+            # ------------------------------------------------------------------
             if output_backend == AUDIO_OUTPUT_ELEVENLABS:
-                # Phase 4c.4 (#337): the gemini-fallback dispatch arm is
-                # reached when LLM_BACKEND is neither "llama" nor "gemini".
-                # For the composable path we route through the same builder
-                # used by the LLM_BACKEND=gemini arm (4c.3) because the
-                # underlying triple is the same (moonshine + elevenlabs +
-                # Gemini-API LLM), just reached through a different dispatch
-                # condition. The composable path's GeminiLLMAdapter requires
-                # a handler with _call_llm (GeminiTextElevenLabsHandler);
-                # LocalSTTGeminiElevenLabsHandler uses _run_llm_with_tools
-                # instead and can't host that adapter. Phase 4e will retire
-                # LocalSTTGeminiElevenLabsHandler.
-                if getattr(config, "FACTORY_PATH", FACTORY_PATH_LEGACY) == FACTORY_PATH_COMPOSABLE:
-                    logger.info(
-                        "HandlerFactory: selecting ComposableConversationHandler "
-                        "(%s → %s, llm=gemini-fallback, factory_path=composable)",
-                        input_backend,
-                        output_backend,
-                    )
-                    return _build_composable_gemini_elevenlabs(**handler_kwargs)
-                from robot_comic.elevenlabs_tts import LocalSTTGeminiElevenLabsHandler
-
                 logger.info(
-                    "HandlerFactory: selecting LocalSTTGeminiElevenLabsHandler (%s → %s)",
+                    "HandlerFactory: selecting ComposableConversationHandler (%s → %s, llm=gemini-fallback)",
                     input_backend,
                     output_backend,
                 )
-                return LocalSTTGeminiElevenLabsHandler(**handler_kwargs)
+                return _build_composable_gemini_elevenlabs(**handler_kwargs)
 
+            # ------------------------------------------------------------------
+            # Moonshine + realtime output hybrids (LocalSTT*RealtimeHandler).
+            # The LLM+TTS half lives inside the bundled websocket session, so
+            # they don't decompose into the STT/LLM/TTS Protocol triple. Per
+            # the operator's Option B decision (Phase 4c-tris Skipped), these
+            # hybrids stay legacy forever.
+            # ------------------------------------------------------------------
             if output_backend == AUDIO_OUTPUT_OPENAI_REALTIME:
                 from robot_comic.local_stt_realtime import LocalSTTOpenAIRealtimeHandler
 
@@ -395,12 +375,14 @@ class HandlerFactory:
 def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
     """Construct the composable (moonshine, llama, elevenlabs) pipeline.
 
-    Builds a legacy ``LocalSTTLlamaElevenLabsHandler`` (the adapters delegate
-    into it), wraps it with the three Phase 3 adapters, composes them into a
-    ``ComposablePipeline`` seeded with the current session instructions, and
-    returns a ``ComposableConversationHandler`` whose ``build`` closure
-    re-runs the same construction. FastRTC's ``copy()`` per-peer cloning
-    invokes the closure for fresh state on each new peer.
+    Composes :class:`LocalSTTInputMixin` over
+    :class:`LlamaElevenLabsTTSResponseHandler` via the factory-private
+    :class:`_LocalSTTLlamaElevenLabsHost` shell, wraps it with the three
+    Phase 3 adapters, composes them into a :class:`ComposablePipeline`
+    seeded with the current session instructions, and returns a
+    :class:`ComposableConversationHandler` whose ``build`` closure re-runs
+    the same construction. FastRTC's ``copy()`` per-peer cloning invokes
+    the closure for fresh state on each new peer.
     """
     from robot_comic.prompts import get_session_instructions
     from robot_comic.adapters import (
@@ -409,18 +391,17 @@ def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
         ElevenLabsTTSAdapter,
     )
     from robot_comic.composable_pipeline import ComposablePipeline
-    from robot_comic.llama_elevenlabs_tts import LocalSTTLlamaElevenLabsHandler
     from robot_comic.composable_conversation_handler import ComposableConversationHandler
 
     def _build() -> ComposableConversationHandler:
-        legacy = LocalSTTLlamaElevenLabsHandler(**handler_kwargs)
-        stt = MoonshineSTTAdapter(legacy)
-        llm = LlamaLLMAdapter(legacy)
+        host = _LocalSTTLlamaElevenLabsHost(**handler_kwargs)
+        stt = MoonshineSTTAdapter(host)
+        llm = LlamaLLMAdapter(host)
         # LlamaElevenLabsTTSResponseHandler structurally matches the
         # ElevenLabsTTSAdapter Protocol surface (broadened in 4c.3) even
         # though it doesn't share ElevenLabsTTSResponseHandler's inheritance
         # chain. No cast needed.
-        tts = ElevenLabsTTSAdapter(legacy)
+        tts = ElevenLabsTTSAdapter(host)
         pipeline = ComposablePipeline(
             stt,
             llm,
@@ -429,7 +410,7 @@ def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
         )
         return ComposableConversationHandler(
             pipeline=pipeline,
-            tts_handler=legacy,
+            tts_handler=host,
             deps=handler_kwargs["deps"],
             build=_build,
         )
@@ -438,14 +419,15 @@ def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
 
 
 def _build_composable_llama_chatterbox(**handler_kwargs: Any) -> Any:
-    """Construct the composable (moonshine, chatterbox, llama) pipeline.
+    """Construct the composable (moonshine, llama, chatterbox) pipeline.
 
-    Builds a legacy ``LocalSTTChatterboxHandler`` (the adapters delegate into
-    it), wraps it with the three Phase 3 adapters, composes them into a
-    ``ComposablePipeline`` seeded with the current session instructions, and
-    returns a ``ComposableConversationHandler`` whose ``build`` closure
-    re-runs the same construction. FastRTC's ``copy()`` per-peer cloning
-    invokes the closure for fresh state on each new peer.
+    Composes :class:`LocalSTTInputMixin` over
+    :class:`ChatterboxTTSResponseHandler` via
+    :class:`_LocalSTTLlamaChatterboxHost`, wraps it with the three Phase 3
+    adapters, composes them into a :class:`ComposablePipeline` seeded with
+    the current session instructions, and returns a
+    :class:`ComposableConversationHandler` whose ``build`` closure re-runs
+    the same construction.
     """
     from robot_comic.prompts import get_session_instructions
     from robot_comic.adapters import (
@@ -453,15 +435,14 @@ def _build_composable_llama_chatterbox(**handler_kwargs: Any) -> Any:
         MoonshineSTTAdapter,
         ChatterboxTTSAdapter,
     )
-    from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
     from robot_comic.composable_pipeline import ComposablePipeline
     from robot_comic.composable_conversation_handler import ComposableConversationHandler
 
     def _build() -> ComposableConversationHandler:
-        legacy = LocalSTTChatterboxHandler(**handler_kwargs)
-        stt = MoonshineSTTAdapter(legacy)
-        llm = LlamaLLMAdapter(legacy)
-        tts = ChatterboxTTSAdapter(legacy)
+        host = _LocalSTTLlamaChatterboxHost(**handler_kwargs)
+        stt = MoonshineSTTAdapter(host)
+        llm = LlamaLLMAdapter(host)
+        tts = ChatterboxTTSAdapter(host)
         pipeline = ComposablePipeline(
             stt,
             llm,
@@ -470,7 +451,7 @@ def _build_composable_llama_chatterbox(**handler_kwargs: Any) -> Any:
         )
         return ComposableConversationHandler(
             pipeline=pipeline,
-            tts_handler=legacy,
+            tts_handler=host,
             deps=handler_kwargs["deps"],
             build=_build,
         )
@@ -479,17 +460,18 @@ def _build_composable_llama_chatterbox(**handler_kwargs: Any) -> Any:
 
 
 def _build_composable_gemini_chatterbox(**handler_kwargs: Any) -> Any:
-    """Construct the composable (moonshine, chatterbox, gemini) pipeline.
+    """Construct the composable (moonshine, gemini, chatterbox) pipeline.
 
-    Builds a legacy ``GeminiTextChatterboxHandler`` (the adapters delegate
-    into it), wraps it with the three Phase 3/4 adapters, composes them into
-    a ``ComposablePipeline`` seeded with the current session instructions,
-    and returns a ``ComposableConversationHandler`` whose ``build`` closure
-    re-runs the same construction. FastRTC's ``copy()`` per-peer cloning
-    invokes the closure for fresh state on each new peer.
+    Composes :class:`LocalSTTInputMixin` over
+    :class:`GeminiTextChatterboxResponseHandler` via
+    :class:`_LocalSTTGeminiChatterboxHost`, wraps it with the three Phase
+    3/4 adapters, composes them into a :class:`ComposablePipeline` seeded
+    with the current session instructions, and returns a
+    :class:`ComposableConversationHandler` whose ``build`` closure re-runs
+    the same construction.
 
-    The chatterbox TTS half is shared with Phase 4c.1's llama variant; the
-    LLM half differs only in the adapter (``GeminiLLMAdapter`` wraps
+    The chatterbox TTS half is shared with the llama variant; the LLM half
+    differs only in the adapter (``GeminiLLMAdapter`` wraps
     ``GeminiTextResponseHandler._call_llm`` which Gemini-specifically routes
     through the google-genai SDK while emitting llama-server-shaped
     tool_call dicts upstream).
@@ -501,14 +483,13 @@ def _build_composable_gemini_chatterbox(**handler_kwargs: Any) -> Any:
         ChatterboxTTSAdapter,
     )
     from robot_comic.composable_pipeline import ComposablePipeline
-    from robot_comic.gemini_text_handlers import GeminiTextChatterboxHandler
     from robot_comic.composable_conversation_handler import ComposableConversationHandler
 
     def _build() -> ComposableConversationHandler:
-        legacy = GeminiTextChatterboxHandler(**handler_kwargs)
-        stt = MoonshineSTTAdapter(legacy)
-        llm = GeminiLLMAdapter(legacy)
-        tts = ChatterboxTTSAdapter(legacy)
+        host = _LocalSTTGeminiChatterboxHost(**handler_kwargs)
+        stt = MoonshineSTTAdapter(host)
+        llm = GeminiLLMAdapter(host)
+        tts = ChatterboxTTSAdapter(host)
         pipeline = ComposablePipeline(
             stt,
             llm,
@@ -517,7 +498,7 @@ def _build_composable_gemini_chatterbox(**handler_kwargs: Any) -> Any:
         )
         return ComposableConversationHandler(
             pipeline=pipeline,
-            tts_handler=legacy,
+            tts_handler=host,
             deps=handler_kwargs["deps"],
             build=_build,
         )
@@ -526,18 +507,19 @@ def _build_composable_gemini_chatterbox(**handler_kwargs: Any) -> Any:
 
 
 def _build_composable_gemini_elevenlabs(**handler_kwargs: Any) -> Any:
-    """Construct the composable (moonshine, elevenlabs, gemini) pipeline.
+    """Construct the composable (moonshine, gemini, elevenlabs) pipeline.
 
-    Builds a legacy ``GeminiTextElevenLabsHandler`` (the adapters delegate
-    into it), wraps it with the three Phase 3/4 adapters, composes them into
-    a ``ComposablePipeline`` seeded with the current session instructions,
-    and returns a ``ComposableConversationHandler`` whose ``build`` closure
-    re-runs the same construction. FastRTC's ``copy()`` per-peer cloning
-    invokes the closure for fresh state on each new peer.
+    Composes :class:`LocalSTTInputMixin` over
+    :class:`GeminiTextElevenLabsResponseHandler` via
+    :class:`_LocalSTTGeminiElevenLabsHost`, wraps it with the three Phase
+    3/4 adapters, composes them into a :class:`ComposablePipeline` seeded
+    with the current session instructions, and returns a
+    :class:`ComposableConversationHandler` whose ``build`` closure re-runs
+    the same construction.
 
-    The ElevenLabs TTS half is shared with Phase 4b's llama variant; the
-    LLM half is the same ``GeminiLLMAdapter`` from Phase 4c.2. No new
-    adapter is introduced — only the routing. The Phase 4c.3
+    The ElevenLabs TTS half is shared with the llama variant; the LLM half
+    is the same ``GeminiLLMAdapter`` from the gemini-chatterbox triple. No
+    new adapter is introduced — only the routing. The
     ``_ElevenLabsCompatibleHandler`` Protocol broadening in
     ``elevenlabs_tts_adapter.py`` is what lets the ElevenLabs adapter accept
     the diamond-MRO ``GeminiTextElevenLabsResponseHandler`` without a cast.
@@ -549,14 +531,13 @@ def _build_composable_gemini_elevenlabs(**handler_kwargs: Any) -> Any:
         ElevenLabsTTSAdapter,
     )
     from robot_comic.composable_pipeline import ComposablePipeline
-    from robot_comic.gemini_text_handlers import GeminiTextElevenLabsHandler
     from robot_comic.composable_conversation_handler import ComposableConversationHandler
 
     def _build() -> ComposableConversationHandler:
-        legacy = GeminiTextElevenLabsHandler(**handler_kwargs)
-        stt = MoonshineSTTAdapter(legacy)
-        llm = GeminiLLMAdapter(legacy)
-        tts = ElevenLabsTTSAdapter(legacy)
+        host = _LocalSTTGeminiElevenLabsHost(**handler_kwargs)
+        stt = MoonshineSTTAdapter(host)
+        llm = GeminiLLMAdapter(host)
+        tts = ElevenLabsTTSAdapter(host)
         pipeline = ComposablePipeline(
             stt,
             llm,
@@ -565,7 +546,7 @@ def _build_composable_gemini_elevenlabs(**handler_kwargs: Any) -> Any:
         )
         return ComposableConversationHandler(
             pipeline=pipeline,
-            tts_handler=legacy,
+            tts_handler=host,
             deps=handler_kwargs["deps"],
             build=_build,
         )
@@ -574,22 +555,22 @@ def _build_composable_gemini_elevenlabs(**handler_kwargs: Any) -> Any:
 
 
 def _build_composable_gemini_tts(**handler_kwargs: Any) -> Any:
-    """Construct the composable (moonshine, gemini_tts) pipeline.
+    """Construct the composable (moonshine, gemini-bundled, gemini_tts) pipeline.
 
-    Builds a legacy ``LocalSTTGeminiTTSHandler`` (the adapters delegate into
-    it), wraps it with the three Phase 3/4 adapters, composes them into a
-    ``ComposablePipeline`` seeded with the current session instructions, and
-    returns a ``ComposableConversationHandler`` whose ``build`` closure
-    re-runs the same construction. FastRTC's ``copy()`` per-peer cloning
-    invokes the closure for fresh state on each new peer.
+    Composes :class:`LocalSTTInputMixin` over
+    :class:`GeminiTTSResponseHandler` via :class:`_LocalSTTGeminiTTSHost`,
+    wraps it with the three Phase 3/4 adapters, composes them into a
+    :class:`ComposablePipeline` seeded with the current session
+    instructions, and returns a :class:`ComposableConversationHandler`
+    whose ``build`` closure re-runs the same construction.
 
-    Unlike every other 4c triple, the LLM and TTS adapters here both wrap
-    the SAME underlying handler instance with a SHARED ``genai.Client``
+    Unlike every other composable triple, the LLM and TTS adapters here both
+    wrap the SAME underlying handler instance with a SHARED ``genai.Client``
     (the bundled Gemini-native pattern). The LLM adapter is
     :class:`~robot_comic.adapters.gemini_bundled_llm_adapter.GeminiBundledLLMAdapter`
-    (NOT the 4c.2 ``GeminiLLMAdapter``) because the handler exposes
-    ``_run_llm_with_tools`` rather than ``_call_llm`` — see Phase 4c.5 spec
-    Q1 for the design rationale.
+    (NOT the gemini-text ``GeminiLLMAdapter``) because the handler exposes
+    ``_run_llm_with_tools`` rather than ``_call_llm`` — see the Phase 4c.5
+    spec for the design rationale.
     """
     from robot_comic.prompts import get_session_instructions
     from robot_comic.adapters import (
@@ -597,15 +578,14 @@ def _build_composable_gemini_tts(**handler_kwargs: Any) -> Any:
         MoonshineSTTAdapter,
         GeminiBundledLLMAdapter,
     )
-    from robot_comic.gemini_tts import LocalSTTGeminiTTSHandler
     from robot_comic.composable_pipeline import ComposablePipeline
     from robot_comic.composable_conversation_handler import ComposableConversationHandler
 
     def _build() -> ComposableConversationHandler:
-        legacy = LocalSTTGeminiTTSHandler(**handler_kwargs)
-        stt = MoonshineSTTAdapter(legacy)
-        llm = GeminiBundledLLMAdapter(legacy)
-        tts = GeminiTTSAdapter(legacy)
+        host = _LocalSTTGeminiTTSHost(**handler_kwargs)
+        stt = MoonshineSTTAdapter(host)
+        llm = GeminiBundledLLMAdapter(host)
+        tts = GeminiTTSAdapter(host)
         pipeline = ComposablePipeline(
             stt,
             llm,
@@ -614,7 +594,7 @@ def _build_composable_gemini_tts(**handler_kwargs: Any) -> Any:
         )
         return ComposableConversationHandler(
             pipeline=pipeline,
-            tts_handler=legacy,
+            tts_handler=host,
             deps=handler_kwargs["deps"],
             build=_build,
         )
