@@ -107,6 +107,18 @@ class _MockTTS:
     async def shutdown(self) -> None:
         self.shutdown_called = True
 
+    # Phase 5c.1: voice methods are required Protocol attributes (the default
+    # impls raise but ``@runtime_checkable`` still demands their presence on
+    # structurally-typed satisfiers like this one).
+    async def get_available_voices(self) -> list[str]:
+        return ["Mock"]
+
+    def get_current_voice(self) -> str:
+        return "Mock"
+
+    async def change_voice(self, voice: str) -> str:
+        return f"Voice changed to {voice}."
+
 
 # ---------------------------------------------------------------------------
 # isinstance() against runtime_checkable Protocols
