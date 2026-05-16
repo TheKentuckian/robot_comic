@@ -7,6 +7,18 @@
 **Predecessors:** Lifecycle Hook #1 (PR #372) — per-frame `_speaking_until` write
 **Spec template:** mirrors `docs/superpowers/specs/2026-05-15-lifecycle-echo-guard-fix.md`
 
+> **Migration note (Phase 5c.2):** the wrapper-side
+> `_reset_tts_per_session_state` helper described below has moved onto
+> the `TTSBackend` Protocol as `reset_per_session_state`, and the
+> wrapper's `apply_personality` body has moved onto
+> `ComposablePipeline.apply_personality`. Behaviour is unchanged — the
+> three echo-guard fields are still cleared on persona switch, just
+> from a different call site (pipeline → adapter → wrapped handler).
+> See `docs/superpowers/specs/2026-05-16-phase-5c2-apply-personality-to-pipeline.md`
+> for the rationale. The regression tests in
+> `tests/test_composable_persona_reset.py` were retargeted to drive
+> `pipeline.apply_personality` against a real `ElevenLabsTTSAdapter`.
+
 This sub-phase ships two small things in one PR:
 
 1. **Wire per-persona reset of echo-guard accumulators on `apply_personality`** (the live TODO on `composable_conversation_handler.py:172-179`).
