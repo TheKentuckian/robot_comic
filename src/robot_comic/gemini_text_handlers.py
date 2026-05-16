@@ -68,6 +68,19 @@ class GeminiTextChatterboxResponseHandler(GeminiTextResponseHandler, ChatterboxT
         )
 
     async def _prepare_startup_credentials(self) -> None:
+        # Phase 5e.4 idempotency: the migrated triple's factory composes
+        # a plain leaf handler (no :class:`LocalSTTInputMixin` shell), and
+        # the LLM and TTS adapters each call this method during their
+        # ``prepare`` lifecycle. The inherited Phase 5e.3 guard on
+        # ``ChatterboxTTSResponseHandler._prepare_startup_credentials``
+        # short-circuits the chained call on the second invocation, but
+        # without a leaf-level guard the body below still reassigns
+        # ``self._gemini_llm`` (leaking a fresh ``genai.Client`` per
+        # duplicate call). Guard the body so duplicate calls are cheap
+        # no-ops. The flag is only set on success so a failed attempt
+        # still re-tries the full chain.
+        if getattr(self, "_startup_credentials_ready", False):
+            return
         # ChatterboxTTSResponseHandler._prepare_startup_credentials sets up
         # httpx client, probes llama health (skippable), and warms TTS.
         # We call it first so the Chatterbox client is ready before Gemini init.
@@ -85,6 +98,7 @@ class GeminiTextChatterboxResponseHandler(GeminiTextResponseHandler, ChatterboxT
             model,
             self.get_current_voice(),
         )
+        self._startup_credentials_ready = True
 
 
 # ---------------------------------------------------------------------------
