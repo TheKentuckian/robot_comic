@@ -347,6 +347,14 @@ def _wait_and_emit_completion(
                     "aplay.command": " ".join(str(p) for p in command),
                 },
             )
+            # Non-zero ``aplay`` exit on the welcome-WAV path is the one
+            # playback-underrun signal we control directly (the daemon owns
+            # the ALSA sink; xruns there require dmesg scraping). Wire it
+            # here so the unused ``robot.audio.playback.underruns`` counter
+            # has at least one real call site. Instrumentation audit
+            # (PR #385) Rec 7.
+            if exit_code != 0:
+                _telemetry.inc_playback_underruns({"path": "welcome.wav"})
         except Exception as exc:  # pragma: no cover — telemetry must never raise
             logger.debug("welcome.wav.completed telemetry failed: %s", exc)
 
@@ -387,6 +395,11 @@ def _emit_completion_now(
                 "aplay.command": " ".join(str(p) for p in command),
             },
         )
+        # Mirror the threaded path's underrun counter: non-zero exit on the
+        # welcome-WAV player is the one underrun signal we can detect from
+        # our own process. Instrumentation audit (PR #385) Rec 7.
+        if exit_code is not None and exit_code != 0:
+            _telemetry.inc_playback_underruns({"path": "welcome.wav"})
     except Exception as exc:  # pragma: no cover — telemetry must never raise
         logger.debug("welcome.wav.completed (sync) telemetry failed: %s", exc)
 

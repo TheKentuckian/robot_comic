@@ -216,6 +216,10 @@ class _MoonshineListener:  # base class is attached dynamically in _build_local_
                 getattr(event, "error", event),
             )
         logger.warning("Local STT error: %s", getattr(event, "error", event))
+        # Surface the error to the metrics surface so the monitor can show
+        # a numeric signal alongside the warning log. Instrumentation audit
+        # (PR #385) Rec 3.
+        telemetry.inc_errors({"subsystem": "stt", "error_type": "stream_error"})
         # If the stream errored out we also need to rearm — the underlying
         # C handle may be in a state where no further events will fire.
         self.handler._pending_stream_rearm = True
@@ -693,6 +697,11 @@ class LocalSTTInputMixin:
                     age,
                     h["audio_frames"],
                 )
+                # Surface the idle-stall to the metrics surface; this is the
+                # very symptom MOONSHINE_DIAG exists to debug (#314) and the
+                # monitor should not have to scrape logs to detect it.
+                # Instrumentation audit (PR #385) Rec 3.
+                telemetry.inc_errors({"subsystem": "stt", "error_type": "idle_stall"})
 
     async def _moonshine_heartbeat_loop(self) -> None:
         """Log Moonshine state every second while the stream is active."""
