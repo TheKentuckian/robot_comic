@@ -123,6 +123,21 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
         return float(getattr(config, "CHATTERBOX_TARGET_DBFS", CHATTERBOX_DEFAULT_TARGET_DBFS))
 
     async def _prepare_startup_credentials(self) -> None:
+        """Set up Chatterbox TTS startup state.
+
+        Phase 5e.3 idempotency: the migrated triple's factory composes
+        a plain handler (no :class:`LocalSTTInputMixin` shell), and the
+        LLM and TTS adapters each call this method during their
+        ``prepare`` lifecycle. The mixin used to gate the call chain
+        behind ``_startup_credentials_ready``; without that wrapper the
+        second invocation would leak an extra ``httpx.AsyncClient`` and
+        re-fire the llama-server health probe + KV-cache warmup
+        (streaming POST) + Chatterbox TTS warmup (real TTS round-trip).
+        Guard the body so duplicate calls are cheap no-ops. The flag is
+        only set on success so a failed attempt still re-tries.
+        """
+        if getattr(self, "_startup_credentials_ready", False):
+            return
         await super()._prepare_startup_credentials()
         # Resolve per-persona voice-clone reference audio once at startup.
         profile = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
@@ -142,6 +157,7 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
         await self._probe_llama_health()
         await self._warmup_llm_kv_cache()
         await self._warmup_tts()
+        self._startup_credentials_ready = True
 
     async def _probe_llama_health(self) -> None:
         """Ping llama-server /health at startup and emit a clear warning on failure.
