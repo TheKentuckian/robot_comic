@@ -421,6 +421,7 @@ async def test_integration_transcript_to_audio_frame() -> None:
             self,
             text: str,  # noqa: ARG002
             tags: tuple[str, ...] = (),  # noqa: ARG002
+            first_audio_marker: list[float] | None = None,  # noqa: ARG002
         ):
             yield BackendsAudioFrame(
                 samples=np.ones(48, dtype=np.int16),

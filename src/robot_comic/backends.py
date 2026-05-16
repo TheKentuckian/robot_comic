@@ -74,6 +74,14 @@ class LLMResponse:
     ``tool_calls`` is non-empty (the LLM wants tools dispatched and another
     round-trip). Implementations MAY populate both — the orchestrator
     decides what to do based on which is present.
+
+    ``delivery_tags`` carries optional delivery hints (``fast``, ``slow``,
+    ``annoyance``, ``short pause``, etc.) that downstream TTS backends may
+    consume in lieu of parsing the text. When empty (the default), TTS
+    adapters fall back to text-based extraction — the today behaviour where
+    LLM prompts embed ``[fast]``-style markers in the spoken text. The
+    orchestrator (``ComposablePipeline._speak_assistant_text``) passes this
+    tuple through to ``TTSBackend.synthesize(tags=...)``.
     """
 
     text: str = ""
@@ -82,6 +90,11 @@ class LLMResponse:
     # finish_reason, etc.). Kept opaque so the Protocol doesn't pin a
     # specific telemetry shape.
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Structured delivery hints for the TTS layer. Empty = "fall back to
+    # text-based tag extraction" (today's behaviour for GeminiTTSAdapter
+    # and ChatterboxTTSAdapter); non-empty = "use these as the per-call
+    # delivery cue, ignore any markers embedded in the text".
+    delivery_tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -175,9 +188,19 @@ class TTSBackend(Protocol):
 
     Lifecycle:
     1. ``prepare()`` — initialise client / API session.
-    2. ``synthesize(text, tags)`` — produce an async stream of PCM frames.
+    2. ``synthesize(text, tags, first_audio_marker)`` — produce an async
+       stream of PCM frames.
        ``tags`` carries optional delivery hints (``fast``, ``annoyance``,
-       ``slow``, etc.) that some backends map to voice-settings deltas.
+       ``slow``, etc.) that some backends map to voice-settings deltas or
+       per-call delivery cues. Adapters that today parse hints out of the
+       text fall back to that path when ``tags`` is empty; non-empty
+       ``tags`` overrides text-parsing as the structured channel.
+       ``first_audio_marker`` (Phase 5a.2): when provided, the adapter
+       appends ``time.monotonic()`` to the list on the first PCM frame it
+       yields. Single-shot per call — adapters guard with a local flag so
+       repeated frames don't append. Enables the orchestrator to record
+       per-turn first-audio latency without subscribing to internal
+       events. ``None`` (the default) opts out of the channel.
     3. ``shutdown()`` — release HTTP / websocket clients.
 
     The orchestrator owns the output queue; the backend simply yields
@@ -193,6 +216,7 @@ class TTSBackend(Protocol):
         self,
         text: str,
         tags: tuple[str, ...] = (),
+        first_audio_marker: list[float] | None = None,
     ) -> AsyncIterator[AudioFrame]:
         """Stream synthesised PCM frames for *text*.
 

@@ -215,26 +215,142 @@ async def test_synthesize_with_empty_text_makes_no_tts_calls() -> None:
 
 
 @pytest.mark.asyncio
-async def test_synthesize_ignores_protocol_tags_arg() -> None:
-    """The Protocol's ``tags`` kwarg is accepted and silently ignored — the
-    adapter parses tags from the LLM text itself (where the persona prompt
-    embeds them)."""
+async def test_synthesize_falls_back_to_text_parsing_when_tags_empty() -> None:
+    """Phase 5a.2: when the orchestrator passes ``tags=()`` (the default),
+    the adapter falls back to extracting delivery tags from the text itself
+    — the today behaviour. ``[fast] ...`` in the text injects the
+    rapid-fire cue suffix via :func:`build_tts_system_instruction`."""
     handler = _StubGeminiTTSHandler(tts_results=[_pcm_bytes(2400)])
     adapter = GeminiTTSAdapter(handler)  # type: ignore[arg-type]
 
-    # ``tags=("fast",)`` would inject a delivery cue if the adapter honoured
-    # it — but the text has no tag markers, so the resulting instruction
-    # should NOT mention rapid-fire.
+    [_ async for _ in adapter.synthesize("[fast] Plain sentence.")]
+
+    assert len(handler.tts_calls) == 1
+    _, instruction = handler.tts_calls[0]
+    assert instruction is not None
+    assert "Delivery cues for this line:" in instruction
+
+
+@pytest.mark.asyncio
+async def test_synthesize_consumes_delivery_tags_param_when_non_empty() -> None:
+    """Phase 5a.2: when the orchestrator passes a non-empty ``tags=(...,)``,
+    the adapter uses those tags as the per-call delivery cue and skips the
+    text-parsing fallback. Plain text + non-empty ``tags`` → cue suffix
+    appears in ``system_instruction``.
+    """
+    handler = _StubGeminiTTSHandler(tts_results=[_pcm_bytes(2400)])
+    adapter = GeminiTTSAdapter(handler)  # type: ignore[arg-type]
+
     [_ async for _ in adapter.synthesize("Plain sentence.", tags=("fast",))]
 
     assert len(handler.tts_calls) == 1
     _, instruction = handler.tts_calls[0]
-    # No tag in the text → adapter computed an empty tag list → the cue
-    # suffix from ``build_tts_system_instruction`` is absent. Pin this via
-    # the suffix marker rather than vocabulary that may overlap with the
-    # base persona instruction.
     assert instruction is not None
-    assert "Delivery cues for this line:" not in instruction
+    assert "Delivery cues for this line:" in instruction
+
+
+@pytest.mark.asyncio
+async def test_synthesize_param_tags_override_text_markers() -> None:
+    """When ``tags`` is non-empty the param wins; text markers are not
+    re-extracted on top. The single-source-of-truth contract avoids
+    double-counting tags that appear in both channels."""
+    handler = _StubGeminiTTSHandler(tts_results=[_pcm_bytes(2400)])
+    adapter = GeminiTTSAdapter(handler)  # type: ignore[arg-type]
+
+    # The text contains [annoyance] but the param says ("fast",). The
+    # adapter should treat ("fast",) as the cue source. We pin this by
+    # asserting that the spoken text passed to ``_call_tts_with_retry``
+    # still has tags stripped (so the model doesn't speak ``[annoyance]``
+    # literally), but the cue suffix matches the *param*-driven tag set.
+    [_ async for _ in adapter.synthesize("[annoyance] Plain.", tags=("fast",))]
+
+    assert len(handler.tts_calls) == 1
+    spoken, instruction = handler.tts_calls[0]
+    # Tags-in-text are always stripped from the *spoken* string regardless
+    # of which channel drives the cues.
+    assert "[annoyance]" not in spoken
+    # And the cue suffix is present because ``tags=("fast",)`` is non-empty.
+    assert instruction is not None
+    assert "Delivery cues for this line:" in instruction
+
+
+@pytest.mark.asyncio
+async def test_synthesize_param_short_pause_inserts_silence_once() -> None:
+    """``SHORT_PAUSE_TAG`` in the ``tags`` param triggers a single pre-stream
+    silence burst on the first sentence (not per-sentence). Mirrors the
+    per-call semantics: the param applies once to the whole synthesize call.
+    """
+    handler = _StubGeminiTTSHandler(tts_results=[_pcm_bytes(2400), _pcm_bytes(2400)])
+    adapter = GeminiTTSAdapter(handler)  # type: ignore[arg-type]
+
+    out = [
+        frame
+        async for frame in adapter.synthesize(
+            "First sentence. Second sentence.",
+            tags=(SHORT_PAUSE_TAG,),
+        )
+    ]
+
+    # silence_pcm at SHORT_PAUSE_MS (400 ms) = 9600 samples → 4 chunks of
+    # _CHUNK_SAMPLES=2400. Plus 2 chunks of spoken audio = 6 frames total.
+    expected_silence_samples = int(GEMINI_TTS_OUTPUT_SAMPLE_RATE * SHORT_PAUSE_MS / 1000)
+    expected_silence_chunks = (expected_silence_samples + 2400 - 1) // 2400
+    assert len(out) == expected_silence_chunks + 2
+
+    # Silence frames must come first; the two trailing frames are the
+    # spoken audio (one per sentence). The silence-only-once contract is
+    # the key pin here — without the once-guard we'd see 2 × silence
+    # bursts for 2 sentences.
+    for frame in out[:expected_silence_chunks]:
+        samples = np.asarray(frame.samples)
+        assert np.all(samples == 0)
+    for spoken_frame in out[expected_silence_chunks:]:
+        samples = np.asarray(spoken_frame.samples)
+        # The stub returns zero-filled PCM by default but we set fill=0
+        # implicitly via _pcm_bytes(2400) — so the spoken frames are also
+        # zeros. The shape-and-count assertion above is what pins
+        # silence-once.
+        assert samples.shape == (2400,)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5a.2 — first_audio_marker channel
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_appends_first_audio_marker_on_first_frame() -> None:
+    """Phase 5a.2: the adapter appends a ``time.monotonic()`` timestamp to
+    the caller-supplied ``first_audio_marker`` list on the first yielded
+    frame; single-shot per call."""
+    handler = _StubGeminiTTSHandler(tts_results=[_pcm_bytes(2400), _pcm_bytes(2400)])
+    adapter = GeminiTTSAdapter(handler)  # type: ignore[arg-type]
+
+    marker: list[float] = []
+    out = [frame async for frame in adapter.synthesize("First. Second.", first_audio_marker=marker)]
+    assert len(out) >= 1
+    assert len(marker) == 1, "marker must be appended exactly once"
+    assert isinstance(marker[0], float)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_does_not_touch_marker_when_none() -> None:
+    """``first_audio_marker=None`` (default) → no exception, no append path."""
+    handler = _StubGeminiTTSHandler(tts_results=[_pcm_bytes(2400)])
+    adapter = GeminiTTSAdapter(handler)  # type: ignore[arg-type]
+    async for _ in adapter.synthesize("Hello."):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_synthesize_does_not_append_marker_when_no_frames() -> None:
+    """Empty text → no frames → marker stays empty."""
+    handler = _StubGeminiTTSHandler()
+    adapter = GeminiTTSAdapter(handler)  # type: ignore[arg-type]
+    marker: list[float] = []
+    async for _ in adapter.synthesize("", first_audio_marker=marker):
+        pass
+    assert marker == []
 
 
 # ---------------------------------------------------------------------------

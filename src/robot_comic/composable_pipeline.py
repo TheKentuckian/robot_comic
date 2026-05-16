@@ -275,11 +275,20 @@ class ComposablePipeline:
         except Exception as exc:  # pragma: no cover — helper is itself defensive
             logger.debug("record_joke_history raised through to orchestrator: %s", exc)
         self._conversation_history.append({"role": "assistant", "content": text})
-        # TODO(phase3): plumb delivery tags from ``response.metadata`` into
-        # ``tts.synthesize(text, tags=...)``. The TTS Protocol accepts a
-        # ``tags`` tuple (``fast``/``slow``/``annoyance``/etc.) that the
-        # existing ElevenLabs handler uses, but it has no channel here yet
-        # — adapters in Phase 3 will surface the existing handlers' tag
-        # extraction and we'll thread it through metadata at that point.
-        async for frame in self.tts.synthesize(text):
+        # Phase 5a.2: thread the structured ``delivery_tags`` channel from
+        # ``LLMResponse`` to ``TTSBackend.synthesize(tags=...)``. Today's
+        # LLM adapters leave the tuple empty, so TTS adapters fall back to
+        # the today text-parsing behaviour; future PRs that surface
+        # structured cues from the LLM populate the field and the consume
+        # path activates without further orchestrator changes.
+        # ``first_audio_marker`` (Phase 5a.2): allocate a fresh list per
+        # turn so the TTS adapter can stamp first-audio-out wallclock;
+        # downstream telemetry consumers are a separate PR. See
+        # ``docs/superpowers/specs/2026-05-16-phase-5a2-delivery-tag-plumbing.md``.
+        first_audio_marker: list[float] = []
+        async for frame in self.tts.synthesize(
+            text,
+            tags=response.delivery_tags,
+            first_audio_marker=first_audio_marker,
+        ):
             await self.output_queue.put(frame)
