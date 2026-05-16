@@ -65,8 +65,10 @@ from robot_comic.backends import (
     TTSBackend,
     LLMResponse,
 )
+from robot_comic.config import set_custom_profile
 from robot_comic.history_trim import trim_history_in_place
 from robot_comic.joke_history import record_joke_history
+from robot_comic.prompts import get_session_instructions
 
 
 logger = logging.getLogger(__name__)
@@ -192,6 +194,53 @@ class ComposablePipeline:
             self._conversation_history = [self._conversation_history[0]]
         else:
             self._conversation_history = []
+
+    async def apply_personality(self, profile: str | None) -> str:
+        """Switch personality, reset history + per-session TTS state, re-seed system prompt.
+
+        Phase 5c.2 (#TBD) moved this body off
+        :class:`ComposableConversationHandler` and onto the pipeline; the
+        wrapper is now a thin pass-through. Persona switch is pipeline-shaped
+        state surgery (history reset + system-prompt re-seed) plus a hard
+        cut on TTS listening state via :meth:`TTSBackend.reset_per_session_state`,
+        so the work belongs here rather than at the FastRTC-adapter
+        boundary.
+
+        Flow:
+
+        1. :func:`set_custom_profile` — flip the global profile dial. On
+           failure, return a "Failed to apply personality" string without
+           touching history or per-session state (pins the partial-failure
+           contract: a typo'd profile name does not half-reset the session).
+        2. :meth:`reset_history` with ``keep_system=False`` — wipe
+           everything, including the prior persona's system prompt.
+        3. :meth:`TTSBackend.reset_per_session_state` — clear the wrapped
+           handler's echo-guard accumulators (``_speaking_until``,
+           ``_response_start_ts``, ``_response_audio_bytes``) so a stale
+           playback deadline from the previous persona does not bleed
+           into the new persona's listening window. Wired in Phase 5a.1
+           on the wrapper, moved onto :class:`TTSBackend` in Phase 5c.2.
+        4. Re-seed the system prompt with :func:`get_session_instructions`
+           so the next LLM round-trip uses the new persona's instructions.
+
+        Joke history is a cross-persona file
+        (``~/.robot-comic/joke-history.json``) read in
+        ``prompts.py:_append_joke_history`` — it intentionally persists
+        across personality switches so each persona avoids the others'
+        punchlines (legacy parity, see ``joke_history.format_for_prompt``
+        comment "Pulls entries from ALL personas (cross-persona dedup)").
+        """
+        try:
+            set_custom_profile(profile)
+        except Exception as exc:
+            logger.error("Error applying personality %r: %s", profile, exc)
+            return f"Failed to apply personality: {exc}"
+        self.reset_history(keep_system=False)
+        await self.tts.reset_per_session_state()
+        self._conversation_history.append(
+            {"role": "system", "content": get_session_instructions()}
+        )
+        return f"Applied personality {profile!r}. Conversation history reset."
 
     # ---------------------------------------------------------------------
     # Internal — transcript-triggered turn loop
