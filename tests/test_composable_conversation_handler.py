@@ -369,10 +369,14 @@ async def test_integration_transcript_to_audio_frame() -> None:
     await callback_holder["fn"]("hello")
 
     # The TTS frame should now be on the wrapper's output queue.
-    frame = await asyncio.wait_for(wrapper.emit(), timeout=1.0)
-    assert isinstance(frame, BackendsAudioFrame)
-    assert frame.sample_rate == 24000
-    assert frame.samples.shape == (48,)
+    # Hotfix #2 (2026-05-16): the orchestrator unwraps the adapter's
+    # ``AudioFrame`` dataclass into the ``(sample_rate, samples)`` tuple
+    # shape that ``console.py``'s playback consumer expects.
+    item = await asyncio.wait_for(wrapper.emit(), timeout=1.0)
+    assert isinstance(item, tuple)
+    sample_rate, samples = item
+    assert sample_rate == 24000
+    assert samples.shape == (48,)
 
     await wrapper.shutdown()
     await asyncio.wait_for(start_task, timeout=1.0)
