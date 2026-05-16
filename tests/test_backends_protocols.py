@@ -226,6 +226,7 @@ def test_llm_response_defaults_to_empty() -> None:
     assert r.text == ""
     assert r.tool_calls == ()
     assert r.metadata == {}
+    assert r.delivery_tags == ()
 
 
 def test_llm_response_with_tool_calls() -> None:
@@ -233,6 +234,29 @@ def test_llm_response_with_tool_calls() -> None:
     r = LLMResponse(tool_calls=calls)
     assert r.tool_calls == calls
     assert r.text == ""
+
+
+def test_llm_response_has_delivery_tags_default_empty_tuple() -> None:
+    """Phase 5a.2: ``LLMResponse.delivery_tags`` is a new typed channel.
+
+    LLM adapters that don't surface structured delivery hints leave it at
+    the default empty tuple; TTS adapters fall back to parsing tags from
+    the text in that case (the today behaviour).
+    """
+    r = LLMResponse()
+    assert r.delivery_tags == ()
+
+
+def test_llm_response_accepts_delivery_tags_tuple() -> None:
+    """Phase 5a.2: callers may construct ``LLMResponse`` with a tag tuple.
+
+    The orchestrator passes ``response.delivery_tags`` to
+    ``TTSBackend.synthesize(tags=...)`` so populated tags reach TTS via the
+    structured channel rather than text-parsing.
+    """
+    r = LLMResponse(text="Hi.", delivery_tags=("fast", "annoyance"))
+    assert r.delivery_tags == ("fast", "annoyance")
+    assert r.text == "Hi."
 
 
 def test_audio_frame_carries_samples_and_rate() -> None:

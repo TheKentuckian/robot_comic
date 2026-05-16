@@ -74,6 +74,14 @@ class LLMResponse:
     ``tool_calls`` is non-empty (the LLM wants tools dispatched and another
     round-trip). Implementations MAY populate both — the orchestrator
     decides what to do based on which is present.
+
+    ``delivery_tags`` carries optional delivery hints (``fast``, ``slow``,
+    ``annoyance``, ``short pause``, etc.) that downstream TTS backends may
+    consume in lieu of parsing the text. When empty (the default), TTS
+    adapters fall back to text-based extraction — the today behaviour where
+    LLM prompts embed ``[fast]``-style markers in the spoken text. The
+    orchestrator (``ComposablePipeline._speak_assistant_text``) passes this
+    tuple through to ``TTSBackend.synthesize(tags=...)``.
     """
 
     text: str = ""
@@ -82,6 +90,11 @@ class LLMResponse:
     # finish_reason, etc.). Kept opaque so the Protocol doesn't pin a
     # specific telemetry shape.
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Structured delivery hints for the TTS layer. Empty = "fall back to
+    # text-based tag extraction" (today's behaviour for GeminiTTSAdapter
+    # and ChatterboxTTSAdapter); non-empty = "use these as the per-call
+    # delivery cue, ignore any markers embedded in the text".
+    delivery_tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
