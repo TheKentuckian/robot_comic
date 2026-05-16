@@ -66,9 +66,9 @@ adapter doesn't own a queue.
 """
 
 from __future__ import annotations
+import time
 import asyncio
 import logging
-import time
 from typing import Any, Protocol, AsyncIterator
 
 from robot_comic.backends import AudioFrame

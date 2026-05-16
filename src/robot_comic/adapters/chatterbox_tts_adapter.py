@@ -61,9 +61,9 @@ sentinels do not count — only PCM frames trigger the append.
 """
 
 from __future__ import annotations
+import time
 import asyncio
 import logging
-import time
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from robot_comic.backends import AudioFrame

@@ -324,10 +324,7 @@ async def test_synthesize_drops_non_tuple_items_does_not_count_as_first_frame() 
     )
     adapter = ChatterboxTTSAdapter(handler)  # type: ignore[arg-type]
     marker: list[float] = []
-    out = [
-        frame
-        async for frame in adapter.synthesize("hi", first_audio_marker=marker)
-    ]
+    out = [frame async for frame in adapter.synthesize("hi", first_audio_marker=marker)]
     assert len(out) == 1
     # Marker appended on the real audio frame, not the dropped sentinel.
     assert len(marker) == 1

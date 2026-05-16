@@ -54,9 +54,9 @@ internal telemetry events. The legacy channel still fires from
 """
 
 from __future__ import annotations
+import time
 import asyncio
 import logging
-import time
 from typing import Any, Protocol, AsyncIterator
 
 from robot_comic.backends import AudioFrame

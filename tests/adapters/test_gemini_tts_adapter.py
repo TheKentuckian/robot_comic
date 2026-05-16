@@ -283,9 +283,7 @@ async def test_synthesize_param_short_pause_inserts_silence_once() -> None:
     silence burst on the first sentence (not per-sentence). Mirrors the
     per-call semantics: the param applies once to the whole synthesize call.
     """
-    handler = _StubGeminiTTSHandler(
-        tts_results=[_pcm_bytes(2400), _pcm_bytes(2400)]
-    )
+    handler = _StubGeminiTTSHandler(tts_results=[_pcm_bytes(2400), _pcm_bytes(2400)])
     adapter = GeminiTTSAdapter(handler)  # type: ignore[arg-type]
 
     out = [
@@ -328,18 +326,11 @@ async def test_synthesize_appends_first_audio_marker_on_first_frame() -> None:
     """Phase 5a.2: the adapter appends a ``time.monotonic()`` timestamp to
     the caller-supplied ``first_audio_marker`` list on the first yielded
     frame; single-shot per call."""
-    handler = _StubGeminiTTSHandler(
-        tts_results=[_pcm_bytes(2400), _pcm_bytes(2400)]
-    )
+    handler = _StubGeminiTTSHandler(tts_results=[_pcm_bytes(2400), _pcm_bytes(2400)])
     adapter = GeminiTTSAdapter(handler)  # type: ignore[arg-type]
 
     marker: list[float] = []
-    out = [
-        frame
-        async for frame in adapter.synthesize(
-            "First. Second.", first_audio_marker=marker
-        )
-    ]
+    out = [frame async for frame in adapter.synthesize("First. Second.", first_audio_marker=marker)]
     assert len(out) >= 1
     assert len(marker) == 1, "marker must be appended exactly once"
     assert isinstance(marker[0], float)

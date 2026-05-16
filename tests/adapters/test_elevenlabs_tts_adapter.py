@@ -199,10 +199,7 @@ async def test_synthesize_marker_is_only_appended_once_across_frames() -> None:
     adapter = ElevenLabsTTSAdapter(handler)
 
     marker: list[float] = []
-    out = [
-        frame
-        async for frame in adapter.synthesize("hi", first_audio_marker=marker)
-    ]
+    out = [frame async for frame in adapter.synthesize("hi", first_audio_marker=marker)]
     assert len(out) == 5
     assert len(marker) == 1
 

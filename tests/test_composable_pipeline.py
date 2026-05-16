@@ -864,9 +864,7 @@ async def test_speak_assistant_text_allocates_first_audio_marker() -> None:
 async def test_speak_assistant_text_allocates_fresh_marker_per_turn() -> None:
     """Each turn gets its own marker list — no cross-turn aliasing."""
     stt = _ProgrammableSTT()
-    llm = _ScriptedLLM(
-        [LLMResponse(text="One."), LLMResponse(text="Two.")]
-    )
+    llm = _ScriptedLLM([LLMResponse(text="One."), LLMResponse(text="Two.")])
     tts = _RecordingTTS()
     pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
 

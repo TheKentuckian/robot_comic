@@ -287,10 +287,7 @@ async def test_tts_protocol_synthesize_accepts_first_audio_marker_kwarg() -> Non
     """
     tts = _MockTTS()
     marker: list[float] = []
-    frames = [
-        frame
-        async for frame in tts.synthesize("hi", first_audio_marker=marker)
-    ]
+    frames = [frame async for frame in tts.synthesize("hi", first_audio_marker=marker)]
     assert len(frames) == 1
     # The mock recorded the reference identity; population is per-adapter.
     assert tts.last_marker_ref is marker
