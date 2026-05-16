@@ -161,6 +161,21 @@ class GeminiTextElevenLabsResponseHandler(GeminiTextResponseHandler, ElevenLabsT
         return await ElevenLabsTTSResponseHandler.change_voice(self, voice)
 
     async def _prepare_startup_credentials(self) -> None:
+        # Phase 5e.5 idempotency: the migrated triple's factory composes
+        # a plain leaf handler (no :class:`LocalSTTInputMixin` shell), and
+        # the LLM and TTS adapters each call this method during their
+        # ``prepare`` lifecycle. Unlike the chatterbox-leaf sibling, the
+        # ElevenLabs base method has no idempotency guard of its own
+        # (``elevenlabs_tts.py:333-344``), and this leaf explicitly calls
+        # the base (not via ``super()``) because the diamond bases aren't
+        # cooperative-``super`` ancestors. Without a leaf-level guard,
+        # duplicate calls leak a fresh ``genai.Client`` (base),
+        # ``httpx.AsyncClient`` (base), and ``GeminiLLMClient`` (leaf)
+        # every time. Guard the whole body so duplicate calls are cheap
+        # no-ops. The flag is only set on success so a failed attempt
+        # still re-tries the full chain.
+        if getattr(self, "_startup_credentials_ready", False):
+            return
         # ElevenLabsTTSResponseHandler._prepare_startup_credentials creates the
         # Gemini (text-LLM) client for its own use *and* an httpx client for
         # ElevenLabs API calls.  We call it first, then replace its genai
@@ -187,3 +202,4 @@ class GeminiTextElevenLabsResponseHandler(GeminiTextResponseHandler, ElevenLabsT
             model,
             self.get_current_voice(),
         )
+        self._startup_credentials_ready = True
