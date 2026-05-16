@@ -21,6 +21,13 @@ def _make_handler():
     deps = _make_deps()
     handler = ChatterboxTTSResponseHandler(deps)
     handler._http = AsyncMock()
+    # AsyncMock auto-attribute propagation means ``handler._http.post(...)``
+    # returns an ``AsyncMock`` whose ``raise_for_status()`` / ``json()`` calls
+    # produce coroutines that never get awaited (the production
+    # ``joke_history.extract_punchline_via_llm`` path treats those as sync).
+    # Pin ``post.return_value`` to a plain ``MagicMock`` so those attribute
+    # calls are sync MagicMocks like a real ``httpx.Response``.
+    handler._http.post.return_value = MagicMock()
     return handler
 
 
