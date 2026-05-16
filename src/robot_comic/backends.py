@@ -116,6 +116,13 @@ class AudioFrame:
 TranscriptCallback = Callable[[str], Awaitable[None]]
 
 
+# Speech-started callback: fires once at the beginning of each user turn
+# (first VAD activity). Takes no arguments — the started event's text is
+# usually empty and not load-bearing. Used by the orchestrator to open the
+# turn span and reset speech-reactive secondary state. Phase 5e.2.
+SpeechStartedCallback = Callable[[], Awaitable[None]]
+
+
 # ---------------------------------------------------------------------------
 # Backend Protocols
 # ---------------------------------------------------------------------------
@@ -136,8 +143,25 @@ class STTBackend(Protocol):
     transcripts via the callback.
     """
 
-    async def start(self, on_completed: TranscriptCallback) -> None:
-        """Bind the transcript callback and prepare to receive audio."""
+    async def start(
+        self,
+        on_completed: TranscriptCallback,
+        on_partial: TranscriptCallback | None = None,
+        on_speech_started: SpeechStartedCallback | None = None,
+    ) -> None:
+        """Bind transcript callbacks and prepare to receive audio.
+
+        ``on_completed`` (required) — fires once per completed user line.
+        ``on_partial`` (optional, Phase 5e.2) — fires repeatedly for
+        in-progress partial transcripts; ``None`` opts out.
+        ``on_speech_started`` (optional, Phase 5e.2) — fires once per
+        turn at the start of speech; ``None`` opts out.
+
+        The optional callbacks let the orchestrator subscribe to the
+        full STT event stream after the per-triple migration off
+        ``LocalSTTInputMixin``. Backwards-compatible: pre-5e.2 callers
+        that pass only ``on_completed`` keep working.
+        """
         ...
 
     async def feed_audio(self, frame: AudioFrame) -> None:

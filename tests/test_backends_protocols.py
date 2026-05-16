@@ -43,8 +43,15 @@ class _MockSTT:
         self.audio_frames: list[AudioFrame] = []
         self.stopped = False
 
-    async def start(self, on_completed) -> None:
+    async def start(
+        self,
+        on_completed,
+        on_partial=None,
+        on_speech_started=None,
+    ) -> None:
         self.on_completed = on_completed
+        self.on_partial = on_partial
+        self.on_speech_started = on_speech_started
 
     async def feed_audio(self, frame: AudioFrame) -> None:
         self.audio_frames.append(frame)
@@ -145,13 +152,53 @@ def test_mock_tts_satisfies_protocol() -> None:
 
 def test_unrelated_class_does_not_satisfy_stt_protocol() -> None:
     class _NotSTT:
-        async def start(self, on_completed) -> None: ...
+        async def start(self, on_completed, on_partial=None, on_speech_started=None) -> None: ...
 
         # Missing feed_audio + stop
 
     # runtime_checkable Protocols only check method NAMES, so a class missing
     # a required method should fail the isinstance check.
     assert not isinstance(_NotSTT(), STTBackend)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5e.2 — STTBackend.start accepts on_partial + on_speech_started
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stt_protocol_start_accepts_on_partial_and_on_speech_started() -> None:
+    """Phase 5e.2: ``STTBackend.start`` accepts optional ``on_partial`` and
+    ``on_speech_started`` callbacks so the orchestrator can subscribe to the
+    full event stream after the per-triple migration off ``LocalSTTInputMixin``.
+
+    Both default to ``None`` to keep pre-5e.2 call sites working unchanged
+    (host-coupled :class:`MoonshineSTTAdapter` instances that don't surface
+    partial/speech-started events through the Protocol).
+    """
+    stt = _MockSTT()
+
+    partials: list[str] = []
+
+    async def _on_completed(t: str) -> None: ...
+
+    async def _on_partial(t: str) -> None:
+        partials.append(t)
+
+    started_calls = 0
+
+    async def _on_speech_started() -> None:
+        nonlocal started_calls
+        started_calls += 1
+
+    # All three forms must work without TypeError:
+    await stt.start(_on_completed)  # 5e.1 backwards-compat shape
+    await stt.start(_on_completed, on_partial=_on_partial)
+    await stt.start(
+        _on_completed,
+        on_partial=_on_partial,
+        on_speech_started=_on_speech_started,
+    )
 
 
 def test_unrelated_class_does_not_satisfy_llm_protocol() -> None:
