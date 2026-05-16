@@ -135,13 +135,6 @@ _SUPPORTED_MATRIX_DOC = (
 # ---------------------------------------------------------------------------
 
 
-class _LocalSTTGeminiElevenLabsHost(LocalSTTInputMixin, GeminiTextElevenLabsResponseHandler):
-    """Composable host: Moonshine STT input + Gemini text LLM + ElevenLabs TTS."""
-
-    async def _dispatch_completed_transcript(self, transcript: str) -> None:
-        await GeminiTextElevenLabsResponseHandler._dispatch_completed_transcript(self, transcript)
-
-
 class _LocalSTTGeminiTTSHost(LocalSTTInputMixin, GeminiTTSResponseHandler):
     """Composable host: Moonshine STT input + bundled Gemini LLM + Gemini TTS."""
 
@@ -715,21 +708,31 @@ def _build_composable_gemini_chatterbox(**handler_kwargs: Any) -> Any:
 def _build_composable_gemini_elevenlabs(**handler_kwargs: Any) -> Any:
     """Construct the composable (moonshine, gemini, elevenlabs) pipeline.
 
-    Composes :class:`LocalSTTInputMixin` over
-    :class:`GeminiTextElevenLabsResponseHandler` via
-    :class:`_LocalSTTGeminiElevenLabsHost`, wraps it with the three Phase
-    3/4 adapters, composes them into a :class:`ComposablePipeline` seeded
-    with the current session instructions, and returns a
-    :class:`ComposableConversationHandler` whose ``build`` closure re-runs
-    the same construction.
+    Phase 5e.5: this triple migrates off :class:`LocalSTTInputMixin`.
+    The handler is now a plain
+    :class:`GeminiTextElevenLabsResponseHandler` (no mixin shell); STT
+    is a standalone :class:`MoonshineSTTAdapter` with a
+    ``should_drop_frame`` echo-guard closure; the orchestrator-level
+    concerns (turn-span, output_queue publishing, set_listening,
+    pause-controller, welcome gate, name-validation transcript
+    recording) live on :class:`ComposablePipeline` behind the ``deps``
+    and ``welcome_gate`` kwargs.
 
-    The ElevenLabs TTS half is shared with the llama variant; the LLM half
-    is the same ``GeminiLLMAdapter`` from the gemini-chatterbox triple. No
-    new adapter is introduced — only the routing. The
+    Mechanical mirror of :func:`_build_composable_gemini_chatterbox`
+    (the Phase 5e.4 sibling); the only triple-specific substitution is
+    the TTS adapter (``ElevenLabsTTSAdapter`` instead of
+    ``ChatterboxTTSAdapter``). The ``_speaking_until`` echo-guard
+    semantics are shared because
+    :class:`GeminiTextElevenLabsResponseHandler` initialises
+    ``_speaking_until = 0.0`` in
+    :class:`ElevenLabsTTSResponseHandler.__init__` (and writes it from
+    the ElevenLabs TTS streaming loop). The
     ``_ElevenLabsCompatibleHandler`` Protocol broadening in
-    ``elevenlabs_tts_adapter.py`` is what lets the ElevenLabs adapter accept
-    the diamond-MRO ``GeminiTextElevenLabsResponseHandler`` without a cast.
+    ``elevenlabs_tts_adapter.py`` is what lets the ElevenLabs adapter
+    accept the diamond-MRO leaf without a cast.
     """
+    import time as _time
+
     from robot_comic.prompts import get_session_instructions
     from robot_comic.adapters import (
         GeminiLLMAdapter,
@@ -740,8 +743,19 @@ def _build_composable_gemini_elevenlabs(**handler_kwargs: Any) -> Any:
     from robot_comic.composable_conversation_handler import ComposableConversationHandler
 
     def _build() -> ComposableConversationHandler:
-        host = _LocalSTTGeminiElevenLabsHost(**handler_kwargs)
-        stt = MoonshineSTTAdapter(host)
+        # Plain handler — no LocalSTTInputMixin shell. The handler
+        # exposes ``_speaking_until`` (initialised in
+        # ``ElevenLabsTTSResponseHandler.__init__``; written by the
+        # ElevenLabs TTS streaming loop) which the STT echo-guard reads.
+        host = GeminiTextElevenLabsResponseHandler(**handler_kwargs)
+
+        def _should_drop_frame() -> bool:
+            # Drop input frames while TTS is still playing — same check
+            # the legacy ``LocalSTTInputMixin.receive`` ran inline
+            # (``local_stt_realtime.py:796-798``).
+            return _time.perf_counter() < getattr(host, "_speaking_until", 0.0)
+
+        stt = MoonshineSTTAdapter(should_drop_frame=_should_drop_frame)
         llm = GeminiLLMAdapter(host)
         tts = ElevenLabsTTSAdapter(host)
         pipeline = ComposablePipeline(
@@ -750,6 +764,8 @@ def _build_composable_gemini_elevenlabs(**handler_kwargs: Any) -> Any:
             tts,
             tool_dispatcher=_make_tool_dispatcher(host),
             system_prompt=get_session_instructions(),
+            deps=handler_kwargs["deps"],
+            welcome_gate=_maybe_build_welcome_gate(),
         )
         return ComposableConversationHandler(
             pipeline=pipeline,
