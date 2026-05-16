@@ -58,18 +58,6 @@ class _ElevenLabsStub:
             await self.output_queue.put((sr, frame))
         return bool(self._frames)
 
-    # Voice-method surface (Phase 5c.1): match the lenient legacy contract —
-    # ``change_voice`` stores any string and returns a confirmation, no
-    # validation. Matches ``elevenlabs_tts.ElevenLabsTTSResponseHandler``.
-    async def get_available_voices(self) -> list[str]:
-        return ["Brian", "Adam"]
-
-    def get_current_voice(self) -> str:
-        return "Brian"
-
-    async def change_voice(self, voice: str) -> str:
-        return f"Voice changed to {voice}."
-
 
 class _ChatterboxStub:
     """Mimics ChatterboxTTSResponseHandler's queue-push streaming."""
@@ -94,18 +82,6 @@ class _ChatterboxStub:
             raise self._raise
         for item in self._frames:
             await self.output_queue.put(item)
-
-    # Voice-method surface (Phase 5c.1): match ChatterboxTTSResponseHandler's
-    # contract — ``get_current_voice`` returns the stored voice ref,
-    # ``change_voice`` sets the override and returns a confirmation.
-    async def get_available_voices(self) -> list[str]:
-        return ["voice_a.wav", "voice_b.wav"]
-
-    def get_current_voice(self) -> str:
-        return "voice_a.wav"
-
-    async def change_voice(self, voice: str) -> str:
-        return f"Voice changed to {voice}."
 
 
 def _pcm_bytes(n_samples: int, fill: int = 0) -> bytes:
@@ -134,18 +110,6 @@ class _GeminiStub:
 
     async def _run_llm_with_tools(self) -> str:  # pragma: no cover — Protocol requirement
         return ""
-
-    # Voice-method surface (Phase 5c.1): match GeminiTTSResponseHandler's
-    # contract — fixed list of supported voices, ``change_voice`` stores the
-    # override without validation.
-    async def get_available_voices(self) -> list[str]:
-        return ["Achird", "Achernar"]
-
-    def get_current_voice(self) -> str:
-        return "Achird"
-
-    async def change_voice(self, voice: str) -> str:
-        return f"Voice changed to {voice}."
 
 
 # ---------------------------------------------------------------------------
@@ -267,58 +231,3 @@ async def test_shutdown_is_safe_with_no_open_resource(build: Any) -> None:
     files."""
     adapter, _ = build()
     await adapter.shutdown()  # must not raise
-
-
-# ---------------------------------------------------------------------------
-# Voice-method contract (Phase 5c.1)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("build", ADAPTERS)
-@pytest.mark.asyncio
-async def test_get_available_voices_returns_list_of_strings(build: Any) -> None:
-    """``await adapter.get_available_voices()`` returns a ``list[str]``.
-
-    The exact catalog is adapter-specific (Gemini has a fixed list,
-    Chatterbox HTTP-fetches with fallback, ElevenLabs returns its
-    constant set). The contract is just the shape."""
-    adapter, _ = build()
-    voices = await adapter.get_available_voices()
-    assert isinstance(voices, list)
-    for v in voices:
-        assert isinstance(v, str)
-
-
-@pytest.mark.parametrize("build", ADAPTERS)
-def test_get_current_voice_returns_string(build: Any) -> None:
-    """``adapter.get_current_voice()`` is sync and returns a string.
-
-    Matches the legacy handler signatures — admin-UI call sites expect a
-    synchronous read."""
-    adapter, _ = build()
-    voice = adapter.get_current_voice()
-    assert isinstance(voice, str)
-
-
-@pytest.mark.parametrize("build", ADAPTERS)
-@pytest.mark.asyncio
-async def test_change_voice_returns_resolved_id(build: Any) -> None:
-    """``await adapter.change_voice(voice)`` returns a confirmation string.
-
-    All three legacy TTS handlers return ``f"Voice changed to {voice}."``;
-    the contract just pins "string return", not the exact message
-    format."""
-    adapter, _ = build()
-    result = await adapter.change_voice("SomeVoice")
-    assert isinstance(result, str)
-
-
-@pytest.mark.parametrize("build", ADAPTERS)
-@pytest.mark.asyncio
-async def test_change_voice_to_unknown_voice_does_not_raise(build: Any) -> None:
-    """The legacy contract is lenient: unknown voices are stored as-is and
-    resolved at synthesis time (or the synthesis path falls back). Pin this
-    so future hardening (validate-at-change) is an explicit contract change."""
-    adapter, _ = build()
-    result = await adapter.change_voice("definitely-not-a-real-voice-id-12345")
-    assert isinstance(result, str)
