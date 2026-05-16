@@ -30,6 +30,7 @@ dist/
 htmlcov/
 coverage.xml
 *.cover
+.testmondata
 
 # Linting and formatting
 .ruff_cache/

@@ -72,7 +72,8 @@ compatible with the versions in this project's `pyproject.toml`.
 
 When working on this repo, **push incremental changes to your branch early and often**—don't wait to finish everything locally before validating. GitHub Actions will automatically run:
 
-- `pytest` — unit tests across Linux, macOS, and Windows
+- `pytest-fast` — unit tests, fast subset (`-m 'not slow and not integration and not hardware'`), Linux + Windows. Required for merge. 90 s wall-clock budget.
+- `pytest-full` — same suite minus `hardware`, advisory on PRs. Gating on `push: branches: [main]` (opens a GitHub issue on regression; no auto-revert).
 - `ruff check` — linting
 - `ruff format` — code formatting
 - `mypy` — type checking
@@ -85,6 +86,66 @@ When working on this repo, **push incremental changes to your branch early and o
 5. Once CI passes, open a PR or continue development
 
 This keeps iteration cycles tight and catches platform-specific or dependency issues early.
+
+## Test tiering
+
+The test suite is organised into three concentric loops. Each step
+forward trades coverage for latency.
+
+| Loop | Command | Latency target | When to use |
+|---|---|---|---|
+| Inner | `pytest --testmon` | < 5 s for an edit | While writing code. testmon re-runs only the tests whose dependency graph was touched by your edit. |
+| Pre-push | `pytest -n auto --ignore=tests/vision/test_local_vision.py` | ~70 s on a fast laptop | Before `git push`. Catches xdist-only races + tests testmon's graph missed. |
+| CI fast | `pytest-fast` workflow | ~90 s | Automatic on every PR. Required for merge. |
+| CI full | `pytest-full` workflow | ~3-5 min | Automatic. Advisory on PRs; gating on push-to-main. |
+
+### testmon setup
+
+The `dev` group installs `pytest-testmon`. First-time setup:
+
+```bash
+.venv/bin/pytest --testmon  # one full run to build .testmondata
+```
+
+Subsequent runs re-use `.testmondata` and execute only the affected
+subset. `.testmondata` is gitignored.
+
+### Worked example: "I changed `src/robot_comic/composable_pipeline.py`"
+
+1. `pytest --testmon` — testmon runs `test_composable_pipeline.py`,
+   `test_composable_conversation_handler.py`, `test_phase_5b_*`, and any
+   integration test whose imports transitively touched the changed
+   module. ~5-10 s.
+2. Iterate. testmon hot-loops on each edit.
+3. When the change is settled and the testmon run is green:
+   `pytest -n auto --ignore=tests/vision/test_local_vision.py`. Full
+   parallel suite, ~70 s. This catches:
+   - xdist-only races (tests that share global state).
+   - Tests testmon didn't pick up because the dependency lives outside
+     the import graph (string-based dispatch, env-var-driven config,
+     etc.).
+   - The slow-marked subset that testmon would skip-via-marker.
+4. `git push`. `pytest-fast` runs in CI; if it goes green, the PR is
+   merge-ready from a test-gating perspective.
+
+### Test markers
+
+Three pytest markers tier the suite. Apply markers conservatively —
+only when the test is genuinely in that category.
+
+| Marker | Apply when | Example |
+|---|---|---|
+| `slow` | Test wall clock exceeds 500 ms. | `tests/test_cold_boot_imports.py` (subprocess-per-test, ~20-25 s each) |
+| `integration` | Test shells out, opens network sockets, downloads ML models, or otherwise exercises external surfaces. | The `tests/integration/` smoke suite; the cold-boot subprocess checks. |
+| `hardware` | Test requires real ALSA / serial / GPIO devices. Not currently used in CI — these only run on the robot. | Direct ALSA RW capture probes; reachy_mini daemon `set_mode/enabled` round-trips. |
+
+A test can have multiple markers (`slow + integration` is common). Find
+slow candidates with `pytest --durations=25`. Find tests in a given tier
+with `pytest -m slow --collect-only`.
+
+The fast PR gate (`pytest-fast` workflow) runs
+`-m 'not slow and not integration and not hardware'`. Anything that
+shouldn't block merge gets one of those three markers.
 
 ## Running on the robot
 
