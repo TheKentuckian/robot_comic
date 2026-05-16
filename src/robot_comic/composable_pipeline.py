@@ -557,4 +557,16 @@ class ComposablePipeline:
             tags=response.delivery_tags,
             first_audio_marker=first_audio_marker,
         ):
-            await self.output_queue.put(frame)
+            # ``console.py``'s playback loop branches on
+            # ``isinstance(handler_output, tuple)`` to dispatch to ALSA
+            # (see ``console.py:1466``). The TTS adapters yield
+            # :class:`AudioFrame` dataclasses for the Protocol-level
+            # surface; the legacy ``elevenlabs_tts.py`` put-site (line
+            # ~487) bypassed the wrapping and pushed
+            # ``(sample_rate, ndarray)`` tuples straight onto the queue.
+            # Unwrap here so downstream consumers stay shape-compatible.
+            # Without this, TTS audio is silently dropped on hardware
+            # (the dataclass falls through ``isinstance(..., tuple)`` and
+            # ``isinstance(..., AdditionalOutputs)`` checks). Caught
+            # during 2026-05-16 hardware validation on ricci.
+            await self.output_queue.put((frame.sample_rate, frame.samples))
