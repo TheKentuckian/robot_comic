@@ -69,12 +69,25 @@ class _RecordingTTS:
         self.prepared = False
         self.shutdown_called = False
         self.calls: list[tuple[str, tuple[str, ...]]] = []
+        self.marker_refs: list[list[float] | None] = []
 
     async def prepare(self) -> None:
         self.prepared = True
 
-    async def synthesize(self, text: str, tags: tuple[str, ...] = ()) -> AsyncIterator[AudioFrame]:
+    async def synthesize(
+        self,
+        text: str,
+        tags: tuple[str, ...] = (),
+        first_audio_marker: list[float] | None = None,
+    ) -> AsyncIterator[AudioFrame]:
         self.calls.append((text, tags))
+        self.marker_refs.append(first_audio_marker)
+        # Populate the marker like a real adapter would so the orchestrator
+        # has a stamp to read out, in case future test cases want it.
+        if first_audio_marker is not None:
+            import time as _time
+
+            first_audio_marker.append(_time.monotonic())
         yield AudioFrame(samples=[0, 0, 0], sample_rate=24000)
 
     async def shutdown(self) -> None:
@@ -765,6 +778,107 @@ async def test_trim_history_cap_respected_across_user_turns(
     assert len(user_msgs) == 2
     assert user_msgs[0]["content"] == "turn two"
     assert user_msgs[1]["content"] == "turn three"
+
+    await pipeline.shutdown()
+    await task
+
+
+# ---------------------------------------------------------------------------
+# Phase 5a.2 — delivery-tag + first-audio-marker plumbing through orchestrator
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_speak_assistant_text_threads_delivery_tags_to_tts() -> None:
+    """Phase 5a.2: ``LLMResponse.delivery_tags`` flows into
+    ``TTSBackend.synthesize(tags=...)``. The orchestrator passes the tuple
+    through unchanged; adapters decide whether to consume from the param or
+    fall back to text parsing."""
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([LLMResponse(text="Hi!", delivery_tags=("fast",))])
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    await stt.on_completed("ping")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    assert tts.calls == [("Hi!", ("fast",))]
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_speak_assistant_text_passes_empty_tags_when_response_unpopulated() -> None:
+    """When the LLM response has the default empty ``delivery_tags``, the
+    orchestrator still passes an empty tuple — adapters fall back to their
+    text-parsing path. Pins the fallback contract."""
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([LLMResponse(text="Plain reply.")])  # delivery_tags=() default
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+    await stt.on_completed("ping")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    assert tts.calls == [("Plain reply.", ())]
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_speak_assistant_text_allocates_first_audio_marker() -> None:
+    """Phase 5a.2: orchestrator allocates a fresh ``list[float] = []`` per
+    turn and passes it to ``TTSBackend.synthesize(first_audio_marker=...)``.
+    Population is the adapter's responsibility — the orchestrator only owns
+    the allocation."""
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([LLMResponse(text="Hi.")])
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+    await stt.on_completed("ping")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    assert len(tts.marker_refs) == 1
+    marker = tts.marker_refs[0]
+    assert marker is not None
+    # The _RecordingTTS mock populates the marker (mimicking real-adapter
+    # behaviour) so the orchestrator could read a stamp out after iteration.
+    assert len(marker) == 1
+    assert isinstance(marker[0], float)
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_speak_assistant_text_allocates_fresh_marker_per_turn() -> None:
+    """Each turn gets its own marker list — no cross-turn aliasing."""
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM(
+        [LLMResponse(text="One."), LLMResponse(text="Two.")]
+    )
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+    await stt.on_completed("first")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+    await stt.on_completed("second")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    assert len(tts.marker_refs) == 2
+    assert tts.marker_refs[0] is not tts.marker_refs[1]
 
     await pipeline.shutdown()
     await task
