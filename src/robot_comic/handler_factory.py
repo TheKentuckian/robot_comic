@@ -34,8 +34,16 @@ attempted here.
 """
 
 from __future__ import annotations
+import json
 import logging
 from typing import TYPE_CHECKING, Any, Optional
+
+from robot_comic.backends import ToolCall
+from robot_comic.tools.core_tools import (
+    dispatch_tool_call,
+    dispatch_tool_call_with_manager,
+)
+from robot_comic.tools.tool_constants import SystemTool
 
 from robot_comic.config import (
     AUDIO_INPUT_HF,
@@ -389,6 +397,121 @@ class HandlerFactory:
         )
 
 
+# ---------------------------------------------------------------------------
+# Tool-dispatcher shim — Phase 5b of the pipeline refactor.
+#
+# ``ComposablePipeline.tool_dispatcher`` is the orchestrator's callback for
+# turning a model-emitted ``ToolCall`` into the ``str`` result that becomes
+# the ``content`` of the next ``role=tool`` history entry. Pre-5b every
+# composable factory builder constructed the pipeline with no dispatcher
+# argument, so the orchestrator's tool-call branch (composable_pipeline.py:
+# 224-231) hit ``self.tool_dispatcher is None``, logged a warning, and
+# broke the loop without speaking on any tool-triggered turn — the §2.2
+# latent bug from ``docs/superpowers/specs/2026-05-16-phase-5-exploration.md``.
+#
+# The shim mirrors the routing logic of
+# :meth:`robot_comic.tools.background_tool_manager.ToolCallRoutine.__call__`:
+# system tools (``task_status`` / ``task_cancel``) need the
+# ``BackgroundToolManager`` injected so they can inspect / cancel other
+# running tools; everything else goes through the plain dispatcher.
+#
+# Background tools (per memo §5.2 deferral): legacy ``_start_tool_calls``
+# fires a ``BackgroundTool`` and returns immediately, with the result
+# arriving via :class:`BackgroundToolManager`'s notification queue. The
+# composable orchestrator's synchronous ``await tool_dispatcher(call)``
+# model doesn't accommodate that today; we keep the cheapest path
+# (synchronous dispatch via ``dispatch_tool_call``) and let any long-running
+# tool block this call. This matches the legacy ``_await_tool_results``
+# 30 s timeout behaviour for the happy path; the background-tool refactor
+# is deferred to a later sub-phase.
+#
+# The :func:`tool.execute` span emit closes the Rec 1 gap from
+# ``docs/superpowers/specs/2026-05-16-instrumentation-audit.md`` — same
+# shape as ``background_tool_manager._run_tool``'s span, with the
+# ``outcome`` attribute and ``tool.name`` / ``tool.id`` from the
+# orchestrator-supplied ``ToolCall``.
+# ---------------------------------------------------------------------------
+
+
+_SYSTEM_TOOL_NAMES: frozenset[str] = frozenset(t.value for t in SystemTool)
+
+
+def _make_tool_dispatcher(host: Any) -> Any:
+    """Build a synchronous tool-dispatcher closure bound to a composable host.
+
+    ``host`` is the factory-private mixin instance (e.g.
+    :class:`_LocalSTTLlamaElevenLabsHost`) that owns ``deps`` and a
+    :class:`BackgroundToolManager`. The returned coroutine matches
+    :data:`robot_comic.composable_pipeline.ToolDispatcher`'s signature.
+
+    The closure emits a ``tool.execute`` span (Phase 5b telemetry, Rec 1
+    from the instrumentation audit) and returns the dispatched tool's
+    result as a JSON-encoded string — what the orchestrator appends to
+    ``conversation_history`` as the ``content`` of a ``role=tool`` entry.
+    """
+    # Local imports keep ``handler_factory``'s top-level import set lean and
+    # avoid a hard dependency on telemetry being initialised at module-load
+    # time. The tracer is a no-op when OTel is not initialised.
+    from robot_comic import telemetry
+
+    async def _dispatch(call: ToolCall) -> str:
+        args = call.args if isinstance(call.args, dict) else {}
+        try:
+            args_json = json.dumps(args)
+        except (TypeError, ValueError):
+            # Defensive: a non-serialisable args payload from a model would
+            # break the tool layer downstream; surface a clean error string
+            # rather than letting the JSON exception escape and break the
+            # turn loop.
+            logger.warning("ToolCall %s args not JSON-serialisable: %r", call.name, call.args)
+            args_json = "{}"
+
+        tracer = telemetry.get_tracer()
+        with tracer.start_as_current_span(
+            "tool.execute",
+            attributes={"tool.name": call.name, "tool.id": call.id},
+        ) as span:
+            try:
+                if call.name in _SYSTEM_TOOL_NAMES:
+                    # Mirrors ToolCallRoutine.__call__: system tools need the
+                    # BackgroundToolManager so they can inspect / cancel
+                    # peers. Reuse the host's manager instance (constructed
+                    # in BaseLlamaResponseHandler.__init__:95 and on every
+                    # other response-handler base).
+                    result = await dispatch_tool_call_with_manager(
+                        tool_name=call.name,
+                        args_json=args_json,
+                        deps=host.deps,
+                        tool_manager=host.tool_manager,
+                    )
+                else:
+                    result = await dispatch_tool_call(
+                        tool_name=call.name,
+                        args_json=args_json,
+                        deps=host.deps,
+                    )
+            except Exception:
+                span.set_attribute("outcome", "error")
+                raise
+            outcome = "error" if isinstance(result, dict) and "error" in result else "success"
+            span.set_attribute("outcome", outcome)
+
+        # The orchestrator stores this verbatim as the ``content`` of a
+        # ``role=tool`` message; JSON-encode so the LLM sees structured
+        # data on the next round-trip (legacy parity:
+        # ``llama_base.py:617`` ``json.dumps(result)``).
+        try:
+            return json.dumps(result)
+        except (TypeError, ValueError):
+            # Last-ditch fallback: surface a string repr if the result is
+            # somehow not serialisable. Should never fire — every tool in
+            # the registry returns plain dicts.
+            logger.warning("Tool %s returned non-JSON-serialisable result", call.name)
+            return repr(result)
+
+    return _dispatch
+
+
 def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
     """Construct the composable (moonshine, llama, elevenlabs) pipeline.
 
@@ -423,6 +546,7 @@ def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
             stt,
             llm,
             tts,
+            tool_dispatcher=_make_tool_dispatcher(host),
             system_prompt=get_session_instructions(),
         )
         return ComposableConversationHandler(
@@ -464,6 +588,7 @@ def _build_composable_llama_chatterbox(**handler_kwargs: Any) -> Any:
             stt,
             llm,
             tts,
+            tool_dispatcher=_make_tool_dispatcher(host),
             system_prompt=get_session_instructions(),
         )
         return ComposableConversationHandler(
@@ -511,6 +636,7 @@ def _build_composable_gemini_chatterbox(**handler_kwargs: Any) -> Any:
             stt,
             llm,
             tts,
+            tool_dispatcher=_make_tool_dispatcher(host),
             system_prompt=get_session_instructions(),
         )
         return ComposableConversationHandler(
@@ -559,6 +685,7 @@ def _build_composable_gemini_elevenlabs(**handler_kwargs: Any) -> Any:
             stt,
             llm,
             tts,
+            tool_dispatcher=_make_tool_dispatcher(host),
             system_prompt=get_session_instructions(),
         )
         return ComposableConversationHandler(

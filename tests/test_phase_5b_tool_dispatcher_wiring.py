@@ -156,13 +156,18 @@ async def test_wired_dispatcher_invokes_dispatch_tool_call(
         captured["deps"] = deps
         return {"ok": True, "danced": "happy"}
 
-    # The factory's dispatcher shim is expected to call
-    # ``robot_comic.tools.core_tools.dispatch_tool_call``. Patch at the
-    # module level so whichever import path the shim uses still picks it
-    # up.
+    # The factory's dispatcher shim calls ``dispatch_tool_call`` imported
+    # at module load. Patch at both the source module and the
+    # ``handler_factory`` binding so whichever path the shim uses is
+    # intercepted (the import-site binding is what actually fires, but
+    # patching the source defends against a future refactor that calls
+    # ``core_tools.dispatch_tool_call`` directly).
+    import robot_comic.handler_factory as factory_mod
     import robot_comic.tools.core_tools as core_tools_mod
 
     monkeypatch.setattr(core_tools_mod, "dispatch_tool_call", _fake_dispatch)
+    if hasattr(factory_mod, "dispatch_tool_call"):
+        monkeypatch.setattr(factory_mod, "dispatch_tool_call", _fake_dispatch)
 
     dispatcher = handler.pipeline.tool_dispatcher
     assert dispatcher is not None  # already pinned above
@@ -207,9 +212,12 @@ async def test_wired_dispatcher_returns_error_string_on_unknown_tool(
     ) -> dict[str, Any]:
         return {"error": f"unknown tool: {tool_name}"}
 
+    import robot_comic.handler_factory as factory_mod
     import robot_comic.tools.core_tools as core_tools_mod
 
     monkeypatch.setattr(core_tools_mod, "dispatch_tool_call", _fake_dispatch)
+    if hasattr(factory_mod, "dispatch_tool_call"):
+        monkeypatch.setattr(factory_mod, "dispatch_tool_call", _fake_dispatch)
 
     dispatcher = handler.pipeline.tool_dispatcher
     assert dispatcher is not None
@@ -219,3 +227,136 @@ async def test_wired_dispatcher_returns_error_string_on_unknown_tool(
     assert isinstance(result, str)
     parsed = json.loads(result)
     assert parsed == {"error": "unknown tool: nonexistent_tool"}
+
+
+# ---------------------------------------------------------------------------
+# Bonus scope — `tool.execute` span emit (Rec 1 from the instrumentation
+# audit memo at docs/superpowers/specs/2026-05-16-instrumentation-audit.md).
+# The monitor's tool-count column reads child ``tool.execute`` spans to
+# populate the Tools cell; the composable orchestrator emitted nothing
+# around the dispatch site post-4d, so the column showed 0 for every
+# composable turn that actually called tools.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_emits_tool_execute_span_with_outcome_success(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_deps: MagicMock,
+) -> None:
+    """A successful tool dispatch emits a ``tool.execute`` span with
+    ``tool.name`` / ``tool.id`` / ``outcome=success`` attributes. The
+    monitor's tool-count column depends on this span; the attribute set
+    matches the legacy ``BackgroundToolManager._run_tool`` span shape so
+    no monitor-side change is needed.
+    """
+    from opentelemetry import trace as ot_trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    # Swap the global tracer provider for this test; restore after via
+    # monkeypatch teardown. ``telemetry.get_tracer()`` calls
+    # ``trace.get_tracer(...)`` which reads the global, so this captures
+    # spans without re-running the full ``telemetry.init()`` machinery.
+    monkeypatch.setattr(ot_trace, "_TRACER_PROVIDER", provider, raising=False)
+    # Defensive: trace API has a setter too.
+    try:
+        ot_trace.set_tracer_provider(provider)
+    except Exception:  # pragma: no cover — already set above
+        pass
+
+    handler = _build_handler(
+        monkeypatch,
+        mock_deps,
+        LLM_BACKEND_LLAMA,
+        AUDIO_OUTPUT_ELEVENLABS,
+    )
+
+    async def _fake_dispatch(
+        tool_name: str, args_json: str, deps: Any
+    ) -> dict[str, Any]:
+        return {"ok": True}
+
+    import robot_comic.handler_factory as factory_mod
+    import robot_comic.tools.core_tools as core_tools_mod
+
+    monkeypatch.setattr(core_tools_mod, "dispatch_tool_call", _fake_dispatch)
+    if hasattr(factory_mod, "dispatch_tool_call"):
+        monkeypatch.setattr(factory_mod, "dispatch_tool_call", _fake_dispatch)
+
+    dispatcher = handler.pipeline.tool_dispatcher
+    assert dispatcher is not None
+
+    call = ToolCall(id="span-test-1", name="dance", args={"name": "happy"})
+    await dispatcher(call)
+
+    spans = [s for s in exporter.get_finished_spans() if s.name == "tool.execute"]
+    assert len(spans) == 1, f"Expected one tool.execute span, got: {[s.name for s in exporter.get_finished_spans()]}"
+    span = spans[0]
+    attrs = dict(span.attributes or {})
+    assert attrs.get("tool.name") == "dance"
+    assert attrs.get("tool.id") == "span-test-1"
+    assert attrs.get("outcome") == "success"
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_emits_tool_execute_span_with_outcome_error(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_deps: MagicMock,
+) -> None:
+    """A tool-layer ``error`` payload tags the span ``outcome=error`` so the
+    monitor can colour the row red. The span still ends cleanly — the
+    error is surfaced to the LLM as a tool-result string, not raised."""
+    from opentelemetry import trace as ot_trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(ot_trace, "_TRACER_PROVIDER", provider, raising=False)
+    try:
+        ot_trace.set_tracer_provider(provider)
+    except Exception:  # pragma: no cover
+        pass
+
+    handler = _build_handler(
+        monkeypatch,
+        mock_deps,
+        LLM_BACKEND_LLAMA,
+        AUDIO_OUTPUT_ELEVENLABS,
+    )
+
+    async def _fake_dispatch(
+        tool_name: str, args_json: str, deps: Any
+    ) -> dict[str, Any]:
+        return {"error": "boom"}
+
+    import robot_comic.handler_factory as factory_mod
+    import robot_comic.tools.core_tools as core_tools_mod
+
+    monkeypatch.setattr(core_tools_mod, "dispatch_tool_call", _fake_dispatch)
+    if hasattr(factory_mod, "dispatch_tool_call"):
+        monkeypatch.setattr(factory_mod, "dispatch_tool_call", _fake_dispatch)
+
+    dispatcher = handler.pipeline.tool_dispatcher
+    assert dispatcher is not None
+
+    call = ToolCall(id="span-test-2", name="bad_tool", args={})
+    await dispatcher(call)
+
+    spans = [s for s in exporter.get_finished_spans() if s.name == "tool.execute"]
+    assert len(spans) == 1
+    attrs = dict(spans[0].attributes or {})
+    assert attrs.get("tool.name") == "bad_tool"
+    assert attrs.get("outcome") == "error"
