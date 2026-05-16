@@ -99,9 +99,35 @@ class ComposableConversationHandler(ConversationHandler):
         return self._build()
 
     async def start_up(self) -> None:
-        """Delegate to :meth:`ComposablePipeline.start_up` — blocks until shutdown."""
-        # TODO(phase4-lifecycle): emit the four boot-timeline supporting events
-        # from #321 before delegating; composable mode currently drops them.
+        """Emit ``handler.start_up.complete`` then delegate to the pipeline.
+
+        Mirrors the legacy ``ElevenLabsTTSResponseHandler.start_up`` emit
+        (#321 / #301) on the composable path: fire the supporting-event row
+        *before* delegating to :meth:`ComposablePipeline.start_up`, which
+        blocks until shutdown. Emitting after the delegate would only land
+        the row on app shutdown — the same bug PR #337 already fixed on the
+        legacy side.
+
+        ``app.startup`` and ``welcome.wav.played`` are not emitted here; they
+        fire from ``main.py`` and ``warmup_audio.py`` before any handler is
+        built and are preserved on both factory paths.
+        ``first_greeting.tts_first_audio`` fires from the TTS frame-enqueue
+        sites; the ElevenLabs and Chatterbox adapters preserve it via
+        delegation. The ``GeminiTTSAdapter`` gap is a separate follow-up.
+        """
+        try:
+            from robot_comic import telemetry as _telemetry
+            from robot_comic.startup_timer import since_startup
+
+            _telemetry.emit_supporting_event(
+                "handler.start_up.complete",
+                dur_ms=since_startup() * 1000,
+            )
+        except Exception:
+            # Telemetry must never block boot — drop the row if emission
+            # throws (import error, exporter wiring quirk, etc.). Matches the
+            # ``try/except`` at the legacy emit site in elevenlabs_tts.py.
+            pass
         await self.pipeline.start_up()
 
     async def shutdown(self) -> None:

@@ -49,6 +49,80 @@ async def test_start_up_delegates_to_pipeline() -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_up_emits_handler_start_up_complete_before_delegating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wrapper must emit ``handler.start_up.complete`` *before* awaiting
+    ``pipeline.start_up()`` so the monitor boot-timeline lane closes with a
+    "handler ready" row instead of a "handler shutdown" one.
+
+    Pins Lifecycle Hook #3 (#337). Mirrors the legacy
+    ``ElevenLabsTTSResponseHandler.start_up`` emit (#321 / #301): the legacy
+    handler emits inside its own ``start_up`` right before blocking on the
+    stop event; the composable wrapper emits inside its own ``start_up``
+    right before delegating to the pipeline (which itself blocks until
+    shutdown).
+    """
+    from robot_comic import telemetry
+
+    wrapper = _make_wrapper()
+
+    # Record whether the emit fired before pipeline.start_up was awaited.
+    emit_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    pipeline_seen_emits: list[int] = []
+
+    async def _record_start_up(*_a: Any, **_kw: Any) -> None:
+        pipeline_seen_emits.append(len(emit_calls))
+
+    wrapper.pipeline.start_up = AsyncMock(side_effect=_record_start_up)
+
+    def _record_emit(*args: Any, **kwargs: Any) -> None:
+        emit_calls.append((args, kwargs))
+
+    monkeypatch.setattr(telemetry, "emit_supporting_event", _record_emit)
+
+    await wrapper.start_up()
+
+    # The emit must have fired exactly once for handler.start_up.complete with
+    # a numeric dur_ms kwarg.
+    complete_calls = [(a, kw) for (a, kw) in emit_calls if a and a[0] == "handler.start_up.complete"]
+    assert len(complete_calls) == 1, f"expected one handler.start_up.complete emit, got {emit_calls!r}"
+    _args, kwargs = complete_calls[0]
+    assert "dur_ms" in kwargs
+    assert isinstance(kwargs["dur_ms"], float) and kwargs["dur_ms"] >= 0
+
+    # Pipeline.start_up was awaited, and the emit was already counted when
+    # pipeline.start_up entered.
+    wrapper.pipeline.start_up.assert_awaited_once()
+    assert pipeline_seen_emits == [1], (
+        "emit_supporting_event must fire before pipeline.start_up is awaited; "
+        f"observed emit_count at pipeline entry = {pipeline_seen_emits!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_up_emit_failure_does_not_break_pipeline_delegation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A raised ``telemetry.emit_supporting_event`` must not prevent the
+    wrapper from delegating to ``pipeline.start_up``. Telemetry never blocks
+    boot — matches the ``try/except`` shape the legacy ElevenLabs handler
+    uses at the emit site."""
+    from robot_comic import telemetry
+
+    wrapper = _make_wrapper()
+
+    def _raise(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("export wiring broken")
+
+    monkeypatch.setattr(telemetry, "emit_supporting_event", _raise)
+
+    await wrapper.start_up()
+
+    wrapper.pipeline.start_up.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_shutdown_delegates_to_pipeline() -> None:
     wrapper = _make_wrapper()
     await wrapper.shutdown()
