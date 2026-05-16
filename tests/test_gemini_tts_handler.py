@@ -249,3 +249,41 @@ async def test_tts_call_includes_speed_delivery_cue() -> None:
         # Preview-model path: cue is prepended to contents.
         instruction_text = contents.lower()
     assert "fast" in instruction_text or "brooklyn" in instruction_text or "pace" in instruction_text
+
+
+# ---------------------------------------------------------------------------
+# Phase 5e.6 — leaf guard on GeminiTTSResponseHandler
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_prepare_startup_credentials_is_idempotent() -> None:
+    """Second call must NOT re-instantiate ``genai.Client``.
+
+    Pre-5e.6, the mixin shell's ``_prepare_startup_credentials``
+    (``LocalSTTInputMixin._prepare_startup_credentials``) gated the
+    handler's prepare via ``_startup_credentials_ready``. Post-5e.6
+    the migrated triple's factory composes a plain
+    :class:`GeminiTTSResponseHandler` (no mixin shell), and the LLM
+    and TTS adapters each call ``handler._prepare_startup_credentials``
+    once during their ``prepare`` lifecycle. Without a per-handler
+    guard the second call would leak a fresh ``genai.Client``.
+
+    Pattern mirrors 5e.3 / 5e.4 / 5e.5 leaf-guard tests.
+    """
+    from robot_comic.gemini_tts import GeminiTTSResponseHandler
+
+    handler = GeminiTTSResponseHandler(_make_deps())
+
+    with patch("google.genai.Client") as mock_client_cls:
+        mock_client_cls.return_value = MagicMock(name="genai_Client_instance")
+
+        await handler._prepare_startup_credentials()
+        first_client = handler._client
+        assert first_client is not None
+        assert mock_client_cls.call_count == 1
+
+        await handler._prepare_startup_credentials()
+        # Same client instance; no SDK-client leak.
+        assert handler._client is first_client
+        assert mock_client_cls.call_count == 1

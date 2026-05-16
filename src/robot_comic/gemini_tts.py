@@ -240,7 +240,19 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
         )
 
     async def _prepare_startup_credentials(self) -> None:
-        """Initialise the Gemini client. Called via MRO by LocalSTTInputMixin."""
+        """Initialise the Gemini client.
+
+        Phase 5e.6 idempotency: the migrated triple's factory composes
+        a plain leaf handler (no :class:`LocalSTTInputMixin` shell),
+        and the LLM and TTS adapters each call this method during their
+        ``prepare`` lifecycle. Without a leaf-level guard duplicate
+        calls would leak a fresh ``genai.Client`` every time. Guard
+        the whole body so duplicate calls are cheap no-ops. The flag
+        is only set on success so a failed attempt still re-tries the
+        full chain.
+        """
+        if getattr(self, "_startup_credentials_ready", False):
+            return
         from google import genai  # deferred: google.genai.types costs ~5.5 s at boot
 
         api_key = config.GEMINI_API_KEY or "DUMMY"
@@ -251,6 +263,7 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             GEMINI_TTS_MODEL,
             self.get_current_voice(),
         )
+        self._startup_credentials_ready = True
 
     async def start_up(self) -> None:
         """Initialise credentials and block until shutdown() is called."""
