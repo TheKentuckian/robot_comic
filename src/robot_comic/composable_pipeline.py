@@ -53,18 +53,18 @@ class is only for composable-mode pipelines.
 """
 
 from __future__ import annotations
-import asyncio
-import logging
 import time
 import uuid
+import asyncio
+import logging
 from typing import TYPE_CHECKING, Any, Callable, Awaitable
 
 from opentelemetry import trace
 from opentelemetry import context as otel_context
 
 from robot_comic import telemetry
-from robot_comic.config import set_custom_profile
 from robot_comic.pause import TranscriptDisposition
+from robot_comic.config import set_custom_profile
 from robot_comic.prompts import get_session_instructions
 from robot_comic.backends import (
     ToolCall,
@@ -116,7 +116,7 @@ class ComposablePipeline:
         llm: LLMBackend,
         tts: TTSBackend,
         *,
-        output_queue: asyncio.Queue[AudioFrame] | None = None,
+        output_queue: "asyncio.Queue[Any] | None" = None,
         tool_dispatcher: ToolDispatcher | None = None,
         tools_spec: list[dict[str, Any]] | None = None,
         max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
@@ -142,7 +142,12 @@ class ComposablePipeline:
         self.stt = stt
         self.llm = llm
         self.tts = tts
-        self.output_queue: asyncio.Queue[AudioFrame] = output_queue or asyncio.Queue()
+        # The queue is heterogeneous post-5e.2: TTS pushes ``AudioFrame``;
+        # the orchestrator's transcript callbacks push
+        # ``fastrtc.AdditionalOutputs`` envelopes for the admin UI.
+        # Drainers (``ComposableConversationHandler.emit`` via
+        # ``wait_for_item``) tolerate both.
+        self.output_queue: "asyncio.Queue[Any]" = output_queue or asyncio.Queue()
         self.tool_dispatcher = tool_dispatcher
         self.tools_spec = tools_spec or []
         self.max_tool_rounds = max_tool_rounds
@@ -375,9 +380,7 @@ class ComposablePipeline:
             return
         from fastrtc import AdditionalOutputs  # deferred — fastrtc pulls gradio at boot
 
-        await self.output_queue.put(
-            AdditionalOutputs({"role": "user_partial", "content": transcript})
-        )
+        await self.output_queue.put(AdditionalOutputs({"role": "user_partial", "content": transcript}))
 
     async def _on_transcript_completed(self, transcript: str) -> None:
         """Handle one completed user line: append to history, run LLM, speak.
@@ -443,9 +446,7 @@ class ComposablePipeline:
             # Publish completed transcript to the admin UI.
             from fastrtc import AdditionalOutputs  # deferred — fastrtc pulls gradio
 
-            await self.output_queue.put(
-                AdditionalOutputs({"role": "user", "content": transcript})
-            )
+            await self.output_queue.put(AdditionalOutputs({"role": "user", "content": transcript}))
 
             # Pause-controller routing. HANDLED short-circuits dispatch.
             pause_controller = getattr(self.deps, "pause_controller", None)

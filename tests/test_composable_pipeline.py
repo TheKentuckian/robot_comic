@@ -1117,9 +1117,7 @@ async def test_speech_started_callback_opens_turn_span() -> None:
 @pytest.mark.asyncio
 async def test_speech_started_callback_calls_set_listening_true_when_deps_provided() -> None:
     deps = _make_mock_deps()
-    pipeline = ComposablePipeline(
-        stt=_ProgrammableSTT(), llm=_ScriptedLLM([]), tts=_RecordingTTS(), deps=deps
-    )
+    pipeline = ComposablePipeline(stt=_ProgrammableSTT(), llm=_ScriptedLLM([]), tts=_RecordingTTS(), deps=deps)
 
     await pipeline._on_speech_started()
 
@@ -1132,9 +1130,7 @@ async def test_speech_started_callback_calls_head_wobbler_reset_when_provided() 
 
     head_wobbler = MagicMock()
     deps = _make_mock_deps(head_wobbler=head_wobbler)
-    pipeline = ComposablePipeline(
-        stt=_ProgrammableSTT(), llm=_ScriptedLLM([]), tts=_RecordingTTS(), deps=deps
-    )
+    pipeline = ComposablePipeline(stt=_ProgrammableSTT(), llm=_ScriptedLLM([]), tts=_RecordingTTS(), deps=deps)
 
     await pipeline._on_speech_started()
 
@@ -1157,9 +1153,7 @@ async def test_speech_started_callback_calls_clear_queue_when_set() -> None:
 @pytest.mark.asyncio
 async def test_speech_started_callback_no_deps_does_not_raise() -> None:
     """When ``deps=None`` the callback opens the span but skips movement/wobbler."""
-    pipeline = ComposablePipeline(
-        stt=_ProgrammableSTT(), llm=_ScriptedLLM([]), tts=_RecordingTTS()
-    )
+    pipeline = ComposablePipeline(stt=_ProgrammableSTT(), llm=_ScriptedLLM([]), tts=_RecordingTTS())
 
     await pipeline._on_speech_started()  # must not raise
 
@@ -1272,9 +1266,7 @@ async def test_completed_callback_suppresses_duplicate_within_window(
         except StopIteration:
             return 100.2
 
-    monkeypatch.setattr(
-        "robot_comic.composable_pipeline.time.perf_counter", _fake_perf_counter
-    )
+    monkeypatch.setattr("robot_comic.composable_pipeline.time.perf_counter", _fake_perf_counter)
 
     await pipeline._on_transcript_completed("repeat me")
     # Immediate duplicate within the 0.75s window must be ignored.
@@ -1293,6 +1285,7 @@ async def test_completed_callback_suppresses_duplicate_within_window(
 @pytest.mark.asyncio
 async def test_completed_callback_pause_controller_handled_drops_transcript() -> None:
     from unittest.mock import MagicMock
+
     from robot_comic.pause import TranscriptDisposition
 
     pause = MagicMock()
@@ -1300,9 +1293,7 @@ async def test_completed_callback_pause_controller_handled_drops_transcript() ->
     deps = _make_mock_deps(pause_controller=pause)
 
     llm = _ScriptedLLM([])  # exhausted — would error if dispatch happens
-    pipeline = ComposablePipeline(
-        stt=_ProgrammableSTT(), llm=llm, tts=_RecordingTTS(), deps=deps
-    )
+    pipeline = ComposablePipeline(stt=_ProgrammableSTT(), llm=llm, tts=_RecordingTTS(), deps=deps)
 
     await pipeline._on_transcript_completed("pause please")
 
@@ -1314,6 +1305,7 @@ async def test_completed_callback_pause_controller_handled_drops_transcript() ->
 @pytest.mark.asyncio
 async def test_completed_callback_pause_controller_dispatch_proceeds() -> None:
     from unittest.mock import MagicMock
+
     from robot_comic.pause import TranscriptDisposition
 
     pause = MagicMock()
@@ -1407,9 +1399,7 @@ async def test_speech_started_no_op_for_legacy_pipeline_without_callbacks() -> N
     pipeline; the mixin handles speech-start/partial on the host. The
     pipeline must not crash when its own callbacks fire in that mode.
     """
-    pipeline = ComposablePipeline(
-        stt=_ProgrammableSTT(), llm=_ScriptedLLM([]), tts=_RecordingTTS()
-    )
+    pipeline = ComposablePipeline(stt=_ProgrammableSTT(), llm=_ScriptedLLM([]), tts=_RecordingTTS())
     # All three callbacks must be safe no-ops with no deps / no gate.
     await pipeline._on_speech_started()
     await pipeline._on_partial_transcript("partial")

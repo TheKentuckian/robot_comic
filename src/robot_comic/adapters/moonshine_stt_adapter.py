@@ -49,13 +49,13 @@ import numpy as np
 
 from robot_comic.backends import (
     AudioFrame,
-    SpeechStartedCallback,
     TranscriptCallback,
+    SpeechStartedCallback,
 )
 from robot_comic.adapters.moonshine_listener import (
-    EVENT_COMPLETED,
     EVENT_PARTIAL,
     EVENT_STARTED,
+    EVENT_COMPLETED,
     MoonshineListener,
 )
 

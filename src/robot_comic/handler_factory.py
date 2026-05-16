@@ -550,6 +550,7 @@ def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
     host-concern wiring is shared and needs no further changes.
     """
     import time as _time
+
     from robot_comic.prompts import get_session_instructions
     from robot_comic.adapters import (
         LlamaLLMAdapter,

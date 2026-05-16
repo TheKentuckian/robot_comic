@@ -169,9 +169,7 @@ class TestHandlerFactoryComposableCombinations:
         assert isinstance(result, ComposableConversationHandler)
         assert isinstance(result._tts_handler, LlamaElevenLabsTTSResponseHandler)
 
-    def test_moonshine_llama_elevenlabs_uses_standalone_moonshine_adapter(
-        self, mock_deps: MagicMock
-    ) -> None:
+    def test_moonshine_llama_elevenlabs_uses_standalone_moonshine_adapter(self, mock_deps: MagicMock) -> None:
         """Phase 5e.2: the migrated triple constructs a standalone STT adapter.
 
         Before 5e.2 every composable triple constructed
@@ -194,9 +192,7 @@ class TestHandlerFactoryComposableCombinations:
             "MoonshineSTTAdapter (handler=None); got host-coupled."
         )
 
-    def test_moonshine_llama_elevenlabs_wires_should_drop_frame_callback(
-        self, mock_deps: MagicMock
-    ) -> None:
+    def test_moonshine_llama_elevenlabs_wires_should_drop_frame_callback(self, mock_deps: MagicMock) -> None:
         """The factory wires the echo-guard ``should_drop_frame`` closure."""
         with patch("robot_comic.handler_factory.config") as mock_cfg:
             mock_cfg.LLM_BACKEND = "llama"
@@ -213,9 +209,7 @@ class TestHandlerFactoryComposableCombinations:
         # (perf_counter is never < 0.0, so the default reads as "don't drop".)
         assert stt_adapter._should_drop_frame() is False
 
-    def test_moonshine_llama_elevenlabs_passes_deps_to_pipeline(
-        self, mock_deps: MagicMock
-    ) -> None:
+    def test_moonshine_llama_elevenlabs_passes_deps_to_pipeline(self, mock_deps: MagicMock) -> None:
         """The pipeline receives ``deps`` so the host-concern callbacks fire."""
         with patch("robot_comic.handler_factory.config") as mock_cfg:
             mock_cfg.LLM_BACKEND = "llama"
