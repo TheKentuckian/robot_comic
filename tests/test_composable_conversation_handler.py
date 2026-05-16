@@ -243,6 +243,75 @@ async def test_apply_personality_resets_history_and_reseeds(
 
 
 @pytest.mark.asyncio
+async def test_apply_personality_invokes_tts_reset_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pin the call-site for the per-session reset helper.
+
+    Phase 5a.1 spec / ``feedback_lifecycle_hooks_not_for_free.md`` "two-test
+    split": ``test_composable_persona_reset.py`` asserts the field-of-interest
+    outcome; this test asserts the input-site is exercised so a future refactor
+    that drops the call (or moves it before ``set_custom_profile`` succeeds)
+    gets caught by a focused unit test.
+    """
+    wrapper = _make_wrapper()
+
+    monkeypatch.setattr(
+        "robot_comic.composable_conversation_handler.set_custom_profile",
+        lambda profile: None,
+    )
+    monkeypatch.setattr(
+        "robot_comic.composable_conversation_handler.get_session_instructions",
+        lambda: "fresh instructions",
+    )
+
+    call_count = {"n": 0}
+
+    def _spy() -> None:
+        call_count["n"] += 1
+
+    monkeypatch.setattr(wrapper, "_reset_tts_per_session_state", _spy)
+
+    await wrapper.apply_personality("rodney")
+
+    assert call_count["n"] == 1, (
+        f"apply_personality must invoke _reset_tts_per_session_state exactly once; called {call_count['n']} times"
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_personality_skips_tts_reset_on_set_custom_profile_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If ``set_custom_profile`` raises, the reset helper must not run.
+
+    Pins the ordering: history + per-session-state reset only happen on the
+    success path so a profile-name typo doesn't half-reset the session.
+    """
+    wrapper = _make_wrapper()
+
+    def _boom(profile: str | None) -> None:
+        raise RuntimeError("bad profile")
+
+    monkeypatch.setattr(
+        "robot_comic.composable_conversation_handler.set_custom_profile",
+        _boom,
+    )
+
+    call_count = {"n": 0}
+
+    def _spy() -> None:
+        call_count["n"] += 1
+
+    monkeypatch.setattr(wrapper, "_reset_tts_per_session_state", _spy)
+
+    result = await wrapper.apply_personality("rodney")
+    assert "Failed to apply personality" in result
+    assert call_count["n"] == 0, "reset helper must NOT run when set_custom_profile fails"
+    wrapper.pipeline.reset_history.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_apply_personality_returns_failure_message_on_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
