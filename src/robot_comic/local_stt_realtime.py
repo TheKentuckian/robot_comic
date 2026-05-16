@@ -319,10 +319,25 @@ class LocalSTTInputMixin:
         return gate
 
     async def _prepare_startup_credentials(self) -> None:
-        """Let the response backend prepare itself, then initialize local STT."""
+        """Let the response backend prepare itself, then initialize local STT.
+
+        Idempotency guard (#337 Phase 5 / boot memo PR #383 V7): the three
+        composable adapters (LLM, TTS, STT) each call this method on the same
+        shared host during their ``prepare``/``start`` lifecycle. The
+        underlying work (httpx client, Gemini client, Moonshine model load —
+        ~20 s on cold boot) is idempotent today, but the redundant work
+        costs real wall-clock during the start_up critical path. The first
+        successful call flips ``_startup_credentials_ready``; subsequent
+        calls are cheap no-ops. If the first call raises, the flag stays
+        unset so retries still re-attempt — preserves the "don't lock out
+        retries on failure" semantics.
+        """
+        if getattr(self, "_startup_credentials_ready", False):
+            return
         await super()._prepare_startup_credentials()  # type: ignore[misc]
         self._local_loop = asyncio.get_running_loop()
         await asyncio.to_thread(self._build_local_stt_stream)
+        self._startup_credentials_ready = True
 
     def _build_local_stt_stream(self) -> None:
         """Build and start the Moonshine streaming transcriber."""
