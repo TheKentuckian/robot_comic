@@ -15,6 +15,14 @@ import textwrap
 import subprocess
 from pathlib import Path
 
+import pytest
+
+
+# Each test spawns a fresh interpreter via subprocess. They are unavoidably
+# slow (~20-25 s each on Windows) and they shell out, so they are both
+# `slow` AND `integration` per the test-infra-2 marker policy.
+pytestmark = [pytest.mark.slow, pytest.mark.integration]
+
 
 # The worktree's src directory — we prepend it to PYTHONPATH so subprocesses
 # import the *worktree* copy of robot_comic rather than the installed package.

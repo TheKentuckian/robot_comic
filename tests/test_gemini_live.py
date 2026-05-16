@@ -38,7 +38,10 @@ def _response(server_content: Any = None, tool_call: Any = None) -> SimpleNamesp
     return SimpleNamespace(server_content=server_content, tool_call=tool_call)
 
 
-async def _wait_for(predicate: Callable[[], bool], timeout: float = 1.0) -> None:
+async def _wait_for(predicate: Callable[[], bool], timeout: float = 5.0) -> None:
+    # Bumped from 1.0 to 5.0 under test-infra-2 — at `-n auto` the loaded
+    # worker can blow a 1 s budget waiting on `_FakeSession`'s background
+    # task without indicating any real bug.
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
         if predicate():
@@ -157,7 +160,8 @@ async def test_gemini_turn_buffers_transcripts_and_schedules_motion_reset(
     )
 
     handler._stop_event.set()
-    await asyncio.wait_for(task, timeout=1.0)
+    # 5.0 s budget for the same reason as `_wait_for` above.
+    await asyncio.wait_for(task, timeout=5.0)
 
     outputs = []
     while not handler.output_queue.empty():

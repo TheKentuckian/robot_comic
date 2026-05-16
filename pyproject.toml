@@ -94,6 +94,7 @@ dev = [
   "pytest",
   "pytest-asyncio",
   "pytest-testmon>=2.1",
+  "pytest-xdist>=3.5",
   "ruff==0.12.0",
   "mypy==1.18.2",
   "pre-commit",
@@ -205,5 +206,10 @@ warn_unused_ignores = true
 [tool.pytest.ini_options]
 markers = [
   "integration: end-to-end smoke tests; skipped by default. Run with `pytest -m integration`.",
+  "slow: marks tests taking >500ms (deselect with `-m 'not slow'`).",
+  "hardware: marks tests that require real ALSA / serial / GPIO devices.",
 ]
-addopts = "-m 'not integration'"
+# pytest-xdist: `-n auto` spawns one worker per CPU; `--dist=loadgroup`
+# keeps tests with the same `@pytest.mark.xdist_group(...)` on the same
+# worker so they don't race on shared state.
+addopts = "-m 'not integration' -n auto --dist=loadgroup"
