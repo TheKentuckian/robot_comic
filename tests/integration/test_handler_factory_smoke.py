@@ -51,6 +51,7 @@ from robot_comic.config import (
     LLM_BACKEND_GEMINI,
     AUDIO_INPUT_MOONSHINE,
     AUDIO_INPUT_GEMINI_LIVE,
+    AUDIO_INPUT_FASTER_WHISPER,
     AUDIO_OUTPUT_CHATTERBOX,
     AUDIO_OUTPUT_ELEVENLABS,
     AUDIO_OUTPUT_GEMINI_TTS,
@@ -99,6 +100,12 @@ def _expected_handler_name(input_b: str, output_b: str, llm_backend: str) -> str
         if output_b == AUDIO_OUTPUT_HF:
             return "LocalSTTHuggingFaceRealtimeHandler"
         # Composable triples — always wrapped.
+        if output_b in (AUDIO_OUTPUT_CHATTERBOX, AUDIO_OUTPUT_ELEVENLABS, AUDIO_OUTPUT_GEMINI_TTS):
+            return "ComposableConversationHandler"
+    if input_b == AUDIO_INPUT_FASTER_WHISPER:
+        # Phase 5f: faster-whisper only pairs with composable triples; the
+        # realtime-output hybrids stay on the LocalSTTInputMixin path
+        # (faster-whisper does not slot into those).
         if output_b in (AUDIO_OUTPUT_CHATTERBOX, AUDIO_OUTPUT_ELEVENLABS, AUDIO_OUTPUT_GEMINI_TTS):
             return "ComposableConversationHandler"
     raise AssertionError(f"unexpected combo: {input_b!r} → {output_b!r} (llm={llm_backend!r})")
