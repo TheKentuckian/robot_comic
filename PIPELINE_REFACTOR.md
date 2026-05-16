@@ -1,12 +1,12 @@
-# Pipeline Refactor — Epic #337
+# Pipeline Refactor — Epic #337 (Phase 4 closed) + Phase 5 (in flight)
 
-**Status:** in progress. **Approach:** Option C (incremental retirement) from `docs/superpowers/specs/2026-05-15-phase-4-exploration.md`.
+**Status:** Phase 4 ✅ **COMPLETE** (epic #337 closed end-to-end on 2026-05-16). **Phase 5 in flight** — see `docs/superpowers/specs/2026-05-16-phase-5-exploration.md` for the exploration memo and sub-phase DAG.
 
-This document is the operating manual for the remaining sub-phases. It is the
-authoritative roadmap; per-sub-phase specs and TDD plans live under
-`docs/superpowers/specs/` and `docs/superpowers/plans/`.
+**Approach (Phase 4):** Option C (incremental retirement) from `docs/superpowers/specs/2026-05-15-phase-4-exploration.md`.
 
-## Status table
+This document is the operating manual for both phases. Per-sub-phase specs and TDD plans live under `docs/superpowers/specs/` and `docs/superpowers/plans/`.
+
+## Phase 4 status table (closed)
 
 | Sub-phase | Goal | Status | PR / branch |
 |-----------|------|--------|-------------|
@@ -23,8 +23,32 @@ authoritative roadmap; per-sub-phase specs and TDD plans live under
 | 4e | Delete legacy concrete handlers + the dual-path dial + rewrite tests | ✅ Done | #379 (commit 4bb06d1) |
 | 4f | Retire `BACKEND_PROVIDER` / `LOCAL_STT_RESPONSE_BACKEND` config dials | ✅ Done | #381 (commit 8873fa2) |
 
-Between sub-phases: small lifecycle-hook follow-up PRs (see "Deferred
-lifecycle hooks" below).
+## Phase 5 status table
+
+Source-of-truth plan: `docs/superpowers/specs/2026-05-16-phase-5-exploration.md`.
+
+| Sub-phase | Goal | Status | PR / branch |
+|-----------|------|--------|-------------|
+| 5a | Surviving TODO cleanup (composable_conversation_handler.py:158, composable_pipeline.py:278, chatterbox_tts_adapter.py:47, OTel `gen_ai.system` artifact, test-fixture `coroutine never awaited` smell) | ⏸ Pending | — |
+| 5b | Wire `ComposablePipeline.tool_dispatcher` in factory + `tool.execute` span (was latent prod bug — tool-triggered turns silently dropped on 4 of 5 composable triples) | ✅ Done | #388 (commit a8754d5) |
+| 5c | Voice/personality method redesign (`apply_personality` ABC + wrapper forwarding) | ⏸ Pending operator input |  — |
+| 5d | `ConversationHandler` ABC: shrink (FastRTC-shim only) or collapse | ⏸ Pending **operator decision** (shrink vs collapse) | — |
+| 5e | Factory STT decouple — make new STT backends pluggable cleanly | ⏸ Pending | — |
+| 5f | New STT backends (faster-whisper per memo, tracked as issue #387) | ⏸ Pending | — |
+
+## Post-Phase-4 follow-up PRs (between Phase 4 close and Phase 5 5b)
+
+| PR | What | Notes |
+|----|------|-------|
+| #382 | Hook #3b — `GeminiTTSAdapter` emits `first_greeting.tts_first_audio` | Parity restoration; legacy already emitted at `gemini_tts.py:415`, composable adapter was bypassing |
+| #389 | Telemetry housekeeping + `_prepare_startup_credentials` triple-init guard | 4 orphan OTel attrs allowlisted; 2 dead counters wired (Moonshine errors + welcome-WAV underrun); idempotency guard; `handler.start_up.complete` event moved to post-delegate via `try/finally` |
+
+## Research memos (2026-05-16, all merged)
+
+- `docs/superpowers/specs/2026-05-16-phase-5-exploration.md` (PR #386) — Phase 5 sub-phase DAG, surviving TODOs, recommendations. **Surfaced the 5b latent bug.**
+- `docs/superpowers/specs/2026-05-16-reachy-boot-optimization-review.md` (PR #383) — full boot path survey + 10 attack vectors. Top-3-PRs-to-ship: instrument-first → parallelise-prepares → speak-during-load. Confirms ~42s cold-boot, ~20s Moonshine load is rank-1 cost.
+- `docs/superpowers/specs/2026-05-16-instrumentation-audit.md` (PR #385) — telemetry inventory + 10 ranked gaps. Top gap (the missing `tool.execute` span) closed by Phase 5 5b. Three orphan attrs / two dead counters closed by #389.
+- `docs/superpowers/specs/2026-05-16-moonshine-reliability-alternates-sibling-daemon.md` (PR #384) — **low confidence** on permanent Moonshine fix (Mode 1 rearm-N-then-die). Top alternate: faster-whisper `tiny.en` (~2s vs 20s cold-load). Sibling-daemon: **defer**.
 
 ---
 
@@ -320,7 +344,13 @@ needed and verify with a regression test before claiming preservation.
 
 ---
 
-## Automation note — Phase 4 manager session pattern
+## Phase 5 cadence — sub-phase at a time
+
+Phase 5 does NOT run as a continuous manager session. Operator's preference is to ship one sub-phase at a time and decide whether to chain another based on outcome. The exploration memo (`docs/superpowers/specs/2026-05-16-phase-5-exploration.md`) is the source-of-truth plan; this document tracks status only.
+
+Sub-agent dispatch pattern stays the same as Phase 4 (spec + plan + TDD commits + one PR per sub-phase). The Phase 4 manager-session pattern below is preserved for reference and may be revived if the operator opts back into it.
+
+## Automation note — Phase 4 manager session pattern (historical, for reference)
 
 Starting at 4c, this work is driven by a **manager session** that does not
 do the implementation itself. The pattern:
