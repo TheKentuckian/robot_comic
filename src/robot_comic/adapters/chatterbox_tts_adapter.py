@@ -206,3 +206,26 @@ class ChatterboxTTSAdapter:
         validation against the predefined-voices catalog.
         """
         return await self._handler.change_voice(voice)
+
+    async def reset_per_session_state(self) -> None:
+        """Clear per-session echo-guard accumulators on the wrapped handler (Phase 5c.2).
+
+        ``ChatterboxTTSResponseHandler`` inherits ``_speaking_until`` /
+        ``_response_start_ts`` / ``_response_audio_bytes`` from
+        :class:`BaseLlamaResponseHandler` (see
+        ``llama_base.py:115-117`` fields, ``:182-184`` canned-opener
+        reset for legacy parity), so the reset semantics match the
+        ElevenLabs adapter's.
+
+        Called by :meth:`ComposablePipeline.apply_personality` so
+        persona switch is a hard cut on listening state. Defensively
+        guarded — handler-side schema changes don't crash persona
+        switching.
+        """
+        for field, value in (
+            ("_speaking_until", 0.0),
+            ("_response_start_ts", 0.0),
+            ("_response_audio_bytes", 0),
+        ):
+            if hasattr(self._handler, field):
+                setattr(self._handler, field, value)

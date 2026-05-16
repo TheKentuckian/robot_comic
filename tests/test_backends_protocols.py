@@ -119,6 +119,12 @@ class _MockTTS:
     async def change_voice(self, voice: str) -> str:
         return f"Voice changed to {voice}."
 
+    # Phase 5c.2: same ``@runtime_checkable`` rule applies — declare the
+    # method so structural ``isinstance`` checks still pass. Default body
+    # is a no-op (matches the Protocol default).
+    async def reset_per_session_state(self) -> None:
+        return None
+
 
 # ---------------------------------------------------------------------------
 # isinstance() against runtime_checkable Protocols
@@ -303,3 +309,84 @@ async def test_tts_protocol_synthesize_accepts_first_audio_marker_kwarg() -> Non
     assert len(frames) == 1
     # The mock recorded the reference identity; population is per-adapter.
     assert tts.last_marker_ref is marker
+
+
+# ---------------------------------------------------------------------------
+# Phase 5c.2 — reset_per_session_state channel on TTSBackend
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tts_protocol_reset_per_session_state_default_is_noop() -> None:
+    """Phase 5c.2: the ``reset_per_session_state`` Protocol method has a
+    default no-op body. Subclasses that inherit from :class:`TTSBackend` and
+    do not override get a clean ``return None`` — backends without
+    per-session state (Gemini TTS today, future pipeline-debug stubs)
+    cost nothing.
+
+    Unlike the voice methods (which default-raise), this hook is internal
+    cleanup the orchestrator fires opportunistically — silent no-op is the
+    correct default.
+    """
+
+    class _DefaultsTTS(TTSBackend):
+        # Implement only the non-defaulted abstract surface; inherit
+        # ``reset_per_session_state`` from the Protocol default.
+        async def prepare(self) -> None:
+            return None
+
+        async def synthesize(
+            self,
+            text: str,
+            tags: tuple[str, ...] = (),
+            first_audio_marker: list[float] | None = None,
+        ) -> AsyncIterator[AudioFrame]:
+            if False:  # pragma: no cover — empty async-generator shape
+                yield AudioFrame(samples=[], sample_rate=0)
+
+        async def shutdown(self) -> None:
+            return None
+
+    tts = _DefaultsTTS()
+    # Must not raise; must return None.
+    result = await tts.reset_per_session_state()
+    assert result is None
+
+
+def test_unrelated_class_missing_reset_per_session_state_fails_protocol() -> None:
+    """Phase 5c.2 / ``@runtime_checkable`` semantics: a class that omits
+    ``reset_per_session_state`` does NOT satisfy :class:`TTSBackend` even
+    though the Protocol has a default body. Defaulted methods are still
+    required attributes for structural ``isinstance`` checks.
+
+    This is the same gotcha 5c.1 hit for the voice methods; pinning it
+    here so future stubs that drop the method get caught by a focused
+    Protocol-shape test rather than diffuse adapter contract failures.
+    """
+
+    class _NoResetTTS:
+        async def prepare(self) -> None: ...
+
+        async def synthesize(
+            self,
+            text: str,
+            tags: tuple[str, ...] = (),
+            first_audio_marker: list[float] | None = None,
+        ) -> AsyncIterator[AudioFrame]:
+            if False:  # pragma: no cover
+                yield AudioFrame(samples=[], sample_rate=0)
+
+        async def shutdown(self) -> None: ...
+
+        async def get_available_voices(self) -> list[str]:
+            return []
+
+        def get_current_voice(self) -> str:
+            return ""
+
+        async def change_voice(self, voice: str) -> str:
+            return ""
+
+        # No reset_per_session_state → structural mismatch.
+
+    assert not isinstance(_NoResetTTS(), TTSBackend)

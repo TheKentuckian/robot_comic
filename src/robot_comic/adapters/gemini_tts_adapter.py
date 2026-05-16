@@ -281,3 +281,25 @@ class GeminiTTSAdapter:
         fallback happens.
         """
         return await self._handler.change_voice(voice)
+
+    async def reset_per_session_state(self) -> None:
+        """Clear per-session echo-guard accumulators on the wrapped handler (Phase 5c.2).
+
+        ``GeminiTTSResponseHandler`` has **no** echo-guard fields today
+        (audited in
+        ``docs/superpowers/specs/2026-05-16-phase-5a1-echo-guard-persona-reset.md``
+        §"Audit results" — no ``_speaking_until`` / ``_response_audio_bytes``
+        / ``_response_start_ts`` on that surface), so every ``hasattr``
+        guard misses and the call is a clean no-op in production today.
+
+        The shape mirrors the ElevenLabs and Chatterbox adapters so a
+        future Gemini-TTS refactor that adds an echo-guard field gets
+        reset coverage for free.
+        """
+        for field, value in (
+            ("_speaking_until", 0.0),
+            ("_response_start_ts", 0.0),
+            ("_response_audio_bytes", 0),
+        ):
+            if hasattr(self._handler, field):
+                setattr(self._handler, field, value)
