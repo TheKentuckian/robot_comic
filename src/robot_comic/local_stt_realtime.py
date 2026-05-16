@@ -232,7 +232,29 @@ class _MoonshineListener:  # base class is attached dynamically in _build_local_
 
 
 class LocalSTTInputMixin:
-    """Mixin that replaces upstream mic-audio transport with local Moonshine STT."""
+    """Mixin that replaces upstream mic-audio transport with local Moonshine STT.
+
+    Post-Phase-5e (2026-05-16): this mixin is **hybrid-only**. The five
+    composable triples (Moonshine + llama/gemini-text/gemini-bundled ×
+    ElevenLabs/Chatterbox/Gemini-TTS) migrated off the mixin via
+    sub-phases 5e.2-5e.6 — they now construct a plain
+    ``*ResponseHandler`` and a standalone
+    :class:`~robot_comic.adapters.moonshine_stt_adapter.MoonshineSTTAdapter`,
+    with the orchestrator-level concerns (turn-span, output-queue
+    publishing, listening-state, pause-controller, welcome gate,
+    name-validation transcript recording) living on
+    :class:`~robot_comic.composable_pipeline.ComposablePipeline`.
+
+    The two remaining production consumers are
+    :class:`LocalSTTOpenAIRealtimeHandler` and
+    :class:`LocalSTTHuggingFaceRealtimeHandler` — the Phase 4c-tris
+    Option B "legacy forever" hybrids whose bundled LLM+TTS half lives
+    inside the realtime websocket and doesn't decompose into the
+    Protocol triple. New composable triples should use the standalone
+    adapter + pipeline shape from
+    ``handler_factory._build_composable_*`` instead of mixing this
+    class in.
+    """
 
     # Declared here so mypy sees them on the mixin; the concrete base class
     # provides the actual values via super().__init__().
