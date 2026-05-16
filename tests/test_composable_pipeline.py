@@ -566,6 +566,288 @@ async def test_short_drop_runs_before_duplicate_suppression() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Phase 5f.3 — content-similarity echo filter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_exact_echo_of_assistant_text_dropped() -> None:
+    """An incoming transcript identical to the last assistant utterance is dropped.
+
+    Hardware finding 2026-05-16 (post-5f.2): multi-sentence echoes
+    (e.g. "Okay, well I didn't vote for you.") clear 5f.2's length
+    filter and still cascade. The similarity filter is the third line
+    of defence.
+    """
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([LLMResponse(text="Hello there folks how are you")])
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    # First, a real user turn that elicits the assistant utterance.
+    await stt.on_completed("hi robot can you greet")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+    assert len(llm.calls) == 1
+
+    # Now STT emits the assistant utterance back (acoustic self-echo).
+    await stt.on_completed("Hello there folks how are you")
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    # No second LLM call; history is unchanged by the echo.
+    assert len(llm.calls) == 1
+    assert pipeline.conversation_history[-1] == {
+        "role": "assistant",
+        "content": "Hello there folks how are you",
+    }
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_minor_word_error_echo_dropped() -> None:
+    """Echo with case folding + dropped punctuation + minor word errors is dropped.
+
+    faster-whisper's transcription of its own speech often differs only
+    in case + punctuation + contraction expansion. SequenceMatcher.ratio
+    on normalized text should still clear the 0.65 threshold.
+    """
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([LLMResponse(text="Okay, well I didn't vote for you.")])
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    await stt.on_completed("who did you vote for")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+    assert len(llm.calls) == 1
+
+    # Echo with no punctuation, lowercase, contraction expanded.
+    await stt.on_completed("okay well i did not vote for you")
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert len(llm.calls) == 1  # echo dropped; LLM not re-invoked
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_paraphrase_not_dropped() -> None:
+    """Paraphrase / response (low similarity) clears the filter."""
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM(
+        [
+            LLMResponse(text="Okay, well I didn't vote for you."),
+            LLMResponse(text="Sure, who did you go for?"),
+        ]
+    )
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    await stt.on_completed("who did you vote for")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    # A genuine paraphrase response from the user — shares "voted for"
+    # but is otherwise dissimilar.
+    await stt.on_completed("yeah well I voted for the other guy")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    assert len(llm.calls) == 2  # paraphrase dispatched
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_echo_against_older_assistant_turn() -> None:
+    """The ring buffer covers more than just the most-recent turn."""
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM(
+        [
+            LLMResponse(text="First utterance about something specific"),
+            LLMResponse(text="Second utterance about another topic"),
+            LLMResponse(text="Third utterance about yet more things"),
+        ]
+    )
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    for prompt in ("tell me a thing", "another one", "and one more"):
+        await stt.on_completed(prompt)
+        await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    assert len(llm.calls) == 3
+
+    # Echo of the FIRST assistant utterance (still within maxlen=5).
+    await stt.on_completed("First utterance about something specific")
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert len(llm.calls) == 3  # dropped
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_evicted_assistant_text_no_longer_blocks() -> None:
+    """Once an assistant text falls out of the ring buffer it no longer matches."""
+    from robot_comic import composable_pipeline as mod
+
+    maxlen = mod.ECHO_HISTORY_MAXLEN
+
+    # Each assistant line must be lexically distinct so that evicting
+    # the first one actually frees the similarity check (otherwise the
+    # remaining buffer entries would still match a paraphrase of #0).
+    distinct_phrases = [
+        "Aardvarks waddle through dense underbrush quietly",
+        "Bicycles squeak when their chains run dry",
+        "Cocoa beans ferment in wooden trays slowly",
+        "Doppler radar reveals oncoming storm patterns clearly",
+        "Eagles soar over alpine ridges silently",
+        "Felonious badgers raid forgotten garden plots",
+        "Glaciers carve fjords across millennia patiently",
+        "Hummingbirds visit fuchsia blooms each morning",
+    ]
+    assistant_lines = distinct_phrases[: maxlen + 1]
+    final_response = LLMResponse(text="acknowledged")
+    llm = _ScriptedLLM([LLMResponse(text=line) for line in assistant_lines] + [final_response])
+    stt = _ProgrammableSTT()
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    # Use highly-distinct prompt strings so the post-#425 dedup (similarity
+    # >= DEDUP_SIMILARITY_THRESHOLD) doesn't merge consecutive turns. "prompt
+    # number 0" / "prompt number 1" are ~87% similar by SequenceMatcher ratio,
+    # which is above the 0.85 threshold — would dedupe even with distinct
+    # echo-history slots, defeating the test's intent.
+    distinct_prompts = [
+        "alpha rhinoceros question",
+        "beta whale opinion",
+        "gamma toaster perspective",
+        "delta marsupial proposal",
+        "epsilon volcano analysis",
+        "zeta xylophone hypothesis",
+        "eta meteor recommendation",
+    ]
+    assert len(distinct_prompts) >= maxlen + 1
+    for i in range(maxlen + 1):
+        await stt.on_completed(distinct_prompts[i])
+        await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    assert len(llm.calls) == maxlen + 1
+
+    # The very first assistant utterance should have been evicted.
+    await stt.on_completed(assistant_lines[0])
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    assert len(llm.calls) == maxlen + 2  # dispatched, not dropped
+
+    await pipeline.shutdown()
+    await task
+
+
+def test_normalize_for_echo_check_strips_punctuation_and_case() -> None:
+    """The normalizer must lowercase + strip punctuation + collapse whitespace."""
+    from robot_comic.composable_pipeline import _normalize_for_echo_check
+
+    # Apostrophe inside a word becomes a space, which is fine — both
+    # sides of the similarity comparison get the same treatment so the
+    # ratio remains high.
+    assert _normalize_for_echo_check("Okay, well I didn't vote for you!") == "okay well i didn t vote for you"
+    assert _normalize_for_echo_check("  Multiple   spaces\there\n") == "multiple spaces here"
+    assert _normalize_for_echo_check("") == ""
+    assert _normalize_for_echo_check("...") == ""
+
+
+@pytest.mark.asyncio
+async def test_similarity_filter_runs_after_length_filter(caplog) -> None:
+    """A short transcript that also matches an assistant turn drops via the length filter.
+
+    Proves ordering: the length filter (5f.2) runs before the similarity
+    filter (5f.3), so a fragment that would trip both is rejected by
+    the cheaper / more specific structural check first.
+    """
+    import logging
+
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([LLMResponse(text="ok")])
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    # Get "ok" into the assistant-text ring buffer via a real user prompt.
+    await stt.on_completed("are you ready")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    with caplog.at_level(logging.DEBUG, logger="robot_comic.composable_pipeline"):
+        caplog.clear()
+        await stt.on_completed("ok")
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("short transcript" in m for m in messages)
+    assert not any("likely echo of own speech" in m for m in messages)
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_similarity_filter_runs_before_duplicate_suppression() -> None:
+    """The similarity drop must NOT poison the duplicate-suppression cache.
+
+    A repeated echo should keep hitting the similarity arm — never the
+    exact-match dup window — so ``_last_completed_transcript`` stays
+    pinned to the last *real* user turn.
+    """
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([LLMResponse(text="Alright alright alright that's enough")])
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    await stt.on_completed("say something")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+    assert pipeline._last_completed_transcript == "say something"
+
+    # Two echoes in a row.
+    await stt.on_completed("Alright alright alright that's enough")
+    await stt.on_completed("Alright alright alright that's enough")
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    # Dup-window state is untouched: still holds the real user turn.
+    assert pipeline._last_completed_transcript == "say something"
+    assert len(llm.calls) == 1  # neither echo dispatched
+
+    await pipeline.shutdown()
+    await task
+
+
+# ---------------------------------------------------------------------------
 # Lifecycle Hook #4 — record_joke_history (#337)
 # ---------------------------------------------------------------------------
 

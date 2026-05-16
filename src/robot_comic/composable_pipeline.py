@@ -53,10 +53,13 @@ class is only for composable-mode pipelines.
 """
 
 from __future__ import annotations
+import re
 import time
 import uuid
 import asyncio
+import difflib
 import logging
+import collections
 from typing import TYPE_CHECKING, Any, Callable, Awaitable
 from difflib import SequenceMatcher
 
@@ -115,6 +118,44 @@ DEFAULT_MAX_TOOL_ROUNDS = 8
 # docs/superpowers/specs/2026-05-16-phase-5f-2-echo-cascade-fix.md.
 MIN_TRANSCRIPT_WORDS = 2
 MIN_TRANSCRIPT_CHARS = 8
+
+
+# Phase 5f.3 — content-similarity echo filter.
+#
+# After 5f.2 closed the short-fragment arm of the cascade, hardware
+# testing on 2026-05-16 showed longer multi-sentence echoes still
+# cascading (faster-whisper transcribes the assistant's own speech back
+# off the chassis speaker with only minor word errors; the transcript
+# clears the 5f.2 length floor and dispatches as a fresh user turn).
+#
+# This filter compares each completed transcript against the last N
+# assistant utterances; if any similarity ratio exceeds the threshold
+# the transcript is dropped. Rationale + the hardware finding behind
+# the constants live in
+# ``docs/superpowers/specs/2026-05-16-phase-5f-3-echo-content-similarity-filter.md``.
+ECHO_HISTORY_MAXLEN = 5
+ECHO_SIMILARITY_THRESHOLD = 0.65
+
+
+_PUNCT_RE = re.compile(r"[^\w\s]", flags=re.UNICODE)
+_WS_RE = re.compile(r"\s+")
+
+
+def _normalize_for_echo_check(text: str) -> str:
+    """Return a comparison-only form of ``text`` for echo similarity scoring.
+
+    Lowercases, replaces every non-word non-whitespace character with a
+    single space (so punctuation, apostrophes, ellipses all collapse),
+    and squashes whitespace runs. The output is used only for the
+    :func:`difflib.SequenceMatcher` ratio — the original transcript
+    string is what would be dispatched / appended to history.
+    """
+    if not text:
+        return ""
+    lowered = text.lower()
+    no_punct = _PUNCT_RE.sub(" ", lowered)
+    collapsed = _WS_RE.sub(" ", no_punct)
+    return collapsed.strip()
 
 
 # Duplicate-suppression window + similarity threshold (post-5f.2).
@@ -257,6 +298,10 @@ class ComposablePipeline:
         self._last_completed_transcript: str = ""
         self._last_completed_at: float = 0.0
 
+        # Phase 5f.3 — ring buffer of recent assistant utterances
+        # (normalized) for content-similarity echo filtering.
+        self._recent_assistant_texts: collections.deque[str] = collections.deque(maxlen=ECHO_HISTORY_MAXLEN)
+
         self._conversation_history: list[dict[str, Any]] = []
         if system_prompt:
             self._conversation_history.append({"role": "system", "content": system_prompt})
@@ -380,6 +425,9 @@ class ComposablePipeline:
             return f"Failed to apply personality: {exc}"
         self.reset_history(keep_system=False)
         await self.tts.reset_per_session_state()
+        # Phase 5f.3: drop the prior persona's echo-history so the new
+        # persona's similarity filter starts clean.
+        self._recent_assistant_texts.clear()
         self._conversation_history.append({"role": "system", "content": get_session_instructions()})
         return f"Applied personality {profile!r}. Conversation history reset."
 
@@ -493,6 +541,28 @@ class ComposablePipeline:
         if len(transcript.split()) < MIN_TRANSCRIPT_WORDS or len(transcript) < MIN_TRANSCRIPT_CHARS:
             logger.debug("dropping short transcript as likely echo: %r", transcript)
             return
+
+        # Phase 5f.3 — content-similarity echo filter. Drops transcripts
+        # that are substantially similar to one of the last N assistant
+        # utterances (i.e. the chassis mic picked up our own speaker
+        # output and faster-whisper transcribed it back, only mildly
+        # corrupted). Runs BEFORE duplicate-suppression so the dedupe
+        # cache is never poisoned with an echoed value. See spec
+        # ``docs/superpowers/specs/2026-05-16-phase-5f-3-echo-content-similarity-filter.md``.
+        if self._recent_assistant_texts:
+            needle = _normalize_for_echo_check(transcript)
+            if needle:
+                best_ratio = max(
+                    difflib.SequenceMatcher(None, needle, candidate).ratio()
+                    for candidate in self._recent_assistant_texts
+                )
+                if best_ratio >= ECHO_SIMILARITY_THRESHOLD:
+                    logger.debug(
+                        "dropping likely echo of own speech: ratio=%.2f, transcript=%r",
+                        best_ratio,
+                        transcript[:60],
+                    )
+                    return
 
         # Duplicate-suppression window. Originally mirrored the legacy
         # mixin's 0.75s strict-equality dedup (``local_stt_realtime.py:596``).
@@ -666,6 +736,13 @@ class ComposablePipeline:
         except Exception as exc:  # pragma: no cover — helper is itself defensive
             logger.debug("record_joke_history raised through to orchestrator: %s", exc)
         self._conversation_history.append({"role": "assistant", "content": text})
+        # Phase 5f.3 — record the normalized assistant text in the ring
+        # buffer so the next user transcript's similarity check has the
+        # latest utterance to compare against. Skip empty normalized
+        # output (would dominate the SequenceMatcher ratio with garbage).
+        normalized = _normalize_for_echo_check(text)
+        if normalized:
+            self._recent_assistant_texts.append(normalized)
         # Phase 5a.2: thread the structured ``delivery_tags`` channel from
         # ``LLMResponse`` to ``TTSBackend.synthesize(tags=...)``. Today's
         # LLM adapters leave the tuple empty, so TTS adapters fall back to
