@@ -185,3 +185,27 @@ Three reasons:
   emit closes the gap *for all composable triples uniformly*, which is a
   small improvement consistent with Phase 4c.5's GeminiBundledLLMAdapter
   telemetry stance (one consistent surface on the new path).
+
+## Phase 5 follow-up addendum (2026-05-16)
+
+The original implementation in this spec emitted
+`handler.start_up.complete` *before* awaiting `pipeline.start_up()` —
+correct relative to the legacy `ElevenLabsTTSResponseHandler` pattern
+which emits before its own long-running stop-event wait, but
+semantically a misnomer on the composable path because the pipeline
+holds the real preparation work (`llm.prepare → tts.prepare → stt.start`,
+which includes the ~20 s Moonshine model load).
+
+Boot memo (PR #383) §"weird things to know" #2 and instrumentation audit
+(PR #385) §6 gap #3 flagged this; the
+`claude/telemetry-housekeeping-and-creds-guard` PR (see
+`docs/superpowers/specs/2026-05-16-telemetry-housekeeping-and-creds-guard.md`)
+moves the emit to *after* `pipeline.start_up()` via a `try/finally`. The
+event semantics now match its name: it fires when the handler is
+actually ready to accept audio (or when prepare failed, with the
+fail-point's elapsed time on the row).
+
+The legacy emit site in `elevenlabs_tts.py:362` is unchanged — the
+asymmetry is intentional in the interim. Once Phase 4d flips the
+composable path to default and Phase 4e retires the legacy realtime
+handlers, the legacy emit goes away with the file.
