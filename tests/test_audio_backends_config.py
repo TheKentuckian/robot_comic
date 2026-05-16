@@ -1,7 +1,7 @@
 """Tests for the modular audio-pipeline config scaffold (issue #54).
 
 Covers:
-- derive_audio_backends() derivation from BACKEND_PROVIDER values.
+- derive_audio_backends() derivation from provider_id values.
 - resolve_audio_backends() with explicit env-var overrides (happy path).
 - Fallback behaviour for unsupported combinations.
 - Fallback behaviour for partial overrides (only one of the two set).
@@ -44,7 +44,7 @@ from robot_comic.config import (
 
 
 # ---------------------------------------------------------------------------
-# derive_audio_backends — deterministic derivation from BACKEND_PROVIDER
+# derive_audio_backends — deterministic derivation from provider_id
 # ---------------------------------------------------------------------------
 
 
@@ -72,12 +72,12 @@ class TestDeriveAudioBackends:
 
 
 # ---------------------------------------------------------------------------
-# derive_audio_backends — LOCAL_STT_RESPONSE_BACKEND lookup (issue #262)
+# derive_audio_backends — response_backend lookup (issue #262)
 # ---------------------------------------------------------------------------
 
 
 class TestDeriveAudioBackendsLocalSttResponseLookup:
-    """derive_audio_backends() must map LOCAL_STT_RESPONSE_BACKEND to the
+    """derive_audio_backends() must map response_backend to the
     correct AUDIO_OUTPUT_* constant per the table in issue #262, rather than
     unconditionally returning chatterbox.
     """
@@ -103,7 +103,7 @@ class TestDeriveAudioBackendsLocalSttResponseLookup:
         assert result == (AUDIO_INPUT_MOONSHINE, expected_output)
 
     def test_response_backend_none_defaults_to_chatterbox(self) -> None:
-        # When LOCAL_STT_RESPONSE_BACKEND is unset (None), keep the historical
+        # When response_backend is unset (None), keep the historical
         # chatterbox default so existing deployments aren't disturbed.
         result = derive_audio_backends(LOCAL_STT_BACKEND, None)
         assert result == (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_CHATTERBOX)
@@ -163,7 +163,7 @@ class TestResolveAudioBackends:
                 AUDIO_OUTPUT_CHATTERBOX,
             )
         assert result == (AUDIO_INPUT_GEMINI_LIVE, AUDIO_OUTPUT_GEMINI_LIVE), (
-            "Should fall back to BACKEND_PROVIDER-derived defaults"
+            "Should fall back to provider_id-derived defaults"
         )
         assert any("Unsupported" in r.message for r in caplog.records), (
             "Expected a WARNING about unsupported combination"

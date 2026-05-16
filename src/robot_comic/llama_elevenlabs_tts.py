@@ -4,8 +4,9 @@ Combines:
 - LLM: llama-server /v1/chat/completions (local Qwen3)
 - TTS: ElevenLabs API (cloud)
 
-Select via:
-    LOCAL_STT_RESPONSE_BACKEND=llama_elevenlabs_tts
+Select via the admin UI's composable pipeline picker (Phase 4f) or the env
+vars REACHY_MINI_PIPELINE_MODE=composable +
+REACHY_MINI_AUDIO_OUTPUT_BACKEND=elevenlabs + REACHY_MINI_LLM_BACKEND=llama.
 """
 
 import os

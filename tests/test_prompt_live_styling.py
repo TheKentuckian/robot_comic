@@ -46,8 +46,9 @@ def _make_prompts_config(
     class _FakePromptsConfig:
         REACHY_MINI_CUSTOM_PROFILE = profile
         PROFILES_DIRECTORY = profiles_directory
-        BACKEND_PROVIDER = "gemini"
-        LOCAL_STT_RESPONSE_BACKEND = "openai"
+        # Use the Gemini Live audio output so the prompt assembler keeps the
+        # GEMINI LIVE DELIVERY GUIDANCE section path identical to pre-4f tests.
+        AUDIO_OUTPUT_BACKEND = "gemini_live_output"
         FORCE_DELIVERY_TAGS = False
 
     return _FakePromptsConfig()

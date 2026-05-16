@@ -10,13 +10,75 @@ const DEFAULT_BACKEND = HF_BACKEND;
 const HF_DEFAULT_HOST = "localhost";
 const HF_DEFAULT_PORT = 8765;
 
+// Phase 4f canonical dial values shared with src/robot_comic/config.py.
+const PIPELINE_MODE_COMPOSABLE = "composable";
+const PIPELINE_MODE_OPENAI_REALTIME = "openai_realtime";
+const PIPELINE_MODE_GEMINI_LIVE = "gemini_live";
+const PIPELINE_MODE_HF_REALTIME = "hf_realtime";
+const AUDIO_INPUT_MOONSHINE = "moonshine";
+const AUDIO_INPUT_OPENAI_REALTIME = "openai_realtime_input";
+const AUDIO_INPUT_GEMINI_LIVE = "gemini_live_input";
+const AUDIO_INPUT_HF = "hf_input";
+const AUDIO_OUTPUT_CHATTERBOX = "chatterbox";
+const AUDIO_OUTPUT_GEMINI_TTS = "gemini_tts";
+const AUDIO_OUTPUT_ELEVENLABS = "elevenlabs";
+const AUDIO_OUTPUT_OPENAI_REALTIME = "openai_realtime_output";
+const AUDIO_OUTPUT_GEMINI_LIVE = "gemini_live_output";
+const AUDIO_OUTPUT_HF = "hf_output";
+
+// Map the family-radio value (huggingface / openai / gemini / local_stt) to
+// the bundled pipeline_mode that the server expects.  ``local_stt`` is the
+// only composable family — its TTS row carries the output-backend choice
+// separately.
+const FAMILY_TO_PIPELINE_MODE = {
+  [OPENAI_BACKEND]: PIPELINE_MODE_OPENAI_REALTIME,
+  [GEMINI_BACKEND]: PIPELINE_MODE_GEMINI_LIVE,
+  [HF_BACKEND]: PIPELINE_MODE_HF_REALTIME,
+  [LOCAL_STT_BACKEND]: PIPELINE_MODE_COMPOSABLE,
+};
+
+// Inverse of FAMILY_TO_PIPELINE_MODE plus the composable-output fallback
+// used to drive the family radio from the server's status payload.
+function pipelineModeToFamily(pipelineMode, audioOutputBackend) {
+  if (pipelineMode === PIPELINE_MODE_OPENAI_REALTIME) return OPENAI_BACKEND;
+  if (pipelineMode === PIPELINE_MODE_GEMINI_LIVE) return GEMINI_BACKEND;
+  if (pipelineMode === PIPELINE_MODE_HF_REALTIME) return HF_BACKEND;
+  return LOCAL_STT_BACKEND;
+}
+
+// Translate the historical "response backend" radio value (the row inside the
+// local_stt 3-column picker) into a canonical AUDIO_OUTPUT_* identifier.
+function legacyResponseToAudioOutput(legacy) {
+  switch (legacy) {
+    case CHATTERBOX_OUTPUT: return AUDIO_OUTPUT_CHATTERBOX;
+    case ELEVENLABS_OUTPUT: return AUDIO_OUTPUT_ELEVENLABS;
+    case LLAMA_ELEVENLABS_TTS_OUTPUT: return AUDIO_OUTPUT_ELEVENLABS;
+    case GEMINI_TTS_OUTPUT: return AUDIO_OUTPUT_GEMINI_TTS;
+    case HF_BACKEND: return AUDIO_OUTPUT_HF;
+    case OPENAI_BACKEND:
+    default: return AUDIO_OUTPUT_OPENAI_REALTIME;
+  }
+}
+
+// Inverse of legacyResponseToAudioOutput. The ``llmBackend`` argument
+// disambiguates the two LLM variants of the elevenlabs audio output.
+function audioOutputToLegacyResponse(audioOutputBackend, llmBackend) {
+  if (audioOutputBackend === AUDIO_OUTPUT_CHATTERBOX) return CHATTERBOX_OUTPUT;
+  if (audioOutputBackend === AUDIO_OUTPUT_ELEVENLABS) {
+    return llmBackend === LLM_BACKEND_LLAMA ? LLAMA_ELEVENLABS_TTS_OUTPUT : ELEVENLABS_OUTPUT;
+  }
+  if (audioOutputBackend === AUDIO_OUTPUT_GEMINI_TTS) return GEMINI_TTS_OUTPUT;
+  if (audioOutputBackend === AUDIO_OUTPUT_HF) return HF_BACKEND;
+  return OPENAI_BACKEND;
+}
+
 // LLM axis values for the 3-column pipeline picker
 const LLM_BACKEND_LLAMA = "llama";
 const LLM_BACKEND_GEMINI = "gemini";
 
 /**
  * Maps (llm_axis|output_axis) to the legacy single-string backend value used
- * by /backend_config (local_stt_response_backend) and the LLM backend env var.
+ * by the local-STT response radio (legacy display value) and the LLM backend env var.
  *
  * Bundled handlers (openai / huggingface) ignore the LLM column — they are
  * self-contained. Undefined entries are unsupported combinations.
@@ -268,7 +330,11 @@ async function validateKey(key) {
 }
 
 async function saveBackendConfig(backend, { key = "", hfMode = "", hfHost = "", hfPort = null } = {}) {
-  const body = { backend, api_key: key };
+  // ``backend`` here is the *family* radio value (huggingface / openai /
+  // gemini / local_stt).  Translate it into the Phase 4f-canonical pipeline
+  // dials before sending.
+  const pipelineMode = FAMILY_TO_PIPELINE_MODE[backend] || PIPELINE_MODE_COMPOSABLE;
+  const body = { pipeline_mode: pipelineMode, api_key: key };
   if (backend === HF_BACKEND) {
     if (hfMode) body.hf_mode = hfMode;
     if (hfHost) body.hf_host = hfHost;
@@ -283,7 +349,8 @@ async function saveBackendConfig(backend, { key = "", hfMode = "", hfHost = "", 
     const updateEl = document.getElementById("local-stt-update");
     body.local_stt_language = (languageEl?.value || "en").trim();
     body.local_stt_cache_dir = (cacheEl?.value || "./cache/moonshine_voice").trim();
-    body.local_stt_response_backend = responseEl?.value || OPENAI_BACKEND;
+    body.audio_input_backend = AUDIO_INPUT_MOONSHINE;
+    body.audio_output_backend = legacyResponseToAudioOutput(responseEl?.value || OPENAI_BACKEND);
     body.llm_backend = (llmBackendEl?.value || LLM_BACKEND_LLAMA).trim();
     body.local_stt_model = modelEl?.value || "tiny_streaming";
     const updateInterval = Number.parseFloat((updateEl?.value || "0.35").trim());
@@ -652,7 +719,12 @@ async function init() {
   function populateLocalSTTFields(status) {
     localSttLanguage.value = status.local_stt_language || "en";
     localSttCache.value = status.local_stt_cache_dir || "./cache/moonshine_voice";
-    localSttResponse.value = status.local_stt_response_backend || OPENAI_BACKEND;
+    // Phase 4f: derive the legacy response-radio value from the canonical
+    // audio_output_backend + llm_backend pair the server now exposes.
+    localSttResponse.value = audioOutputToLegacyResponse(
+      status.audio_output_backend || AUDIO_OUTPUT_OPENAI_REALTIME,
+      status.llm_backend || LLM_BACKEND_LLAMA,
+    );
     localSttModel.innerHTML = "";
     const choices = Array.isArray(status.local_stt_model_choices) && status.local_stt_model_choices.length
       ? status.local_stt_model_choices
@@ -882,7 +954,10 @@ async function init() {
   }
 
   function renderCredentialPanels(status) {
-    const persistedBackend = status.backend_provider || DEFAULT_BACKEND;
+    const persistedBackend = pipelineModeToFamily(
+      status.pipeline_mode || PIPELINE_MODE_HF_REALTIME,
+      status.audio_output_backend,
+    );
     const activeBackend = status.active_backend || persistedBackend;
     const requiresRestart = !!status.requires_restart;
     const meta = backendMeta(selectedBackend);
@@ -972,7 +1047,9 @@ async function init() {
 
   const st = (await waitForStatus()) || {
     active_backend: DEFAULT_BACKEND,
-    backend_provider: DEFAULT_BACKEND,
+    pipeline_mode: PIPELINE_MODE_HF_REALTIME,
+    audio_input_backend: AUDIO_INPUT_HF,
+    audio_output_backend: AUDIO_OUTPUT_HF,
     has_key: false,
     has_openai_key: false,
     has_gemini_key: false,
@@ -990,8 +1067,6 @@ async function init() {
     can_proceed_with_local_stt: false,
     local_stt_language: "en",
     local_stt_cache_dir: "./cache/moonshine_voice",
-    local_stt_response_backend: OPENAI_BACKEND,
-    local_stt_response_backend_choices: [OPENAI_BACKEND, HF_BACKEND],
     local_stt_model: "tiny_streaming",
     local_stt_update_interval: 0.35,
     local_stt_model_choices: ["tiny_streaming", "small_streaming"],
@@ -1003,7 +1078,7 @@ async function init() {
   populateHFFields(st);
   populateLocalSTTFields(st);
   renderCrowdHistory(st);
-  setSelectedBackend(st.backend_provider || DEFAULT_BACKEND);
+  setSelectedBackend(pipelineModeToFamily(st.pipeline_mode, st.audio_output_backend));
   statusEl.textContent = "";
   renderCredentialPanels(st);
 
@@ -1446,7 +1521,10 @@ async function init() {
     }
   });
 
-  if (!(st.can_proceed ?? backendCanProceed(st, st.backend_provider || DEFAULT_BACKEND)) || st.requires_restart) {
+  if (
+    !(st.can_proceed ?? backendCanProceed(st, pipelineModeToFamily(st.pipeline_mode, st.audio_output_backend)))
+    || st.requires_restart
+  ) {
     show(loading, false);
     return;
   }

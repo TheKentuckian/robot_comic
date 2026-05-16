@@ -4,8 +4,9 @@ Combines:
 - LLM: llama-server /v1/chat/completions (local Qwen3)
 - TTS: gemini-3.1-flash-tts-preview (cloud, via Gemini client)
 
-Select via:
-    LOCAL_STT_RESPONSE_BACKEND=llama_gemini_tts
+Select via the admin UI's composable pipeline picker (Phase 4f) or the env
+vars REACHY_MINI_PIPELINE_MODE=composable +
+REACHY_MINI_AUDIO_OUTPUT_BACKEND=gemini_tts + REACHY_MINI_LLM_BACKEND=llama.
 """
 
 from __future__ import annotations

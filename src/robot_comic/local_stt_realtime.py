@@ -28,7 +28,7 @@ from robot_comic.config import (
     HF_BACKEND,
     OPENAI_BACKEND,
     config,
-    get_default_voice_for_backend,
+    get_default_voice_for_provider,
 )
 from robot_comic.prompts import get_session_voice, get_session_instructions
 from robot_comic.welcome_gate import GateState, WelcomeGate
@@ -869,7 +869,7 @@ class LocalSTTInputMixin:
 class LocalSTTOpenAIRealtimeHandler(LocalSTTInputMixin, OpenaiRealtimeHandler):
     """Use local Moonshine STT for input and OpenAI Realtime for responses."""
 
-    BACKEND_PROVIDER = OPENAI_BACKEND
+    PROVIDER_ID = OPENAI_BACKEND
     SAMPLE_RATE = 24000
     REFRESH_CLIENT_ON_RECONNECT = False
     AUDIO_INPUT_COST_PER_1M = 0.0
@@ -903,14 +903,14 @@ class LocalSTTOpenAIRealtimeHandler(LocalSTTInputMixin, OpenaiRealtimeHandler):
 
     def get_current_voice(self) -> str:
         """Return the OpenAI voice selected for local-STT responses."""
-        default_voice = get_default_voice_for_backend(OPENAI_BACKEND)
+        default_voice = get_default_voice_for_provider(OPENAI_BACKEND)
         return self._voice_override or self._get_session_voice(default=default_voice)
 
 
 class LocalSTTHuggingFaceRealtimeHandler(LocalSTTInputMixin, HuggingFaceRealtimeHandler):
     """Use local Moonshine STT for input and Hugging Face realtime for responses."""
 
-    BACKEND_PROVIDER = HF_BACKEND
+    PROVIDER_ID = HF_BACKEND
     SAMPLE_RATE = 16000
     REFRESH_CLIENT_ON_RECONNECT = True
     AUDIO_INPUT_COST_PER_1M = 0.0

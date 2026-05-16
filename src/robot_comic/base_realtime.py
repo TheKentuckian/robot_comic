@@ -37,8 +37,8 @@ if TYPE_CHECKING:
 from robot_comic import telemetry
 from robot_comic.config import (
     config,
-    get_default_voice_for_backend,
-    get_available_voices_for_backend,
+    get_default_voice_for_provider,
+    get_available_voices_for_provider,
 )
 from robot_comic.guardrail import SOFTEN_NOTE, EngagementMonitor
 from robot_comic.tools.core_tools import ToolDependencies
@@ -90,7 +90,12 @@ def to_realtime_tools_config(tool_specs: list[dict[str, Any]]) -> RealtimeToolsC
 class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
     """Shared realtime stream handler for OpenAI-compatible client APIs."""
 
-    BACKEND_PROVIDER: ClassVar[str]
+    # Stable provider identifier carried on every concrete realtime handler.
+    # Drives voice-catalog lookups and the OTel ``gen_ai.system`` /
+    # ``robot.mode`` attribute emission.  Emitted *value* strings
+    # (``"openai"``, ``"gemini"``, ``"huggingface"``, …) are intentionally
+    # unchanged so observability dashboards keep working unchanged.
+    PROVIDER_ID: ClassVar[str]
     SAMPLE_RATE: ClassVar[int]
     REFRESH_CLIENT_ON_RECONNECT: ClassVar[bool]
     AUDIO_INPUT_COST_PER_1M: ClassVar[float]
@@ -100,7 +105,7 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
     IMAGE_INPUT_COST_PER_1M: ClassVar[float]
 
     _REQUIRED_PROVIDER_CONFIG: ClassVar[tuple[str, ...]] = (
-        "BACKEND_PROVIDER",
+        "PROVIDER_ID",
         "SAMPLE_RATE",
         "REFRESH_CLIENT_ON_RECONNECT",
         "AUDIO_INPUT_COST_PER_1M",
@@ -241,14 +246,14 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
 
     def _normalize_startup_voice(self, voice: str | None) -> str | None:
         """Return a valid persisted startup voice for this backend, or None."""
-        available_voices = get_available_voices_for_backend(self.BACKEND_PROVIDER)
+        available_voices = get_available_voices_for_provider(self.PROVIDER_ID)
         if voice in available_voices:
             return voice
         if voice:
             logger.warning(
                 "Ignoring persisted startup voice %r for backend=%r; expected one of %s",
                 voice,
-                self.BACKEND_PROVIDER,
+                self.PROVIDER_ID,
                 available_voices,
             )
         return None
@@ -311,7 +316,7 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
 
     def get_current_voice(self) -> str:
         """Return the voice currently selected for this handler."""
-        default_voice = get_default_voice_for_backend(self.BACKEND_PROVIDER)
+        default_voice = get_default_voice_for_provider(self.PROVIDER_ID)
         return self._voice_override or self._get_session_voice(default=default_voice)
 
     async def apply_personality(self, profile: str | None) -> str:
@@ -433,7 +438,7 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
             if self._turn_start_at is not None:
                 telemetry.record_turn(
                     time.perf_counter() - self._turn_start_at,
-                    {"robot.mode": self.BACKEND_PROVIDER, "turn.outcome": outcome},
+                    {"robot.mode": self.PROVIDER_ID, "turn.outcome": outcome},
                 )
         if self._turn_ctx_token is not None:
             otel_context.detach(self._turn_ctx_token)
@@ -791,7 +796,7 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
                             attributes={
                                 "turn.id": self._turn_id,
                                 "session.id": self._session_id,
-                                "robot.mode": self.BACKEND_PROVIDER,
+                                "robot.mode": self.PROVIDER_ID,
                                 "robot.persona": telemetry.current_persona(),
                             },
                         )
@@ -816,11 +821,11 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
                             tts_s = time.perf_counter() - self._tts_start_at
                             self._tts_span.end()
                             self._tts_span = None
-                            telemetry.record_tts(tts_s, {"gen_ai.system": self.BACKEND_PROVIDER})
+                            telemetry.record_tts(tts_s, {"gen_ai.system": self.PROVIDER_ID})
                             if self._turn_user_done_at is not None:
                                 telemetry.record_tts_first_audio(
                                     self._tts_start_at - self._turn_user_done_at,
-                                    {"gen_ai.system": self.BACKEND_PROVIDER},
+                                    {"gen_ai.system": self.PROVIDER_ID},
                                 )
                             self._tts_start_at = None
                         self._close_turn_span("success")
@@ -854,7 +859,7 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
                         self._llm_span = telemetry.get_tracer().start_span(
                             "llm.request",
                             attributes={
-                                "gen_ai.system": self.BACKEND_PROVIDER,
+                                "gen_ai.system": self.PROVIDER_ID,
                                 "gen_ai.operation.name": "chat",
                                 "gen_ai.request.model": config.MODEL_NAME,
                             },
@@ -892,7 +897,7 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
                             telemetry.record_llm_duration(
                                 llm_s,
                                 {
-                                    "gen_ai.system": self.BACKEND_PROVIDER,
+                                    "gen_ai.system": self.PROVIDER_ID,
                                     "gen_ai.operation.name": "chat",
                                     "gen_ai.request.model": config.MODEL_NAME,
                                 },
@@ -966,7 +971,7 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
                             _vad_span.end()
                             telemetry.record_stt(
                                 vad_s,
-                                {"gen_ai.system": self.BACKEND_PROVIDER, "stt.type": "server_vad"},
+                                {"gen_ai.system": self.PROVIDER_ID, "stt.type": "server_vad"},
                             )
                         await self.output_queue.put(AdditionalOutputs({"role": "user", "content": transcript}))
 
@@ -1023,7 +1028,7 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
                                 self._llm_span.set_attribute("gen_ai.server.time_to_first_token", ttft_s)
                             telemetry.record_ttft(
                                 ttft_s,
-                                {"gen_ai.system": self.BACKEND_PROVIDER, "gen_ai.request.model": config.MODEL_NAME},
+                                {"gen_ai.system": self.PROVIDER_ID, "gen_ai.request.model": config.MODEL_NAME},
                             )
                             if self._tts_span is None:
                                 self._tts_start_at = self._turn_first_audio_at
@@ -1227,7 +1232,7 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
 
     async def get_available_voices(self) -> list[str]:
         """Return available voices for this backend."""
-        return get_available_voices_for_backend(self.BACKEND_PROVIDER)
+        return get_available_voices_for_provider(self.PROVIDER_ID)
 
     @abstractmethod
     async def _build_realtime_client(self) -> AsyncOpenAI:

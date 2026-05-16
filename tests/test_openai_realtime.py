@@ -13,13 +13,13 @@ import robot_comic.base_realtime as base_rt_mod
 import robot_comic.openai_realtime as rt_mod
 import robot_comic.tools.core_tools as ct_mod
 import robot_comic.tools.background_tool_manager as btm_mod
-from robot_comic.config import OPENAI_BACKEND, config, get_default_voice_for_backend
+from robot_comic.config import OPENAI_BACKEND, config, get_default_voice_for_provider
 from robot_comic.openai_realtime import OpenaiRealtimeHandler
 from robot_comic.tools.core_tools import ToolDependencies
 from robot_comic.tools.background_tool_manager import ToolCallRoutine
 
 
-OPENAI_DEFAULT_VOICE = get_default_voice_for_backend(OPENAI_BACKEND)
+OPENAI_DEFAULT_VOICE = get_default_voice_for_provider(OPENAI_BACKEND)
 
 
 def _build_handler(loop: asyncio.AbstractEventLoop) -> OpenaiRealtimeHandler:
@@ -472,7 +472,6 @@ async def test_apply_personality_preserves_manual_voice_override(monkeypatch: An
 
 def test_handler_uses_startup_voice_at_startup(monkeypatch: Any) -> None:
     """OpenAI handler startup should restore a persisted startup voice."""
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
 
     handler = OpenaiRealtimeHandler(
         ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()),
@@ -484,7 +483,6 @@ def test_handler_uses_startup_voice_at_startup(monkeypatch: Any) -> None:
 
 def test_copy_preserves_current_voice_override(monkeypatch: Any) -> None:
     """Copied OpenAI handlers should keep the current voice override."""
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
 
     handler = OpenaiRealtimeHandler(
         ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()),
@@ -607,7 +605,6 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
 
     # Patch the OpenAI client used by the handler
     monkeypatch.setattr(rt_mod, "AsyncOpenAI", FakeClient)
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
 
     # Build handler with minimal deps
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
@@ -628,7 +625,6 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
 @pytest.mark.asyncio
 async def test_start_up_openai_sim_polls_env_for_api_key(monkeypatch: Any) -> None:
     """In --sim mode, OpenAI handler polls the env until the admin UI populates the key."""
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
     monkeypatch.setattr(config, "OPENAI_API_KEY", None)
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
@@ -698,7 +694,6 @@ async def test_run_realtime_session_propagates_session_update_failure(monkeypatc
 @pytest.mark.asyncio
 async def test_handler_uses_openai_sample_rate_for_openai_backend(monkeypatch: Any) -> None:
     """OpenAI backend should keep the 24 kHz realtime audio configuration."""
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
 
     handler = OpenaiRealtimeHandler(ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()))
 
@@ -1067,7 +1062,6 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
             self.realtime = FakeRealtime()
 
     monkeypatch.setattr(rt_mod, "AsyncOpenAI", FakeClient)
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
 
     # Patch dispatch_tool_call so tools complete with a result.
     async def _fake_dispatch(tool_name: str, args_json: str, deps: Any, **_kw: Any) -> dict[str, Any]:

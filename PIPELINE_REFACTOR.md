@@ -21,7 +21,7 @@ authoritative roadmap; per-sub-phase specs and TDD plans live under
 | 4c-tris | `HybridRealtimePipeline` for `LocalSTTOpenAIRealtimeHandler` / `LocalSTTHuggingFaceRealtimeHandler` | ⏭ Skipped (Option B per memo `docs/superpowers/specs/2026-05-15-phase-4c-tris-hybrid-realtime-design.md`) | #369 |
 | 4d | Flip default `FACTORY_PATH=composable` | ✅ Done | #378 (commit 814efd8) |
 | 4e | Delete legacy concrete handlers + the dual-path dial + rewrite tests | ✅ Done | #379 (commit 4bb06d1) |
-| 4f | Retire `BACKEND_PROVIDER` / `LOCAL_STT_RESPONSE_BACKEND` config dials | ⏸ Pending — scope expanded, see §"Sub-phase 4f scope discovery" below | — |
+| 4f | Retire `BACKEND_PROVIDER` / `LOCAL_STT_RESPONSE_BACKEND` config dials | ✅ Done | #TBD (manager fixes on merge) |
 
 Between sub-phases: small lifecycle-hook follow-up PRs (see "Deferred
 lifecycle hooks" below).
@@ -262,41 +262,6 @@ review. The exploration memo recommended that, and the operator's
   composable helpers.
 - All tests still pass.
 - `git grep "LocalSTTLlamaElevenLabsHandler\|LocalSTTChatterboxHandler\|LocalSTTGeminiElevenLabsHandler\|LocalSTTGeminiTTSHandler\|GeminiTextChatterboxHandler\|GeminiTextElevenLabsHandler\|LocalSTTLlamaGeminiTTSHandler"` returns nothing inside `src/`.
-
----
-
-## Sub-phase 4f scope discovery (2026-05-16)
-
-A 4f-implementation sub-agent ran after 4e merged and STOPPED before writing any code. The original §"Sub-phase 4f" below described a narrow `config.py` + `main.py` + `.env.example` + `profiles/` + `deploy/` audit. The actual surface is larger: **5 distinct runtime surfaces** still reference `BACKEND_PROVIDER` / `LOCAL_STT_RESPONSE_BACKEND` post-4e.
-
-### Surfaces still using the dials
-
-1. **`src/robot_comic/prompts.py:60-81` — `_filter_delivery_tags`.** Reads both dials to gate Gemini TTS Delivery Tags inclusion in the system prompt. *Semantic*, not cosmetic — wrong gate sends wrong instructions to the LLM. Fix: switch gate to `AUDIO_OUTPUT_BACKEND == "gemini_tts"`. Small, isolated.
-2. **`src/robot_comic/base_realtime.py` (15+ sites) + handler subclasses.** `BACKEND_PROVIDER: ClassVar[str]` on `BaseRealtimeHandler`, set by concrete realtime handlers (`HuggingFaceRealtimeHandler`, `OpenaiRealtimeHandler`, `LocalSTTOpenAI/HF…RealtimeHandler`) to symbolic constants (`HF_BACKEND`, `OPENAI_BACKEND`). Used for voice-catalog lookup + OTel attributes `gen_ai.system` (5 sites) + `robot.mode` (2 sites). This is **handler identity**, not the retired config dial — the literal grep target catches it but the semantic meaning is different. Fix: rename ClassVar (e.g. `→ PROVIDER_ID`). OTel attribute *values* don't have to change.
-3. **`src/robot_comic/console.py` (14+ sites) + `src/robot_comic/static/main.js` + `index.html` — admin UI backend picker.** `_persist_backend_choice(backend)` writes `BACKEND_PROVIDER=<value>` into the instance `.env`; `/backend_config` POST endpoint accepts a `backend` field; `_status_payload` returns `backend_provider` and `local_stt_response_backend` to frontend. **Changes the JSON contract** and persisted-`.env` shape. Operator-visible breakage.
-4. **`tests/`** — 9 test files monkeypatch `config.BACKEND_PROVIDER` or set the env var (`test_console.py` 20+ hits; `test_huggingface_realtime.py` 8 hits; plus 7 others). Most are contract tests for surfaces #1, #2, #3 — they reshape with the surfaces.
-5. **`config.py` dial + `.env.example` rows + `main.py:240-251` HF-specific logging fork** — the originally-anticipated 4f scope. Safe to delete once #1–#3 are rewritten.
-
-### Cleanly safe to delete right now (no surface-1/2/3 cleanup needed)
-
-- `.env.example:3,37,41` — documentation rows.
-- `main.py:240-251` — HF-vs-other logging fork (use `PIPELINE_MODE` or existing `get_backend_label(...)` chain).
-- `deploy/` — clean (zero hits).
-- `profiles/` — clean (zero hits).
-- `external_content/` — directory does not exist in repo.
-- `pyproject.toml` — clean.
-
-### Suggested paths forward (operator decision needed)
-
-- **(a) Sub-split 4f** into:
-  - 4f.1 — `prompts.py` delivery-tags gate switch (small, no operator-visible impact).
-  - 4f.2 — `base_realtime.py` ClassVar rename + telemetry attribute internal rename (mechanical; ~5 handler files + tests; OTel attribute *keys* unchanged, just Python field name).
-  - 4f.3 — `console.py` admin-UI rewrite to persist `PIPELINE_MODE` + `AUDIO_INPUT_BACKEND` + `AUDIO_OUTPUT_BACKEND` + `LLM_BACKEND` directly; update `static/main.js` + `index.html`. **JSON contract changes; persisted-dial format changes; operator-visible breakage on first reload after deploy.**
-  - 4f.4 — final `config.py` dial deletion + `.env.example` + `main.py` logging fork removal.
-- **(b) Ship 4f as one bigger PR** (~600-1000 LOC, 5-6 commits) with operator's explicit OK to break the admin UI's persisted-dial format.
-- **(c) Live with the cruft.** Composable is already the default after 4d; the dials are functionally no-ops on the live path. Leaving them as dead config (with a comment noting "to be deleted, see #337") is also a valid endpoint.
-
-The current state (`main` at 4bb06d1) is fully deployable as-is. 4f is pure cleanup; it does not block any other work.
 
 ---
 

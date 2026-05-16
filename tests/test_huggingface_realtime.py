@@ -5,12 +5,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import robot_comic.huggingface_realtime as hf_mod
-from robot_comic.config import HF_BACKEND, config, get_default_voice_for_backend
+from robot_comic.config import HF_BACKEND, config, get_default_voice_for_provider
 from robot_comic.tools.core_tools import ToolDependencies
 from robot_comic.huggingface_realtime import HuggingFaceRealtimeHandler
 
 
-HF_DEFAULT_VOICE = get_default_voice_for_backend(HF_BACKEND)
+HF_DEFAULT_VOICE = get_default_voice_for_provider(HF_BACKEND)
 
 
 def _make_usage(
@@ -143,7 +143,6 @@ async def test_output_audio_delta_passes_output_sample_rate_to_head_wobbler(monk
     monkeypatch.setattr(hf_mod, "get_session_instructions", lambda: "test")
     monkeypatch.setattr(hf_mod, "get_session_voice", lambda default=HF_DEFAULT_VOICE: "Aiden")
     monkeypatch.setattr(hf_mod, "get_active_tool_specs", lambda _: [])
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "huggingface")
 
     audio_delta = "AAABAAIAAwA="
 
@@ -263,7 +262,6 @@ async def test_emit_skips_idle_signal_while_response_active(monkeypatch: Any) ->
 
 def test_handler_uses_hf_startup_voice_at_startup(monkeypatch: Any) -> None:
     """Hugging Face startup should restore persisted HF voices."""
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "huggingface")
 
     handler = HuggingFaceRealtimeHandler(
         ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()),
@@ -276,7 +274,6 @@ def test_handler_uses_hf_startup_voice_at_startup(monkeypatch: Any) -> None:
 @pytest.mark.asyncio
 async def test_start_up_hf_sim_does_not_wait_for_api_key(monkeypatch: Any) -> None:
     """Hugging Face backend in --sim mode should not block on textbox key collection."""
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "huggingface")
     monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-openai-secret")
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
@@ -303,7 +300,6 @@ async def test_run_realtime_session_uses_default_voice_for_lb_allocated_sessions
     monkeypatch.setattr(hf_mod, "get_session_instructions", lambda: "test")
     monkeypatch.setattr(hf_mod, "get_session_voice", lambda default=HF_DEFAULT_VOICE: default)
     monkeypatch.setattr(hf_mod, "get_active_tool_specs", lambda _: [])
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "huggingface")
     monkeypatch.setattr(config, "HF_REALTIME_SESSION_URL", "https://lb.example.test/session")
 
     captured_update: dict[str, Any] = {}
@@ -460,7 +456,6 @@ async def test_build_realtime_client_uses_direct_hf_ws_url(monkeypatch: Any) -> 
 
     monkeypatch.setattr(hf_mod, "AsyncOpenAI", FakeClient)
     monkeypatch.setattr(hf_mod.httpx, "AsyncClient", _unexpected_async_client)
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "huggingface")
     monkeypatch.setattr(config, "HF_REALTIME_CONNECTION_MODE", "local")
     monkeypatch.setattr(config, "HF_REALTIME_SESSION_URL", "https://lb.example.test/session")
     monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-openai-secret")
@@ -522,7 +517,6 @@ async def test_build_realtime_client_uses_deployed_mode_even_when_direct_hf_ws_u
 
     monkeypatch.setattr(hf_mod, "AsyncOpenAI", FakeClient)
     monkeypatch.setattr(hf_mod.httpx, "AsyncClient", FakeAsyncClient)
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "huggingface")
     monkeypatch.setattr(config, "HF_REALTIME_CONNECTION_MODE", "deployed")
     monkeypatch.setattr(config, "HF_REALTIME_SESSION_URL", "https://lb.example.test/session")
     monkeypatch.setattr(config, "HF_REALTIME_WS_URL", "ws://127.0.0.1:8765/v1/realtime")
@@ -578,7 +572,6 @@ async def test_build_realtime_client_does_not_send_openai_key_to_hf_allocator(mo
 
     monkeypatch.setattr(hf_mod, "AsyncOpenAI", FakeClient)
     monkeypatch.setattr(hf_mod.httpx, "AsyncClient", FakeAsyncClient)
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "huggingface")
     monkeypatch.setattr(config, "HF_REALTIME_CONNECTION_MODE", "deployed")
     monkeypatch.setattr(config, "HF_REALTIME_SESSION_URL", "https://lb.example.test/session")
     monkeypatch.setattr(config, "HF_REALTIME_WS_URL", None)
@@ -599,7 +592,6 @@ async def test_apply_personality_uses_selected_voice_for_lb_allocated_sessions(m
     """Live personality updates should honor the selected Qwen CustomVoice speaker."""
     monkeypatch.setattr(hf_mod, "get_session_instructions", lambda: "new instructions")
     monkeypatch.setattr(hf_mod, "get_session_voice", lambda default=HF_DEFAULT_VOICE: "Serena")
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "huggingface")
     monkeypatch.setattr(config, "HF_REALTIME_SESSION_URL", "https://lb.example.test/session")
 
     captured_update: dict[str, Any] = {}

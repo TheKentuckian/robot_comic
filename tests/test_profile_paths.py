@@ -94,8 +94,10 @@ def test_builtin_default_profile_tools_load_for_ui() -> None:
 
 
 def test_session_voice_defaults_follow_selected_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Session voice should fall back to the active backend default."""
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "gemini")
+    """Session voice should fall back to the active pipeline's default voice."""
+    monkeypatch.setattr(config, "PIPELINE_MODE", "gemini_live")
+    monkeypatch.setattr(config, "AUDIO_INPUT_BACKEND", "gemini_live_input")
+    monkeypatch.setattr(config, "AUDIO_OUTPUT_BACKEND", "gemini_live_output")
     monkeypatch.setattr(config, "MODEL_NAME", "gemini-3.1-flash-live-preview")
     monkeypatch.setattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
 
@@ -106,8 +108,10 @@ def test_headless_profile_write_defaults_voice_at_call_time(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """New headless profiles should use the currently selected backend default voice."""
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "gemini")
+    """New headless profiles should use the currently selected pipeline's default voice."""
+    monkeypatch.setattr(config, "PIPELINE_MODE", "gemini_live")
+    monkeypatch.setattr(config, "AUDIO_INPUT_BACKEND", "gemini_live_input")
+    monkeypatch.setattr(config, "AUDIO_OUTPUT_BACKEND", "gemini_live_output")
     monkeypatch.setattr(config, "MODEL_NAME", "gemini-3.1-flash-live-preview")
     monkeypatch.setattr(headless_mod, "_profiles_root", lambda: tmp_path)
 

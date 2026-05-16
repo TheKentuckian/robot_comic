@@ -169,7 +169,6 @@ def run(
     # Putting these dependencies here makes the dashboard faster to load when Robot Comic is installed.
     from robot_comic.moves import MovementManager
     from robot_comic.config import (
-        HF_BACKEND,
         config,
         get_backend_label,
         get_hf_connection_selection,
@@ -237,18 +236,22 @@ def run(
         # Telemetry must never block startup; swallow any export failure.
         pass
 
-    if config.BACKEND_PROVIDER == HF_BACKEND:
+    # Log the active pipeline_mode + audio backends. HF-realtime keeps the
+    # connection-mode detail; everything else also logs the model name.
+    if config.PIPELINE_MODE == "hf_realtime":
         logger.info(
-            "Configured backend provider: %s (%s), connection mode: %s",
-            config.BACKEND_PROVIDER,
-            get_backend_label(config.BACKEND_PROVIDER),
+            "Configured pipeline mode: %s (%s), connection mode: %s",
+            config.PIPELINE_MODE,
+            get_backend_label(),
             get_hf_connection_selection().mode,
         )
     else:
         logger.info(
-            "Configured backend provider: %s (%s), model: %s",
-            config.BACKEND_PROVIDER,
-            get_backend_label(config.BACKEND_PROVIDER),
+            "Configured pipeline mode: %s (%s), audio: %s → %s, model: %s",
+            config.PIPELINE_MODE,
+            get_backend_label(),
+            config.AUDIO_INPUT_BACKEND,
+            config.AUDIO_OUTPUT_BACKEND,
             config.MODEL_NAME,
         )
 
