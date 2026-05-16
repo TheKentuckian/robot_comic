@@ -5,12 +5,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import robot_comic.huggingface_realtime as hf_mod
-from robot_comic.config import HF_BACKEND, config, get_default_voice_for_backend
+from robot_comic.config import HF_BACKEND, config, get_default_voice_for_provider
 from robot_comic.tools.core_tools import ToolDependencies
 from robot_comic.huggingface_realtime import HuggingFaceRealtimeHandler
 
 
-HF_DEFAULT_VOICE = get_default_voice_for_backend(HF_BACKEND)
+HF_DEFAULT_VOICE = get_default_voice_for_provider(HF_BACKEND)
 
 
 def _make_usage(

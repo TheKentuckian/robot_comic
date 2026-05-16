@@ -13,13 +13,13 @@ import robot_comic.base_realtime as base_rt_mod
 import robot_comic.openai_realtime as rt_mod
 import robot_comic.tools.core_tools as ct_mod
 import robot_comic.tools.background_tool_manager as btm_mod
-from robot_comic.config import OPENAI_BACKEND, config, get_default_voice_for_backend
+from robot_comic.config import OPENAI_BACKEND, config, get_default_voice_for_provider
 from robot_comic.openai_realtime import OpenaiRealtimeHandler
 from robot_comic.tools.core_tools import ToolDependencies
 from robot_comic.tools.background_tool_manager import ToolCallRoutine
 
 
-OPENAI_DEFAULT_VOICE = get_default_voice_for_backend(OPENAI_BACKEND)
+OPENAI_DEFAULT_VOICE = get_default_voice_for_provider(OPENAI_BACKEND)
 
 
 def _build_handler(loop: asyncio.AbstractEventLoop) -> OpenaiRealtimeHandler:

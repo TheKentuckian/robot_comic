@@ -62,7 +62,7 @@ def _native_rate_audio_pcm() -> HFNativeRateAudioPCM:
 class HuggingFaceRealtimeHandler(BaseRealtimeHandler):
     """Realtime handler for Hugging Face endpoints."""
 
-    BACKEND_PROVIDER = HF_BACKEND
+    PROVIDER_ID = HF_BACKEND
     SAMPLE_RATE = 16000
     REFRESH_CLIENT_ON_RECONNECT = True
     AUDIO_INPUT_COST_PER_1M = 0.0

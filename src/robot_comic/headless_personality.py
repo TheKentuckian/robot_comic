@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import List
 from pathlib import Path
 
-from .config import DEFAULT_PROFILES_DIRECTORY, get_default_voice_for_backend
+from .config import DEFAULT_PROFILES_DIRECTORY, get_default_voice_for_provider
 
 
 DEFAULT_OPTION = "(built-in default)"
@@ -107,7 +107,7 @@ def available_tools_for(selected: str) -> List[str]:
 
 
 def _write_profile(name_s: str, instructions: str, tools_text: str, voice: str | None = None) -> None:
-    default_voice = get_default_voice_for_backend()
+    default_voice = get_default_voice_for_provider()
     target_dir = _profiles_root() / "user_personalities" / name_s
     target_dir.mkdir(parents=True, exist_ok=True)
     (target_dir / "instructions.txt").write_text(instructions.strip() + "\n", encoding="utf-8")
