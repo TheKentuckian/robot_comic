@@ -65,6 +65,7 @@ from robot_comic.backends import (
     TTSBackend,
     LLMResponse,
 )
+from robot_comic.history_trim import trim_history_in_place
 from robot_comic.joke_history import record_joke_history
 
 
@@ -208,6 +209,13 @@ class ComposablePipeline:
 
     async def _run_llm_loop_and_speak(self) -> None:
         """Run the LLM round-trips with tool dispatch, then synthesize speech."""
+        # Lifecycle Hook #5 (#337): cap the conversation history at
+        # ``REACHY_MINI_MAX_HISTORY_TURNS`` user turns so long sessions don't
+        # blow the model's context window or run the token bill into the
+        # ground. Once-per-user-turn cadence matches the legacy sites in
+        # ``_dispatch_completed_transcript``. Legacy parity:
+        # llama_base.py:506, gemini_tts.py:365, elevenlabs_tts.py:565.
+        trim_history_in_place(self._conversation_history)
         for _round in range(self.max_tool_rounds):
             response = await self.llm.chat(
                 self._conversation_history,
