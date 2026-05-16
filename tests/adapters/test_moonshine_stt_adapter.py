@@ -440,6 +440,56 @@ async def test_standalone_stop_calls_listener_stop(
     await adapter.stop()
 
     assert stub.stop_called is True
+
+
+@pytest.mark.asyncio
+async def test_standalone_feed_audio_before_start_drops_silently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Frames arriving before ``start()`` must not crash.
+
+    Regression for the Phase 5e race: ``ComposablePipeline.start_up``
+    prepares LLM + TTS before calling ``stt.start()``, while
+    ``console.py``'s ``record_loop`` runs concurrently and may begin
+    feeding captured frames as soon as the ALSA source opens. Pre-fix
+    this raised ``AssertionError`` and propagated up through
+    ``record_loop``, crashing the app — observable on hardware as a
+    head-slam (#371) when the daemon-driven service cycle happens to
+    coincide with a real audio frame arriving.
+    """
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter()
+
+    samples = np.array([1, 2, 3], dtype=np.int16)
+    # No await adapter.start() — frame arrives during the start-up window.
+    await adapter.feed_audio(AudioFrame(samples=samples, sample_rate=24000))
+
+    assert stub.fed_frames == []
+
+
+@pytest.mark.asyncio
+async def test_standalone_feed_audio_after_stop_drops_silently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Frames arriving after ``stop()`` must not crash.
+
+    Same race as the pre-start case but on the teardown side. ``stop()``
+    tears down the listener; a frame queued in ``record_loop`` between
+    teardown and task cancellation must not assert.
+    """
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter()
+
+    async def _cb(_t: str) -> None: ...
+
+    await adapter.start(_cb)
+    await adapter.stop()
+    stub.fed_frames.clear()
+
+    samples = np.array([4, 5, 6], dtype=np.int16)
+    await adapter.feed_audio(AudioFrame(samples=samples, sample_rate=16000))
+
+    assert stub.fed_frames == []
     assert adapter._listener is None
 
 

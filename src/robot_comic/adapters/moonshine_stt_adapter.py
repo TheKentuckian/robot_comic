@@ -200,6 +200,21 @@ class MoonshineSTTAdapter:
         first (Phase 5e.2 echo-guard). Host-coupled mode forwards
         unconditionally — the :class:`LocalSTTInputMixin.receive` path
         has its own echo-guard skip via ``_speaking_until``.
+
+        Standalone mode is tolerant of frames arriving outside the
+        ``start()``/``stop()`` window. The ``ComposablePipeline.start_up``
+        coroutine prepares LLM and TTS adapters before calling
+        ``stt.start()``, while ``console.py``'s ``record_loop`` runs as a
+        sibling task and may begin feeding captured frames the moment the
+        ALSA source opens. Frames that arrive before ``start()`` (or
+        after ``stop()``) are silently dropped — the moments of audio are
+        lost the same way a real-world utterance during boot would be.
+        Pre-5e the mixin path masked this race because the host handler
+        was built with a listener already in place; the standalone path
+        does not, so the drop is explicit. Without this tolerance a
+        well-timed daemon-driven restart triggers an ``AssertionError``
+        in ``record_loop`` that crashes the app and exacerbates the
+        head-slam shutdown (#371).
         """
         samples = frame.samples
         if not isinstance(samples, np.ndarray):
@@ -207,7 +222,10 @@ class MoonshineSTTAdapter:
         if self._standalone:
             if self._should_drop_frame is not None and self._should_drop_frame():
                 return
-            assert self._listener is not None, "feed_audio called before start()"
+            if self._listener is None:
+                # start() hasn't been called yet, or stop() has already torn
+                # down the listener. Drop the frame; see method docstring.
+                return
             await self._listener.feed_audio(frame.sample_rate, samples)
         else:
             await self._handler.receive((frame.sample_rate, samples))
