@@ -2,8 +2,16 @@
 
 Closes the surface gap between :class:`ComposablePipeline` and the existing
 :class:`ConversationHandler` ABC so the factory (Phase 4b) can return either
-interchangeably. Forwards voice / personality calls to a legacy TTS handler
-held by reference — no Protocol churn.
+interchangeably. Forwards voice / personality calls through the pipeline —
+voice methods route through ``self.pipeline.tts`` (Phase 5c.1) and
+``apply_personality`` routes through ``self.pipeline.apply_personality``
+(Phase 5c.2).
+
+The wrapper still holds ``self._tts_handler`` for the ``_clear_queue``
+mirroring shim (the ``LocalSTTInputMixin`` listener calls
+``self._clear_queue`` on the legacy host instance for barge-in flushing).
+Phase 5d's ``ConversationHandler`` ABC shrink is the right home for
+that cleanup.
 
 Phase 4a deliberately leaves these lifecycle hooks unwired; each is a
 follow-up PR between 4b and 4d:
@@ -16,7 +24,9 @@ follow-up PR between 4b and 4d:
       ``ComposablePipeline._run_llm_loop_and_speak``
     - _speaking_until echo-guard timestamps (elevenlabs_tts.py:471-473) —
       per-turn write site wired (Hook #1, PR #372); per-persona reset
-      wired (Phase 5a.1) at ``apply_personality``
+      wired in Phase 5a.1 at the wrapper, moved onto
+      ``ComposablePipeline.apply_personality`` →
+      ``TTSBackend.reset_per_session_state`` in Phase 5c.2
 """
 
 from __future__ import annotations
@@ -24,8 +34,6 @@ import asyncio
 import logging
 from typing import Any, Callable
 
-from robot_comic.config import set_custom_profile
-from robot_comic.prompts import get_session_instructions
 from robot_comic.backends import AudioFrame as BackendAudioFrame
 from robot_comic.tools.core_tools import ToolDependencies
 from robot_comic.composable_pipeline import ComposablePipeline
@@ -170,69 +178,22 @@ class ComposableConversationHandler(ConversationHandler):
         return await wait_for_item(self.pipeline.output_queue)
 
     async def apply_personality(self, profile: str | None) -> str:
-        """Switch personality, reset pipeline history, clear per-session state, re-seed system prompt.
+        """Forward to :meth:`ComposablePipeline.apply_personality` (Phase 5c.2).
 
-        Persona switch is a hard cut on listening state: the wrapped TTS
-        handler's echo-guard accumulators are cleared via
-        :meth:`_reset_tts_per_session_state` so a stale ``_speaking_until``
-        from an in-flight or just-finished playback does not bleed into the
-        new persona's listening window. See spec
-        ``docs/superpowers/specs/2026-05-16-phase-5a1-echo-guard-persona-reset.md``
-        for the audit + rationale; Phase 4 lifecycle hook #1 (PR #372) wired
-        the per-turn write site, this is the per-persona reset complement.
+        Persona-switch state surgery (history reset, per-session TTS
+        state reset, system-prompt re-seed) lives on the pipeline as of
+        Phase 5c.2; the wrapper just satisfies the
+        :class:`ConversationHandler` ABC contract by forwarding through.
 
-        Joke history is a cross-persona file
-        (``~/.robot-comic/joke-history.json``) read in
-        ``prompts.py:_append_joke_history`` — it intentionally persists
-        across personality switches so each persona avoids the others'
-        punchlines (legacy parity, see ``joke_history.format_for_prompt``
-        comment "Pulls entries from ALL personas (cross-persona dedup)").
+        The pipeline implementation clears the wrapped TTS handler's
+        echo-guard accumulators via
+        :meth:`TTSBackend.reset_per_session_state` — the adapter
+        Protocol extension that replaced the wrapper's pre-5c.2
+        ``_reset_tts_per_session_state`` helper. See spec
+        ``docs/superpowers/specs/2026-05-16-phase-5c2-apply-personality-to-pipeline.md``
+        for the move rationale.
         """
-        try:
-            set_custom_profile(profile)
-        except Exception as exc:
-            logger.error("Error applying personality %r: %s", profile, exc)
-            return f"Failed to apply personality: {exc}"
-        self.pipeline.reset_history(keep_system=False)
-        self._reset_tts_per_session_state()
-        self.pipeline._conversation_history.append({"role": "system", "content": get_session_instructions()})
-        return f"Applied personality {profile!r}. Conversation history reset."
-
-    def _reset_tts_per_session_state(self) -> None:
-        """Clear per-session echo-guard accumulators on the wrapped TTS handler.
-
-        Defensively guarded via :func:`hasattr` so handlers without echo-guard
-        state (e.g. :class:`~robot_comic.gemini_tts.GeminiTTSResponseHandler`,
-        which has no ``_speaking_until`` field) are a clean no-op.
-
-        Three fields are reset, mirroring the per-turn reset site in
-        ``ElevenLabsTTSResponseHandler._dispatch_completed_transcript_impl``
-        (``elevenlabs_tts.py:558-560``) and the canned-opener reset at
-        ``llama_base.py:182-184``:
-
-        - ``_speaking_until`` — playback-deadline timestamp consulted by
-          ``LocalSTTInputMixin._handle_local_stt_event`` (see
-          ``local_stt_realtime.py:619``).
-        - ``_response_start_ts`` / ``_response_audio_bytes`` — the byte-count
-          accumulators that feed the next ``_speaking_until`` derivation in
-          ``_enqueue_audio_frame`` (lifecycle hook #1, PR #372).
-
-        ``_is_responding`` / ``_dispatch_in_flight`` on
-        ``ElevenLabsTTSResponseHandler`` are intentionally NOT touched —
-        they only guard the legacy ``_dispatch_completed_transcript`` path
-        that the composable pipeline bypasses. Clearing them would mask
-        bugs if the legacy dispatch ever re-engaged.
-        """
-        handler = getattr(self, "_tts_handler", None)
-        if handler is None:
-            return
-        for field, value in (
-            ("_speaking_until", 0.0),
-            ("_response_start_ts", 0.0),
-            ("_response_audio_bytes", 0),
-        ):
-            if hasattr(handler, field):
-                setattr(handler, field, value)
+        return await self.pipeline.apply_personality(profile)
 
     async def get_available_voices(self) -> list[str]:
         """Forward to the pipeline's TTS adapter (Phase 5c.1).
@@ -242,8 +203,9 @@ class ComposableConversationHandler(ConversationHandler):
         directly via :class:`~robot_comic.backends.TTSBackend`'s Phase
         5c.1 Protocol extension, so the wrapper no longer needs to reach
         into the legacy handler for voice queries. ``self._tts_handler``
-        is still consulted by :meth:`_reset_tts_per_session_state`
-        (Phase 5c.2 / 5d will revisit).
+        is still held for the :meth:`_clear_queue` setter's barge-in
+        mirror; Phase 5d's ABC shrink is the right home for that
+        cleanup.
         """
         return await self.pipeline.tts.get_available_voices()
 

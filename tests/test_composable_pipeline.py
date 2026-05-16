@@ -880,3 +880,163 @@ async def test_speak_assistant_text_allocates_fresh_marker_per_turn() -> None:
 
     await pipeline.shutdown()
     await task
+
+
+# ---------------------------------------------------------------------------
+# Phase 5c.2 — apply_personality moved onto ComposablePipeline
+# ---------------------------------------------------------------------------
+
+
+class _ResettableTTS(_RecordingTTS):
+    """Recording TTS that also tracks ``reset_per_session_state`` awaits."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reset_calls: int = 0
+
+    async def reset_per_session_state(self) -> None:
+        self.reset_calls += 1
+
+
+@pytest.mark.asyncio
+async def test_apply_personality_resets_history_and_reseeds_system_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``pipeline.apply_personality`` wipes history (system + user) and
+    reseeds with ``get_session_instructions()``.
+
+    Phase 5c.2 moves the wrapper's logic onto the pipeline; this test pins
+    the new owner's behaviour. The wrapper-level equivalent in
+    ``test_composable_conversation_handler.py`` is the post-5c.2
+    "forwards to pipeline" test.
+    """
+    from robot_comic import composable_pipeline as mod
+
+    monkeypatch.setattr(mod, "set_custom_profile", lambda profile: None)
+    monkeypatch.setattr(mod, "get_session_instructions", lambda: "fresh instructions")
+
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([])
+    tts = _ResettableTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts, system_prompt="old persona")
+    # Pre-seed some history that should be wiped.
+    pipeline._conversation_history.append({"role": "user", "content": "hi"})
+
+    result = await pipeline.apply_personality("rodney")
+
+    assert "Applied personality 'rodney'" in result
+    assert pipeline.conversation_history == [
+        {"role": "system", "content": "fresh instructions"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_personality_awaits_tts_reset_per_session_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``pipeline.apply_personality`` awaits ``tts.reset_per_session_state``
+    exactly once on the success path. Persona switch is a hard cut on
+    listening state; the TTS adapter clears its wrapped handler's
+    echo-guard accumulators in this call.
+    """
+    from robot_comic import composable_pipeline as mod
+
+    monkeypatch.setattr(mod, "set_custom_profile", lambda profile: None)
+    monkeypatch.setattr(mod, "get_session_instructions", lambda: "fresh")
+
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([])
+    tts = _ResettableTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    await pipeline.apply_personality("rodney")
+
+    assert tts.reset_calls == 1, (
+        f"apply_personality must await tts.reset_per_session_state exactly once; got {tts.reset_calls}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_personality_returns_failure_message_on_set_custom_profile_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If ``set_custom_profile`` raises, the pipeline returns a failure
+    string and does NOT touch history or per-session state.
+
+    Pins the partial-failure contract: a profile-name typo does not
+    half-reset the session.
+    """
+    from robot_comic import composable_pipeline as mod
+
+    def _boom(profile: str | None) -> None:
+        raise RuntimeError("bad profile")
+
+    monkeypatch.setattr(mod, "set_custom_profile", _boom)
+    monkeypatch.setattr(mod, "get_session_instructions", lambda: "fresh")
+
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([])
+    tts = _ResettableTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts, system_prompt="old")
+    pipeline._conversation_history.append({"role": "user", "content": "untouched"})
+    original_history = list(pipeline._conversation_history)
+
+    result = await pipeline.apply_personality("broken")
+
+    assert "Failed to apply personality" in result
+    assert "bad profile" in result
+    # TTS reset must NOT have fired on the failure path.
+    assert tts.reset_calls == 0, "tts.reset_per_session_state must NOT run when set_custom_profile fails"
+    # History must be untouched on the failure path.
+    assert pipeline._conversation_history == original_history, (
+        "history must be untouched when set_custom_profile fails"
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_personality_orders_history_reset_before_tts_reset_and_reseed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ordering: ``reset_history`` → ``tts.reset_per_session_state`` →
+    history-append. Pins the ordering so a future refactor that, say,
+    appends the system prompt before resetting history (which would leak
+    the new prompt into the old session's tail) gets caught.
+    """
+    from robot_comic import composable_pipeline as mod
+
+    monkeypatch.setattr(mod, "set_custom_profile", lambda profile: None)
+    monkeypatch.setattr(mod, "get_session_instructions", lambda: "FRESH-MARKER")
+
+    call_log: list[str] = []
+
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([])
+
+    class _SequencingTTS(_RecordingTTS):
+        async def reset_per_session_state(self) -> None:
+            call_log.append("tts_reset")
+
+    tts = _SequencingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts, system_prompt="old persona")
+    pipeline._conversation_history.append({"role": "user", "content": "u"})
+
+    original_reset_history = pipeline.reset_history
+
+    def _spy_reset_history(*, keep_system: bool = True) -> None:
+        call_log.append(f"reset_history(keep_system={keep_system})")
+        original_reset_history(keep_system=keep_system)
+
+    pipeline.reset_history = _spy_reset_history  # type: ignore[method-assign]
+
+    await pipeline.apply_personality("rodney")
+
+    # reset_history fires first, then tts_reset. The history-append is the
+    # last step (visible in the final history shape).
+    assert call_log == [
+        "reset_history(keep_system=False)",
+        "tts_reset",
+    ], f"unexpected call ordering: {call_log!r}"
+    # Final history reflects the post-append shape.
+    assert pipeline.conversation_history == [
+        {"role": "system", "content": "FRESH-MARKER"},
+    ]

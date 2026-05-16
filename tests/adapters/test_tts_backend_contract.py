@@ -42,6 +42,12 @@ class _ElevenLabsStub:
         self._frames = list(frames or [])
         self._raise = raise_exc
         self.prepare_called = False
+        # Phase 5c.2 echo-guard fields — initialised so the adapter's
+        # ``reset_per_session_state`` ``hasattr`` guard finds them.
+        # Tests set non-zero values before asserting the reset.
+        self._speaking_until = 0.0
+        self._response_start_ts = 0.0
+        self._response_audio_bytes = 0
 
     async def _prepare_startup_credentials(self) -> None:
         self.prepare_called = True
@@ -80,6 +86,12 @@ class _ChatterboxStub:
         self._frames = list(frames or [])
         self._raise = raise_exc
         self.prepare_called = False
+        # Phase 5c.2 echo-guard fields — Chatterbox inherits these from
+        # ``BaseLlamaResponseHandler`` (``llama_base.py:115-117``). Tests
+        # set non-zero values before asserting the reset.
+        self._speaking_until = 0.0
+        self._response_start_ts = 0.0
+        self._response_audio_bytes = 0
 
     async def _prepare_startup_credentials(self) -> None:
         self.prepare_called = True
@@ -322,3 +334,68 @@ async def test_change_voice_to_unknown_voice_does_not_raise(build: Any) -> None:
     adapter, _ = build()
     result = await adapter.change_voice("definitely-not-a-real-voice-id-12345")
     assert isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# reset_per_session_state contract (Phase 5c.2)
+# ---------------------------------------------------------------------------
+
+
+# Subset of ADAPTERS whose wrapped handler actually has the three echo-guard
+# fields. The Gemini stub mirrors GeminiTTSResponseHandler's surface —
+# those fields are absent in production today (see Phase 5a.1 audit) — so
+# Gemini is exercised separately by the no-op test below.
+ADAPTERS_WITH_ECHO_GUARD = [
+    pytest.param(_build_elevenlabs, id="elevenlabs"),
+    pytest.param(_build_chatterbox, id="chatterbox"),
+]
+
+
+@pytest.mark.parametrize("build", ADAPTERS_WITH_ECHO_GUARD)
+@pytest.mark.asyncio
+async def test_reset_per_session_state_zeros_echo_guard_fields(build: Any) -> None:
+    """``await adapter.reset_per_session_state()`` clears the three
+    echo-guard accumulators on the wrapped handler.
+
+    Mirrors the per-turn reset site at ``elevenlabs_tts.py:558-560`` and
+    the Phase 5a.1 per-persona reset audit. Persona switch is a hard cut
+    on listening state — a stale ``_speaking_until`` from an in-flight
+    or just-finished playback must not bleed into the next persona's
+    listening window.
+    """
+    adapter, handler = build()
+    # Simulate the wrapped handler being mid-playback at the moment of switch.
+    handler._speaking_until = 999.0
+    handler._response_start_ts = 500.0
+    handler._response_audio_bytes = 9600
+
+    await adapter.reset_per_session_state()
+
+    assert handler._speaking_until == 0.0
+    assert handler._response_start_ts == 0.0
+    assert handler._response_audio_bytes == 0
+
+
+@pytest.mark.parametrize("build", ADAPTERS)
+@pytest.mark.asyncio
+async def test_reset_per_session_state_no_op_when_fields_absent(build: Any) -> None:
+    """When the wrapped handler lacks the echo-guard fields, the reset
+    must be a clean no-op — no ``AttributeError`` from a blind
+    ``setattr``, no spurious field creation.
+
+    The Gemini stub already lacks the fields (matching
+    ``GeminiTTSResponseHandler`` in production); for the other adapters
+    we delete the fields off the stub before the call to force the
+    ``hasattr`` guard to miss.
+    """
+    adapter, handler = build()
+    for field in ("_speaking_until", "_response_start_ts", "_response_audio_bytes"):
+        if hasattr(handler, field):
+            delattr(handler, field)
+
+    # Must not raise.
+    await adapter.reset_per_session_state()
+
+    # And must not have grown the fields back.
+    for field in ("_speaking_until", "_response_start_ts", "_response_audio_bytes"):
+        assert not hasattr(handler, field), f"reset_per_session_state must not create {field!r} when it was absent"

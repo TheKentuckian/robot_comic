@@ -271,3 +271,32 @@ class TTSBackend(Protocol):
         Default raises :class:`NotImplementedError`.
         """
         raise NotImplementedError(f"{type(self).__name__} does not support voice switching")
+
+    async def reset_per_session_state(self) -> None:
+        """Clear per-session state on the backend (Phase 5c.2).
+
+        Called by :meth:`ComposablePipeline.apply_personality` so persona
+        switch is a hard cut on listening state. Adapters that wrap a
+        legacy handler with echo-guard accumulators (``_speaking_until``,
+        ``_response_start_ts``, ``_response_audio_bytes`` — see
+        ``elevenlabs_tts.py:558-560`` per-turn reset and
+        ``llama_base.py:182-184`` canned-opener reset for legacy parity
+        sites) zero them here so a stale playback deadline from the
+        previous persona does not bleed into the next persona's
+        listening window.
+
+        Default is a clean no-op — backends without per-session state
+        (Gemini TTS today, future pipeline-debug stubs) inherit it for
+        free. Unlike :meth:`get_available_voices` /
+        :meth:`get_current_voice` / :meth:`change_voice` which raise
+        :class:`NotImplementedError` (operator-facing surface where a
+        silent no-op would be confusing), this is an internal cleanup
+        hook the orchestrator fires opportunistically — a no-op default
+        is correct.
+
+        ``@runtime_checkable`` treats this as a required attribute for
+        ``isinstance`` checks even when defaulted; structural-only
+        satisfiers (test stubs that don't inherit from the Protocol)
+        must declare the method.
+        """
+        return None

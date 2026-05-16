@@ -212,3 +212,40 @@ class ElevenLabsTTSAdapter:
         (admin-UI free-text inputs work) and resolved at synthesis time.
         """
         return await self._handler.change_voice(voice)
+
+    async def reset_per_session_state(self) -> None:
+        """Clear per-session echo-guard accumulators on the wrapped handler (Phase 5c.2).
+
+        Called by :meth:`ComposablePipeline.apply_personality` so persona
+        switch is a hard cut on listening state — a stale
+        ``_speaking_until`` from an in-flight or just-finished playback
+        does not bleed into the new persona's listening window.
+
+        Three fields are reset, mirroring the per-turn reset site in
+        ``ElevenLabsTTSResponseHandler._dispatch_completed_transcript_impl``
+        (``elevenlabs_tts.py:558-560``):
+
+        - ``_speaking_until`` — playback-deadline timestamp consulted by
+          ``LocalSTTInputMixin._handle_local_stt_event``.
+        - ``_response_start_ts`` / ``_response_audio_bytes`` — the
+          byte-count accumulators that feed the next ``_speaking_until``
+          derivation in ``_enqueue_audio_frame`` (Lifecycle Hook #1,
+          PR #372).
+
+        ``_is_responding`` / ``_dispatch_in_flight`` are intentionally
+        NOT touched — they only guard the legacy
+        ``_dispatch_completed_transcript`` path that the composable
+        pipeline bypasses. Clearing them would mask bugs if the legacy
+        dispatch ever re-engaged.
+
+        Defensively guarded via :func:`hasattr` so handler-side schema
+        changes don't crash persona switching. Mirrors the pre-5c.2
+        wrapper-side helper that lived on ``ComposableConversationHandler``.
+        """
+        for field, value in (
+            ("_speaking_until", 0.0),
+            ("_response_start_ts", 0.0),
+            ("_response_audio_bytes", 0),
+        ):
+            if hasattr(self._handler, field):
+                setattr(self._handler, field, value)
