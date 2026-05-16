@@ -8,7 +8,6 @@ captures the Phase 5e.3 idempotency guard on
 """
 
 from __future__ import annotations
-
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
