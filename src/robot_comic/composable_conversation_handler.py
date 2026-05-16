@@ -102,36 +102,50 @@ class ComposableConversationHandler(ConversationHandler):
         return self._build()
 
     async def start_up(self) -> None:
-        """Emit ``handler.start_up.complete`` then delegate to the pipeline.
+        """Delegate to the pipeline and then emit ``handler.start_up.complete``.
 
-        Mirrors the legacy ``ElevenLabsTTSResponseHandler.start_up`` emit
-        (#321 / #301) on the composable path: fire the supporting-event row
-        *before* delegating to :meth:`ComposablePipeline.start_up`, which
-        blocks until shutdown. Emitting after the delegate would only land
-        the row on app shutdown — the same bug PR #337 already fixed on the
-        legacy side.
+        Boot memo PR #383 (§"weird things to know" #2) and instrumentation
+        audit PR #385 (§6 gap #3) flagged that the previous implementation
+        emitted the event *before* awaiting ``pipeline.start_up()``, which
+        meant the event timing reflected wrapper-entry rather than handler
+        readiness — operators reading the row got an "entered start_up"
+        signal labelled as "complete". This implementation fires the event
+        once :meth:`ComposablePipeline.start_up` has finished preparing the
+        STT/LLM/TTS adapters, which is the moment the handler is actually
+        ready to accept audio.
+
+        :meth:`ComposablePipeline.start_up` blocks until shutdown, so the
+        emit is wrapped in ``try/finally``: the supporting-event row fires
+        when the pipeline returns (either normal shutdown or an exception
+        propagating out of ``prepare``/``start``). Without ``finally`` an
+        exception in ``prepare`` would suppress the row entirely; downstream
+        consumers expecting it would see a missing event rather than an
+        early-exit signal.
 
         ``app.startup`` and ``welcome.wav.played`` are not emitted here; they
         fire from ``main.py`` and ``warmup_audio.py`` before any handler is
         built and are preserved on both factory paths.
         ``first_greeting.tts_first_audio`` fires from the TTS frame-enqueue
-        sites; the ElevenLabs and Chatterbox adapters preserve it via
-        delegation. The ``GeminiTTSAdapter`` gap is a separate follow-up.
+        sites; the ElevenLabs, Chatterbox and Gemini-TTS adapters preserve
+        it via delegation.
         """
         try:
-            from robot_comic import telemetry as _telemetry
-            from robot_comic.startup_timer import since_startup
+            await self.pipeline.start_up()
+        finally:
+            try:
+                from robot_comic import telemetry as _telemetry
+                from robot_comic.startup_timer import since_startup
 
-            _telemetry.emit_supporting_event(
-                "handler.start_up.complete",
-                dur_ms=since_startup() * 1000,
-            )
-        except Exception:
-            # Telemetry must never block boot — drop the row if emission
-            # throws (import error, exporter wiring quirk, etc.). Matches the
-            # ``try/except`` at the legacy emit site in elevenlabs_tts.py.
-            pass
-        await self.pipeline.start_up()
+                _telemetry.emit_supporting_event(
+                    "handler.start_up.complete",
+                    dur_ms=since_startup() * 1000,
+                )
+            except Exception:
+                # Telemetry must never block boot — drop the row if emission
+                # throws (import error, exporter wiring quirk, etc.). Matches
+                # the ``try/except`` at the legacy emit site in
+                # elevenlabs_tts.py.
+                pass
 
     async def shutdown(self) -> None:
         """Delegate to :meth:`ComposablePipeline.shutdown`."""

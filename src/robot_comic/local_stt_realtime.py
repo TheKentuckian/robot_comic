@@ -216,6 +216,10 @@ class _MoonshineListener:  # base class is attached dynamically in _build_local_
                 getattr(event, "error", event),
             )
         logger.warning("Local STT error: %s", getattr(event, "error", event))
+        # Surface the error to the metrics surface so the monitor can show
+        # a numeric signal alongside the warning log. Instrumentation audit
+        # (PR #385) Rec 3.
+        telemetry.inc_errors({"subsystem": "stt", "error_type": "stream_error"})
         # If the stream errored out we also need to rearm — the underlying
         # C handle may be in a state where no further events will fire.
         self.handler._pending_stream_rearm = True
@@ -315,10 +319,25 @@ class LocalSTTInputMixin:
         return gate
 
     async def _prepare_startup_credentials(self) -> None:
-        """Let the response backend prepare itself, then initialize local STT."""
+        """Let the response backend prepare itself, then initialize local STT.
+
+        Idempotency guard (#337 Phase 5 / boot memo PR #383 V7): the three
+        composable adapters (LLM, TTS, STT) each call this method on the same
+        shared host during their ``prepare``/``start`` lifecycle. The
+        underlying work (httpx client, Gemini client, Moonshine model load —
+        ~20 s on cold boot) is idempotent today, but the redundant work
+        costs real wall-clock during the start_up critical path. The first
+        successful call flips ``_startup_credentials_ready``; subsequent
+        calls are cheap no-ops. If the first call raises, the flag stays
+        unset so retries still re-attempt — preserves the "don't lock out
+        retries on failure" semantics.
+        """
+        if getattr(self, "_startup_credentials_ready", False):
+            return
         await super()._prepare_startup_credentials()  # type: ignore[misc]
         self._local_loop = asyncio.get_running_loop()
         await asyncio.to_thread(self._build_local_stt_stream)
+        self._startup_credentials_ready = True
 
     def _build_local_stt_stream(self) -> None:
         """Build and start the Moonshine streaming transcriber."""
@@ -693,6 +712,11 @@ class LocalSTTInputMixin:
                     age,
                     h["audio_frames"],
                 )
+                # Surface the idle-stall to the metrics surface; this is the
+                # very symptom MOONSHINE_DIAG exists to debug (#314) and the
+                # monitor should not have to scrape logs to detect it.
+                # Instrumentation audit (PR #385) Rec 3.
+                telemetry.inc_errors({"subsystem": "stt", "error_type": "idle_stall"})
 
     async def _moonshine_heartbeat_loop(self) -> None:
         """Log Moonshine state every second while the stream is active."""

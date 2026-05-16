@@ -49,25 +49,23 @@ async def test_start_up_delegates_to_pipeline() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_up_emits_handler_start_up_complete_before_delegating(
+async def test_start_up_emits_handler_start_up_complete_after_delegating(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The wrapper must emit ``handler.start_up.complete`` *before* awaiting
-    ``pipeline.start_up()`` so the monitor boot-timeline lane closes with a
-    "handler ready" row instead of a "handler shutdown" one.
+    """The wrapper must emit ``handler.start_up.complete`` *after* the
+    pipeline finishes preparing its adapters.
 
-    Pins Lifecycle Hook #3 (#337). Mirrors the legacy
-    ``ElevenLabsTTSResponseHandler.start_up`` emit (#321 / #301): the legacy
-    handler emits inside its own ``start_up`` right before blocking on the
-    stop event; the composable wrapper emits inside its own ``start_up``
-    right before delegating to the pipeline (which itself blocks until
-    shutdown).
+    Boot memo PR #383 §"weird things to know" #2 and instrumentation audit
+    PR #385 §6 gap #3 flagged the previous emit-on-entry timing as a
+    misnomer: the row labelled "complete" was firing on wrapper entry
+    rather than on pipeline readiness. This test pins the corrected timing
+    — the emit lives in a ``try/finally`` so it still fires if the pipeline
+    raises, but the normal-path ordering is pipeline-first, then emit.
     """
     from robot_comic import telemetry
 
     wrapper = _make_wrapper()
 
-    # Record whether the emit fired before pipeline.start_up was awaited.
     emit_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     pipeline_seen_emits: list[int] = []
 
@@ -83,20 +81,52 @@ async def test_start_up_emits_handler_start_up_complete_before_delegating(
 
     await wrapper.start_up()
 
-    # The emit must have fired exactly once for handler.start_up.complete with
-    # a numeric dur_ms kwarg.
+    # The emit fired exactly once with a numeric dur_ms kwarg.
     complete_calls = [(a, kw) for (a, kw) in emit_calls if a and a[0] == "handler.start_up.complete"]
     assert len(complete_calls) == 1, f"expected one handler.start_up.complete emit, got {emit_calls!r}"
     _args, kwargs = complete_calls[0]
     assert "dur_ms" in kwargs
     assert isinstance(kwargs["dur_ms"], float) and kwargs["dur_ms"] >= 0
 
-    # Pipeline.start_up was awaited, and the emit was already counted when
-    # pipeline.start_up entered.
+    # Pipeline.start_up was awaited, and no emit had fired yet when the
+    # pipeline entered. (The emit is the LAST thing start_up does.)
     wrapper.pipeline.start_up.assert_awaited_once()
-    assert pipeline_seen_emits == [1], (
-        "emit_supporting_event must fire before pipeline.start_up is awaited; "
+    assert pipeline_seen_emits == [0], (
+        "emit_supporting_event must fire AFTER pipeline.start_up returns; "
         f"observed emit_count at pipeline entry = {pipeline_seen_emits!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_up_emit_fires_even_when_pipeline_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ``try/finally`` wrap ensures ``handler.start_up.complete`` still
+    fires if the pipeline raises during prepare. Downstream monitor consumers
+    get an early-exit signal instead of a hung "no event ever arrived" state.
+    """
+    from robot_comic import telemetry
+
+    wrapper = _make_wrapper()
+
+    async def _boom(*_a: Any, **_kw: Any) -> None:
+        raise RuntimeError("prepare blew up")
+
+    wrapper.pipeline.start_up = AsyncMock(side_effect=_boom)
+
+    emit_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def _record_emit(*args: Any, **kwargs: Any) -> None:
+        emit_calls.append((args, kwargs))
+
+    monkeypatch.setattr(telemetry, "emit_supporting_event", _record_emit)
+
+    with pytest.raises(RuntimeError, match="prepare blew up"):
+        await wrapper.start_up()
+
+    complete_calls = [(a, kw) for (a, kw) in emit_calls if a and a[0] == "handler.start_up.complete"]
+    assert len(complete_calls) == 1, (
+        f"handler.start_up.complete must fire from the finally branch even on prepare failure; got {emit_calls!r}"
     )
 
 
