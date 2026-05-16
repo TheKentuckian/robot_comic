@@ -1,0 +1,17 @@
+# Empty-STOP fallback lines for the bill_hicks persona (issue #267).
+#
+# Sampled by the composable orchestrator when Gemini emits
+# finish_reason=STOP with zero parts (no text, no function_call).
+# Without these, the robot silently hangs and the operator perceives
+# the conversation as dead. Each line should be short, Hicks-flavoured,
+# and let the persona recover on the next user turn.
+#
+# Blank lines and lines starting with # are ignored. An empty file
+# (or all-comment file) falls back to the generic default pool in
+# src/robot_comic/empty_stop_fallbacks.py.
+Yeah. I'm here.
+Try that again, friend.
+You still with me?
+Mhm. Go on.
+I caught that. Hold on.
+Hmm. Say more.
