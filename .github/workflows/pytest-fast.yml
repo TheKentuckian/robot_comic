@@ -3,8 +3,10 @@ name: pytest-fast
 #
 # Selects tests NOT marked `slow`, `integration`, or `hardware`. Runs
 # under `pytest-xdist -n auto` (from `addopts` in pyproject.toml).
-# Targeted wall-clock budget: 90 s. The 2-minute job timeout is a hard
-# cap; the explicit budget step is a soft regression guard.
+# Targeted wall-clock budget: 90 s for pytest itself (enforced by the
+# "Enforce 90 s wall-clock budget" step). The job-level 15-minute
+# timeout is a generous hard cap covering cold-cache install of heavy
+# extras (face_recognition / dlib build, torch download).
 #
 # Required check on PRs. The full suite (`pytest-full`) runs in
 # parallel as advisory + post-merge gate.
@@ -38,7 +40,7 @@ jobs:
   pytest-fast:
     name: pytest-fast (${{ matrix.os }}, py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 2
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
