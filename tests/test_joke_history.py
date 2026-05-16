@@ -4,9 +4,9 @@ from __future__ import annotations
 import os
 import json
 import math
+from typing import Any
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -16,7 +16,6 @@ from robot_comic.joke_history import (
     JokeHistory,
     last_sentence_of,
     default_history_path,
-    record_joke_history,
 )
 
 

@@ -187,9 +187,7 @@ async def record_joke_history(
     if not getattr(config, "JOKE_HISTORY_ENABLED", True):
         return
 
-    resolved_persona = persona if persona is not None else (
-        getattr(config, "REACHY_MINI_CUSTOM_PROFILE", "") or ""
-    )
+    resolved_persona = persona if persona is not None else (getattr(config, "REACHY_MINI_CUSTOM_PROFILE", "") or "")
 
     try:
         import httpx as _httpx
