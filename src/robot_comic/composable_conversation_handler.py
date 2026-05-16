@@ -12,7 +12,8 @@ follow-up PR between 4b and 4d:
     - boot-timeline supporting events (#321) — wired (Hook #3)
     - record_joke_history (llama_base.py:578-594) — wired (Hook #4) at
       ``ComposablePipeline._speak_assistant_text``
-    - history_trim.trim_history_in_place
+    - history_trim.trim_history_in_place — wired (Hook #5) at
+      ``ComposablePipeline._run_llm_loop_and_speak``
     - _speaking_until echo-guard timestamps (elevenlabs_tts.py:471-473)
 """
 
