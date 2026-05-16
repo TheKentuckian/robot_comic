@@ -219,129 +219,25 @@ async def test_change_voice_delegates_to_pipeline_tts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_apply_personality_resets_history_and_reseeds(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_apply_personality_forwards_to_pipeline() -> None:
+    """Phase 5c.2: wrapper.apply_personality is a thin pass-through.
+
+    The persona-switch state surgery (history reset, per-session TTS
+    state reset via :meth:`TTSBackend.reset_per_session_state`,
+    system-prompt re-seed) lives on the pipeline as of Phase 5c.2; the
+    wrapper just satisfies the :class:`ConversationHandler` ABC contract
+    by forwarding through. Behavioural assertions for the pipeline-side
+    work live in ``tests/test_composable_pipeline.py`` and end-to-end
+    coverage with a real adapter lives in
+    ``tests/test_composable_persona_reset.py``.
+    """
     wrapper = _make_wrapper()
-    # Pre-seed some history that should be wiped.
-    wrapper.pipeline._conversation_history = [
-        {"role": "system", "content": "old"},
-        {"role": "user", "content": "hi"},
-    ]
-
-    # Make the MagicMock reset_history actually clear the list so the
-    # post-append assertion is meaningful.
-    def _real_reset(*, keep_system: bool = True) -> None:
-        wrapper.pipeline._conversation_history.clear()
-
-    wrapper.pipeline.reset_history.side_effect = _real_reset
-
-    monkeypatch.setattr(
-        "robot_comic.composable_conversation_handler.set_custom_profile",
-        lambda profile: None,
-    )
-    monkeypatch.setattr(
-        "robot_comic.composable_conversation_handler.get_session_instructions",
-        lambda: "fresh instructions",
-    )
+    wrapper.pipeline.apply_personality = AsyncMock(return_value="sentinel-result")
 
     result = await wrapper.apply_personality("rodney")
 
-    assert "Applied personality 'rodney'" in result
-    wrapper.pipeline.reset_history.assert_called_once_with(keep_system=False)
-    assert wrapper.pipeline._conversation_history == [
-        {"role": "system", "content": "fresh instructions"},
-    ]
-
-
-@pytest.mark.asyncio
-async def test_apply_personality_invokes_tts_reset_helper(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Pin the call-site for the per-session reset helper.
-
-    Phase 5a.1 spec / ``feedback_lifecycle_hooks_not_for_free.md`` "two-test
-    split": ``test_composable_persona_reset.py`` asserts the field-of-interest
-    outcome; this test asserts the input-site is exercised so a future refactor
-    that drops the call (or moves it before ``set_custom_profile`` succeeds)
-    gets caught by a focused unit test.
-    """
-    wrapper = _make_wrapper()
-
-    monkeypatch.setattr(
-        "robot_comic.composable_conversation_handler.set_custom_profile",
-        lambda profile: None,
-    )
-    monkeypatch.setattr(
-        "robot_comic.composable_conversation_handler.get_session_instructions",
-        lambda: "fresh instructions",
-    )
-
-    call_count = {"n": 0}
-
-    def _spy() -> None:
-        call_count["n"] += 1
-
-    monkeypatch.setattr(wrapper, "_reset_tts_per_session_state", _spy)
-
-    await wrapper.apply_personality("rodney")
-
-    assert call_count["n"] == 1, (
-        f"apply_personality must invoke _reset_tts_per_session_state exactly once; called {call_count['n']} times"
-    )
-
-
-@pytest.mark.asyncio
-async def test_apply_personality_skips_tts_reset_on_set_custom_profile_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """If ``set_custom_profile`` raises, the reset helper must not run.
-
-    Pins the ordering: history + per-session-state reset only happen on the
-    success path so a profile-name typo doesn't half-reset the session.
-    """
-    wrapper = _make_wrapper()
-
-    def _boom(profile: str | None) -> None:
-        raise RuntimeError("bad profile")
-
-    monkeypatch.setattr(
-        "robot_comic.composable_conversation_handler.set_custom_profile",
-        _boom,
-    )
-
-    call_count = {"n": 0}
-
-    def _spy() -> None:
-        call_count["n"] += 1
-
-    monkeypatch.setattr(wrapper, "_reset_tts_per_session_state", _spy)
-
-    result = await wrapper.apply_personality("rodney")
-    assert "Failed to apply personality" in result
-    assert call_count["n"] == 0, "reset helper must NOT run when set_custom_profile fails"
-    wrapper.pipeline.reset_history.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_apply_personality_returns_failure_message_on_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    wrapper = _make_wrapper()
-
-    def _boom(profile: str | None) -> None:
-        raise RuntimeError("nope")
-
-    monkeypatch.setattr(
-        "robot_comic.composable_conversation_handler.set_custom_profile",
-        _boom,
-    )
-
-    result = await wrapper.apply_personality("broken")
-
-    assert "Failed to apply personality" in result
-    assert "nope" in result
-    wrapper.pipeline.reset_history.assert_not_called()
+    assert result == "sentinel-result"
+    wrapper.pipeline.apply_personality.assert_awaited_once_with("rodney")
 
 
 def _make_fake_pipeline() -> Any:
