@@ -24,12 +24,14 @@ from robot_comic.adapters.moonshine_listener import MoonshineListener
 from robot_comic.adapters.moonshine_stt_adapter import MoonshineSTTAdapter
 from robot_comic.adapters.chatterbox_tts_adapter import ChatterboxTTSAdapter
 from robot_comic.adapters.elevenlabs_tts_adapter import ElevenLabsTTSAdapter
+from robot_comic.adapters.faster_whisper_stt_adapter import FasterWhisperSTTAdapter
 from robot_comic.adapters.gemini_bundled_llm_adapter import GeminiBundledLLMAdapter
 
 
 __all__ = [
     "ChatterboxTTSAdapter",
     "ElevenLabsTTSAdapter",
+    "FasterWhisperSTTAdapter",
     "GeminiBundledLLMAdapter",
     "GeminiLLMAdapter",
     "GeminiTTSAdapter",

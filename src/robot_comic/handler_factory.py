@@ -36,7 +36,7 @@ attempted here.
 from __future__ import annotations
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from robot_comic.config import (
     AUDIO_INPUT_HF,
@@ -55,6 +55,7 @@ from robot_comic.config import (
     PIPELINE_MODE_COMPOSABLE,
     PIPELINE_MODE_GEMINI_LIVE,
     PIPELINE_MODE_HF_REALTIME,
+    AUDIO_INPUT_FASTER_WHISPER,
     AUDIO_INPUT_OPENAI_REALTIME,
     AUDIO_OUTPUT_OPENAI_REALTIME,
     PIPELINE_MODE_OPENAI_REALTIME,
@@ -87,7 +88,18 @@ _INPUT_NAMES: dict[str, str] = {
     AUDIO_INPUT_OPENAI_REALTIME: "OpenAI Realtime",
     AUDIO_INPUT_GEMINI_LIVE: "Gemini Live",
     AUDIO_INPUT_MOONSHINE: "Moonshine (local STT)",
+    AUDIO_INPUT_FASTER_WHISPER: "faster-whisper (local STT)",
 }
+
+# Local-STT input backends — share the entire composable triple routing
+# matrix below. The only difference between them is which STT adapter the
+# triple builder constructs (see :func:`_build_stt_adapter`).
+_LOCAL_STT_INPUT_BACKENDS: frozenset[str] = frozenset(
+    {
+        AUDIO_INPUT_MOONSHINE,
+        AUDIO_INPUT_FASTER_WHISPER,
+    }
+)
 _OUTPUT_NAMES: dict[str, str] = {
     AUDIO_OUTPUT_HF: "Hugging Face realtime",
     AUDIO_OUTPUT_OPENAI_REALTIME: "OpenAI Realtime",
@@ -107,6 +119,9 @@ _SUPPORTED_MATRIX_DOC = (
     f"  ({AUDIO_INPUT_MOONSHINE}, {AUDIO_OUTPUT_ELEVENLABS})\n"
     f"  ({AUDIO_INPUT_MOONSHINE}, {AUDIO_OUTPUT_OPENAI_REALTIME})\n"
     f"  ({AUDIO_INPUT_MOONSHINE}, {AUDIO_OUTPUT_HF})\n"
+    f"  ({AUDIO_INPUT_FASTER_WHISPER}, {AUDIO_OUTPUT_CHATTERBOX})\n"
+    f"  ({AUDIO_INPUT_FASTER_WHISPER}, {AUDIO_OUTPUT_GEMINI_TTS})\n"
+    f"  ({AUDIO_INPUT_FASTER_WHISPER}, {AUDIO_OUTPUT_ELEVENLABS})\n"
     "See docs/audio-backends.md for details."
 )
 
@@ -205,7 +220,7 @@ class HandlerFactory:
         # ------------------------------------------------------------------
         assert pipeline_mode == PIPELINE_MODE_COMPOSABLE, f"Unhandled pipeline_mode={pipeline_mode!r}"
 
-        if input_backend == AUDIO_INPUT_MOONSHINE:
+        if input_backend in _LOCAL_STT_INPUT_BACKENDS:
             _llm_backend = getattr(config, "LLM_BACKEND", LLM_BACKEND_LLAMA)
 
             # LLM_BACKEND=llama composable triples.
@@ -217,7 +232,7 @@ class HandlerFactory:
                         output_backend,
                         LLM_BACKEND_LLAMA,
                     )
-                    return _build_composable_llama_elevenlabs(**handler_kwargs)
+                    return _build_composable_llama_elevenlabs(input_backend=input_backend, **handler_kwargs)
 
                 if output_backend == AUDIO_OUTPUT_CHATTERBOX:
                     logger.info(
@@ -226,7 +241,7 @@ class HandlerFactory:
                         output_backend,
                         LLM_BACKEND_LLAMA,
                     )
-                    return _build_composable_llama_chatterbox(**handler_kwargs)
+                    return _build_composable_llama_chatterbox(input_backend=input_backend, **handler_kwargs)
 
                 # Llama + gemini_tts is not a supported composable triple
                 # today (the GeminiTTSResponseHandler's bundled LLM+TTS
@@ -246,7 +261,7 @@ class HandlerFactory:
                         output_backend,
                         LLM_BACKEND_GEMINI,
                     )
-                    return _build_composable_gemini_chatterbox(**handler_kwargs)
+                    return _build_composable_gemini_chatterbox(input_backend=input_backend, **handler_kwargs)
 
                 if output_backend == AUDIO_OUTPUT_ELEVENLABS:
                     logger.info(
@@ -255,7 +270,7 @@ class HandlerFactory:
                         output_backend,
                         LLM_BACKEND_GEMINI,
                     )
-                    return _build_composable_gemini_elevenlabs(**handler_kwargs)
+                    return _build_composable_gemini_elevenlabs(input_backend=input_backend, **handler_kwargs)
 
                 # Gemini TTS uses its bundled Gemini LLM natively — fall
                 # through to the gemini_tts arm below regardless of
@@ -278,7 +293,7 @@ class HandlerFactory:
                     input_backend,
                     output_backend,
                 )
-                return _build_composable_gemini_tts(**handler_kwargs)
+                return _build_composable_gemini_tts(input_backend=input_backend, **handler_kwargs)
 
             # ------------------------------------------------------------------
             # Llama-fallback chatterbox (LLM_BACKEND neither llama nor gemini).
@@ -293,7 +308,7 @@ class HandlerFactory:
                     input_backend,
                     output_backend,
                 )
-                return _build_composable_llama_chatterbox(**handler_kwargs)
+                return _build_composable_llama_chatterbox(input_backend=input_backend, **handler_kwargs)
 
             # ------------------------------------------------------------------
             # Moonshine + ElevenLabs with no llama/gemini selector: route via
@@ -307,7 +322,7 @@ class HandlerFactory:
                     input_backend,
                     output_backend,
                 )
-                return _build_composable_gemini_elevenlabs(**handler_kwargs)
+                return _build_composable_gemini_elevenlabs(input_backend=input_backend, **handler_kwargs)
 
             # ------------------------------------------------------------------
             # Moonshine + realtime output hybrids (LocalSTT*RealtimeHandler).
@@ -315,8 +330,16 @@ class HandlerFactory:
             # they don't decompose into the STT/LLM/TTS Protocol triple. Per
             # the operator's Option B decision (Phase 4c-tris Skipped), these
             # hybrids stay legacy forever.
+            #
+            # These two arms are MOONSHINE-only: there is no
+            # ``FasterWhisperSTT + realtime output`` hybrid because the
+            # hybrid handler uses ``LocalSTTInputMixin`` directly (not the
+            # STT adapter). Phase 5f intentionally scopes the new STT to
+            # the composable triples only; if the operator selects a
+            # faster-whisper + realtime-output pair, we fall through to
+            # the unsupported-combination error below.
             # ------------------------------------------------------------------
-            if output_backend == AUDIO_OUTPUT_OPENAI_REALTIME:
+            if input_backend == AUDIO_INPUT_MOONSHINE and output_backend == AUDIO_OUTPUT_OPENAI_REALTIME:
                 from robot_comic.local_stt_realtime import LocalSTTOpenAIRealtimeHandler
 
                 logger.info(
@@ -326,7 +349,7 @@ class HandlerFactory:
                 )
                 return LocalSTTOpenAIRealtimeHandler(**handler_kwargs)
 
-            if output_backend == AUDIO_OUTPUT_HF:
+            if input_backend == AUDIO_INPUT_MOONSHINE and output_backend == AUDIO_OUTPUT_HF:
                 from robot_comic.local_stt_realtime import LocalSTTHuggingFaceRealtimeHandler
 
                 logger.info(
@@ -466,6 +489,43 @@ def _make_tool_dispatcher(host: Any) -> Any:
     return _dispatch
 
 
+def _build_stt_adapter(
+    input_backend: str,
+    should_drop_frame: Callable[[], bool],
+) -> Any:
+    """Construct the STT adapter for ``input_backend``.
+
+    Phase 5f extraction: the five ``_build_composable_*`` helpers all call
+    this so a new STT backend slots in here without per-helper churn. The
+    ``should_drop_frame`` closure is the echo-guard predicate shared across
+    every composable triple; the adapter wires it via its standalone-mode
+    constructor.
+
+    Currently dispatches on the two known local-STT input backends:
+
+    - :data:`AUDIO_INPUT_MOONSHINE` → :class:`MoonshineSTTAdapter` (default).
+    - :data:`AUDIO_INPUT_FASTER_WHISPER` →
+      :class:`FasterWhisperSTTAdapter` (Phase 5f).
+
+    Raises :class:`NotImplementedError` for unknown backends — the caller
+    has already passed through :class:`HandlerFactory.build`'s outer
+    ``_LOCAL_STT_INPUT_BACKENDS`` gate so this should never fire in
+    practice.
+    """
+    if input_backend == AUDIO_INPUT_MOONSHINE:
+        from robot_comic.adapters import MoonshineSTTAdapter
+
+        return MoonshineSTTAdapter(should_drop_frame=should_drop_frame)
+    if input_backend == AUDIO_INPUT_FASTER_WHISPER:
+        from robot_comic.adapters import FasterWhisperSTTAdapter
+
+        return FasterWhisperSTTAdapter(should_drop_frame=should_drop_frame)
+    raise NotImplementedError(
+        f"No STT adapter implementation exists for {AUDIO_INPUT_BACKEND_ENV}={input_backend!r}. "
+        f"Expected one of: {sorted(_LOCAL_STT_INPUT_BACKENDS)}."
+    )
+
+
 def _maybe_build_welcome_gate() -> Any:
     """Return a :class:`WelcomeGate` for the current profile, or ``None``.
 
@@ -495,28 +555,35 @@ def _maybe_build_welcome_gate() -> Any:
     return gate
 
 
-def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
-    """Construct the composable (moonshine, llama, elevenlabs) pipeline.
+def _build_composable_llama_elevenlabs(
+    *,
+    input_backend: str = AUDIO_INPUT_MOONSHINE,
+    **handler_kwargs: Any,
+) -> Any:
+    """Construct the composable (local-STT, llama, elevenlabs) pipeline.
 
-    Phase 5e.2: this triple is the first to migrate off
+    Phase 5e.2: this triple was the first to migrate off
     :class:`LocalSTTInputMixin`. The handler is now a plain
     :class:`LlamaElevenLabsTTSResponseHandler` (no mixin shell); STT is
-    a standalone :class:`MoonshineSTTAdapter` with a
-    ``should_drop_frame`` echo-guard closure; the orchestrator-level
-    concerns (turn-span, output_queue publishing, set_listening,
-    pause-controller, welcome gate, name-validation transcript
-    recording) live on :class:`ComposablePipeline` behind the ``deps``
-    and ``welcome_gate`` kwargs.
+    a standalone adapter with a ``should_drop_frame`` echo-guard
+    closure; the orchestrator-level concerns (turn-span, output_queue
+    publishing, set_listening, pause-controller, welcome gate,
+    name-validation transcript recording) live on
+    :class:`ComposablePipeline` behind the ``deps`` and ``welcome_gate``
+    kwargs.
 
-    Subsequent 5e.* triples follow the same pattern; the pipeline-level
-    host-concern wiring is shared and needs no further changes.
+    Phase 5f: the STT adapter is now selected by
+    :func:`_build_stt_adapter` on ``input_backend`` — either
+    :class:`MoonshineSTTAdapter` (default) or
+    :class:`FasterWhisperSTTAdapter` (when
+    ``AUDIO_INPUT_BACKEND=faster_whisper``). The rest of the builder
+    is unchanged.
     """
     import time as _time
 
     from robot_comic.prompts import get_session_instructions
     from robot_comic.adapters import (
         LlamaLLMAdapter,
-        MoonshineSTTAdapter,
         ElevenLabsTTSAdapter,
     )
     from robot_comic.composable_pipeline import ComposablePipeline
@@ -534,7 +601,7 @@ def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
             # (``local_stt_realtime.py:796-798``).
             return _time.perf_counter() < getattr(host, "_speaking_until", 0.0)
 
-        stt = MoonshineSTTAdapter(should_drop_frame=_should_drop_frame)
+        stt = _build_stt_adapter(input_backend, _should_drop_frame)
         llm = LlamaLLMAdapter(host)
         # LlamaElevenLabsTTSResponseHandler structurally matches the
         # ElevenLabsTTSAdapter Protocol surface (broadened in 4c.3) even
@@ -560,17 +627,21 @@ def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
     return _build()
 
 
-def _build_composable_llama_chatterbox(**handler_kwargs: Any) -> Any:
-    """Construct the composable (moonshine, llama, chatterbox) pipeline.
+def _build_composable_llama_chatterbox(
+    *,
+    input_backend: str = AUDIO_INPUT_MOONSHINE,
+    **handler_kwargs: Any,
+) -> Any:
+    """Construct the composable (local-STT, llama, chatterbox) pipeline.
 
     Phase 5e.3: this triple migrates off :class:`LocalSTTInputMixin`.
     The handler is now a plain :class:`ChatterboxTTSResponseHandler`
-    (no mixin shell); STT is a standalone :class:`MoonshineSTTAdapter`
-    with a ``should_drop_frame`` echo-guard closure; the
-    orchestrator-level concerns (turn-span, output_queue publishing,
-    set_listening, pause-controller, welcome gate, name-validation
-    transcript recording) live on :class:`ComposablePipeline` behind
-    the ``deps`` and ``welcome_gate`` kwargs.
+    (no mixin shell); STT is a standalone adapter selected by
+    :func:`_build_stt_adapter` (Phase 5f); the orchestrator-level
+    concerns (turn-span, output_queue publishing, set_listening,
+    pause-controller, welcome gate, name-validation transcript
+    recording) live on :class:`ComposablePipeline` behind the ``deps``
+    and ``welcome_gate`` kwargs.
 
     Mechanical mirror of :func:`_build_composable_llama_elevenlabs`
     (the Phase 5e.2 sibling); the pipeline-level host-concern wiring
@@ -581,7 +652,6 @@ def _build_composable_llama_chatterbox(**handler_kwargs: Any) -> Any:
     from robot_comic.prompts import get_session_instructions
     from robot_comic.adapters import (
         LlamaLLMAdapter,
-        MoonshineSTTAdapter,
         ChatterboxTTSAdapter,
     )
     from robot_comic.composable_pipeline import ComposablePipeline
@@ -599,7 +669,7 @@ def _build_composable_llama_chatterbox(**handler_kwargs: Any) -> Any:
             # (``local_stt_realtime.py:796-798``).
             return _time.perf_counter() < getattr(host, "_speaking_until", 0.0)
 
-        stt = MoonshineSTTAdapter(should_drop_frame=_should_drop_frame)
+        stt = _build_stt_adapter(input_backend, _should_drop_frame)
         llm = LlamaLLMAdapter(host)
         tts = ChatterboxTTSAdapter(host)
         pipeline = ComposablePipeline(
@@ -621,18 +691,22 @@ def _build_composable_llama_chatterbox(**handler_kwargs: Any) -> Any:
     return _build()
 
 
-def _build_composable_gemini_chatterbox(**handler_kwargs: Any) -> Any:
-    """Construct the composable (moonshine, gemini, chatterbox) pipeline.
+def _build_composable_gemini_chatterbox(
+    *,
+    input_backend: str = AUDIO_INPUT_MOONSHINE,
+    **handler_kwargs: Any,
+) -> Any:
+    """Construct the composable (local-STT, gemini, chatterbox) pipeline.
 
     Phase 5e.4: this triple migrates off :class:`LocalSTTInputMixin`.
     The handler is now a plain
     :class:`GeminiTextChatterboxResponseHandler` (no mixin shell); STT
-    is a standalone :class:`MoonshineSTTAdapter` with a
-    ``should_drop_frame`` echo-guard closure; the orchestrator-level
-    concerns (turn-span, output_queue publishing, set_listening,
-    pause-controller, welcome gate, name-validation transcript
-    recording) live on :class:`ComposablePipeline` behind the ``deps``
-    and ``welcome_gate`` kwargs.
+    is a standalone adapter selected by :func:`_build_stt_adapter`
+    (Phase 5f); the orchestrator-level concerns (turn-span,
+    output_queue publishing, set_listening, pause-controller, welcome
+    gate, name-validation transcript recording) live on
+    :class:`ComposablePipeline` behind the ``deps`` and ``welcome_gate``
+    kwargs.
 
     Mechanical mirror of :func:`_build_composable_llama_chatterbox`
     (the Phase 5e.3 sibling); the only triple-specific substitution is
@@ -648,7 +722,6 @@ def _build_composable_gemini_chatterbox(**handler_kwargs: Any) -> Any:
     from robot_comic.prompts import get_session_instructions
     from robot_comic.adapters import (
         GeminiLLMAdapter,
-        MoonshineSTTAdapter,
         ChatterboxTTSAdapter,
     )
     from robot_comic.composable_pipeline import ComposablePipeline
@@ -666,7 +739,7 @@ def _build_composable_gemini_chatterbox(**handler_kwargs: Any) -> Any:
             # (``local_stt_realtime.py:796-798``).
             return _time.perf_counter() < getattr(host, "_speaking_until", 0.0)
 
-        stt = MoonshineSTTAdapter(should_drop_frame=_should_drop_frame)
+        stt = _build_stt_adapter(input_backend, _should_drop_frame)
         llm = GeminiLLMAdapter(host)
         tts = ChatterboxTTSAdapter(host)
         pipeline = ComposablePipeline(
@@ -688,18 +761,22 @@ def _build_composable_gemini_chatterbox(**handler_kwargs: Any) -> Any:
     return _build()
 
 
-def _build_composable_gemini_elevenlabs(**handler_kwargs: Any) -> Any:
-    """Construct the composable (moonshine, gemini, elevenlabs) pipeline.
+def _build_composable_gemini_elevenlabs(
+    *,
+    input_backend: str = AUDIO_INPUT_MOONSHINE,
+    **handler_kwargs: Any,
+) -> Any:
+    """Construct the composable (local-STT, gemini, elevenlabs) pipeline.
 
     Phase 5e.5: this triple migrates off :class:`LocalSTTInputMixin`.
     The handler is now a plain
     :class:`GeminiTextElevenLabsResponseHandler` (no mixin shell); STT
-    is a standalone :class:`MoonshineSTTAdapter` with a
-    ``should_drop_frame`` echo-guard closure; the orchestrator-level
-    concerns (turn-span, output_queue publishing, set_listening,
-    pause-controller, welcome gate, name-validation transcript
-    recording) live on :class:`ComposablePipeline` behind the ``deps``
-    and ``welcome_gate`` kwargs.
+    is a standalone adapter selected by :func:`_build_stt_adapter`
+    (Phase 5f); the orchestrator-level concerns (turn-span,
+    output_queue publishing, set_listening, pause-controller, welcome
+    gate, name-validation transcript recording) live on
+    :class:`ComposablePipeline` behind the ``deps`` and ``welcome_gate``
+    kwargs.
 
     Mechanical mirror of :func:`_build_composable_gemini_chatterbox`
     (the Phase 5e.4 sibling); the only triple-specific substitution is
@@ -719,7 +796,6 @@ def _build_composable_gemini_elevenlabs(**handler_kwargs: Any) -> Any:
     from robot_comic.prompts import get_session_instructions
     from robot_comic.adapters import (
         GeminiLLMAdapter,
-        MoonshineSTTAdapter,
         ElevenLabsTTSAdapter,
     )
     from robot_comic.composable_pipeline import ComposablePipeline
@@ -738,7 +814,7 @@ def _build_composable_gemini_elevenlabs(**handler_kwargs: Any) -> Any:
             # (``local_stt_realtime.py:796-798``).
             return _time.perf_counter() < getattr(host, "_speaking_until", 0.0)
 
-        stt = MoonshineSTTAdapter(should_drop_frame=_should_drop_frame)
+        stt = _build_stt_adapter(input_backend, _should_drop_frame)
         llm = GeminiLLMAdapter(host)
         tts = ElevenLabsTTSAdapter(host)
         pipeline = ComposablePipeline(
@@ -760,18 +836,22 @@ def _build_composable_gemini_elevenlabs(**handler_kwargs: Any) -> Any:
     return _build()
 
 
-def _build_composable_gemini_tts(**handler_kwargs: Any) -> Any:
-    """Construct the composable (moonshine, gemini-bundled, gemini_tts) pipeline.
+def _build_composable_gemini_tts(
+    *,
+    input_backend: str = AUDIO_INPUT_MOONSHINE,
+    **handler_kwargs: Any,
+) -> Any:
+    """Construct the composable (local-STT, gemini-bundled, gemini_tts) pipeline.
 
     Phase 5e.6: the final triple to migrate off
     :class:`LocalSTTInputMixin`. The handler is now a plain
     :class:`GeminiTTSResponseHandler` (no mixin shell); STT is a
-    standalone :class:`MoonshineSTTAdapter` with a
-    ``should_drop_frame`` echo-guard closure; the orchestrator-level
-    concerns (turn-span, output_queue publishing, set_listening,
-    pause-controller, welcome gate, name-validation transcript
-    recording) live on :class:`ComposablePipeline` behind the ``deps``
-    and ``welcome_gate`` kwargs.
+    standalone adapter selected by :func:`_build_stt_adapter` (Phase
+    5f); the orchestrator-level concerns (turn-span, output_queue
+    publishing, set_listening, pause-controller, welcome gate,
+    name-validation transcript recording) live on
+    :class:`ComposablePipeline` behind the ``deps`` and ``welcome_gate``
+    kwargs.
 
     Mechanical mirror of :func:`_build_composable_gemini_elevenlabs`
     (the Phase 5e.5 sibling). The triple-specific substitutions are:
@@ -801,7 +881,6 @@ def _build_composable_gemini_tts(**handler_kwargs: Any) -> Any:
     from robot_comic.prompts import get_session_instructions
     from robot_comic.adapters import (
         GeminiTTSAdapter,
-        MoonshineSTTAdapter,
         GeminiBundledLLMAdapter,
     )
     from robot_comic.composable_pipeline import ComposablePipeline
@@ -820,7 +899,7 @@ def _build_composable_gemini_tts(**handler_kwargs: Any) -> Any:
             # no-op for this triple (see docstring).
             return _time.perf_counter() < getattr(host, "_speaking_until", 0.0)
 
-        stt = MoonshineSTTAdapter(should_drop_frame=_should_drop_frame)
+        stt = _build_stt_adapter(input_backend, _should_drop_frame)
         llm = GeminiBundledLLMAdapter(host)
         tts = GeminiTTSAdapter(host)
         pipeline = ComposablePipeline(
