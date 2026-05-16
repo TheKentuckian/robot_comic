@@ -180,3 +180,29 @@ class ChatterboxTTSAdapter:
             except Exception as exc:  # pragma: no cover — best-effort cleanup
                 logger.warning("ChatterboxTTSAdapter shutdown: aclose() raised: %s", exc)
             self._handler._http = None
+
+    # ------------------------------------------------------------------ #
+    # Voice methods (Phase 5c.1) — thin forwards to the wrapped handler. #
+    # ------------------------------------------------------------------ #
+
+    async def get_available_voices(self) -> list[str]:
+        """Forward to ``ChatterboxTTSResponseHandler.get_available_voices``.
+
+        The legacy method HTTP-fetches the predefined-voices catalog from
+        the running Chatterbox server (falling back to the current voice
+        on error); the adapter has no opinion on that — it just bridges
+        the Protocol surface.
+        """
+        return await self._handler.get_available_voices()
+
+    def get_current_voice(self) -> str:
+        """Forward to ``ChatterboxTTSResponseHandler.get_current_voice``."""
+        return self._handler.get_current_voice()
+
+    async def change_voice(self, voice: str) -> str:
+        """Forward to ``ChatterboxTTSResponseHandler.change_voice``.
+
+        Legacy contract: stores the value as the voice override, no
+        validation against the predefined-voices catalog.
+        """
+        return await self._handler.change_voice(voice)

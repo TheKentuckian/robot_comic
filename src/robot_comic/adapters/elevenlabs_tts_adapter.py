@@ -103,6 +103,13 @@ class _ElevenLabsCompatibleHandler(Protocol):
         tags: list[str] | None = None,
     ) -> bool: ...
 
+    # Phase 5c.1: voice-method surface forwarded by the adapter.
+    async def get_available_voices(self) -> list[str]: ...
+
+    def get_current_voice(self) -> str: ...
+
+    async def change_voice(self, voice: str) -> str: ...
+
 
 class ElevenLabsTTSAdapter:
     """Adapter exposing ElevenLabs-shaped TTS handlers as ``TTSBackend``."""
@@ -185,3 +192,23 @@ class ElevenLabsTTSAdapter:
             except Exception as exc:  # pragma: no cover — best-effort cleanup
                 logger.warning("ElevenLabsTTSAdapter shutdown: aclose() raised: %s", exc)
             self._handler._http = None
+
+    # ------------------------------------------------------------------ #
+    # Voice methods (Phase 5c.1) — thin forwards to the wrapped handler. #
+    # ------------------------------------------------------------------ #
+
+    async def get_available_voices(self) -> list[str]:
+        """Forward to ``ElevenLabsTTSResponseHandler.get_available_voices``."""
+        return await self._handler.get_available_voices()
+
+    def get_current_voice(self) -> str:
+        """Forward to ``ElevenLabsTTSResponseHandler.get_current_voice``."""
+        return self._handler.get_current_voice()
+
+    async def change_voice(self, voice: str) -> str:
+        """Forward to ``ElevenLabsTTSResponseHandler.change_voice``.
+
+        Legacy contract is lenient — unknown voices are stored as-is
+        (admin-UI free-text inputs work) and resolved at synthesis time.
+        """
+        return await self._handler.change_voice(voice)
