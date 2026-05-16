@@ -1,16 +1,15 @@
-"""Tests for ``FasterWhisperSTTAdapter`` — Phase 5f.
+"""Tests for ``FasterWhisperSTTAdapter`` — Phase 5f + 5f.1 (VAD swap).
 
-The adapter wraps faster-whisper + silero-vad. Neither dependency is
+The adapter wraps faster-whisper + webrtcvad. Neither dependency is
 installed in CI; tests stub both via ``sys.modules`` injection so the
 adapter's import-on-start path picks up the stubs. The stubs simulate:
 
 - ``faster_whisper.WhisperModel(...)`` returning an object whose
   ``transcribe(audio, language=...)`` method returns a ``(segments, info)``
   pair. ``segments`` is an iterable of objects exposing ``.text``.
-- ``silero_vad.load_silero_vad()`` returning an opaque "model" handle.
-- ``silero_vad.VADIterator(model, sampling_rate=...)`` returning a callable
-  that drives the chunker — feed it a 512-sample float32 chunk, get back
-  ``None`` / ``{"start": idx}`` / ``{"end": idx}``.
+- ``webrtcvad.Vad(aggressiveness)`` returning an object whose
+  ``is_speech(frame_bytes, sample_rate) -> bool`` is driven by a test-
+  configured script (a list of bools popped one per call).
 """
 
 from __future__ import annotations
@@ -22,6 +21,12 @@ import numpy as np
 import pytest
 
 from robot_comic.backends import AudioFrame, STTBackend
+
+
+# webrtcvad frame size at 16 kHz / 30 ms.
+_VAD_CHUNK = 480
+_START_FRAMES = 3
+_END_SILENCE_FRAMES = 17
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +53,7 @@ class _StubWhisperModel:
         self.transcribe_calls: list[np.ndarray] = []
         # Tests push transcript strings here; each transcribe call pops the
         # next entry (or returns "" if empty).
-        self.queued_results: list[str] = []
+        self.queued_results: list[Any] = []
         self.close_called = False
 
     def transcribe(self, audio: np.ndarray, language: str = "en") -> tuple[Any, dict[str, Any]]:
@@ -64,70 +69,73 @@ class _StubWhisperModel:
         self.close_called = True
 
 
-class _StubVADIterator:
-    """Stand-in for ``silero_vad.VADIterator``.
+class _StubVad:
+    """Stand-in for ``webrtcvad.Vad``.
 
-    Tests configure ``script`` — a list of events the iterator returns in
-    order, one per ``__call__`` invocation. After the script runs out,
-    returns ``None``. The iterator records every chunk it received.
+    Tests configure ``script`` — a list of bools the VAD returns in order,
+    one per ``is_speech`` invocation. After the script runs out, returns
+    ``False`` (silence) indefinitely. Records every frame the VAD received.
     """
 
-    def __init__(self, model: Any, sampling_rate: int = 16000) -> None:
-        self.model = model
-        self.sampling_rate = sampling_rate
-        self.script: list[Any] = []
-        self.received_chunks: list[np.ndarray] = []
-        self.reset_called = False
+    def __init__(self, aggressiveness: int = 0) -> None:
+        self.aggressiveness = aggressiveness
+        self.script: list[bool] = []
+        self.received_frames: list[bytes] = []
 
-    def __call__(self, chunk: np.ndarray) -> Any:
-        self.received_chunks.append(chunk)
+    def is_speech(self, frame: bytes, sample_rate: int) -> bool:
+        self.received_frames.append(frame)
         if not self.script:
-            return None
+            return False
         return self.script.pop(0)
 
-    def reset_states(self) -> None:
-        self.reset_called = True
 
-
-def _install_stubs(monkeypatch: pytest.MonkeyPatch) -> tuple[_StubWhisperModel, _StubVADIterator]:
-    """Inject the stub modules into ``sys.modules`` and return the instances.
+def _install_stubs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Inject the stub modules into ``sys.modules`` and return a holder dict.
 
     The adapter's ``_load_model_and_vad`` imports ``faster_whisper`` and
-    ``silero_vad`` inside a function body. Replacing the module in
+    ``webrtcvad`` inside a function body. Replacing the module in
     ``sys.modules`` makes the next ``from … import …`` resolve to our stub.
 
-    Returns the (model, vad_iterator) instances the stubbed factories
-    produce so tests can poke them.
+    Returns a holder dict; after ``start()`` runs, ``holder["model"]`` and
+    ``holder["vad"]`` are populated with the constructed stub instances
+    so tests can drive their scripts and read their captured state.
     """
-    # Build container-objects so the factories can stash the constructed
-    # instance for the test to read.
-    holder: dict[str, Any] = {"model": None, "vad_iter": None, "vad_model": object()}
+    holder: dict[str, Any] = {"model": None, "vad": None}
 
     def _make_model(name: str, *, device: str = "cpu", compute_type: str = "int8") -> _StubWhisperModel:
         m = _StubWhisperModel(name, device=device, compute_type=compute_type)
         holder["model"] = m
         return m
 
-    def _load_silero_vad() -> Any:
-        return holder["vad_model"]
-
-    def _make_vad_iterator(model: Any, sampling_rate: int = 16000) -> _StubVADIterator:
-        it = _StubVADIterator(model, sampling_rate=sampling_rate)
-        holder["vad_iter"] = it
-        return it
+    def _make_vad(aggressiveness: int = 0) -> _StubVad:
+        v = _StubVad(aggressiveness)
+        holder["vad"] = v
+        return v
 
     fw_module = types.ModuleType("faster_whisper")
     fw_module.WhisperModel = _make_model  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "faster_whisper", fw_module)
 
-    sv_module = types.ModuleType("silero_vad")
-    sv_module.load_silero_vad = _load_silero_vad  # type: ignore[attr-defined]
-    sv_module.VADIterator = _make_vad_iterator  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "silero_vad", sv_module)
+    wv_module = types.ModuleType("webrtcvad")
+    wv_module.Vad = _make_vad  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "webrtcvad", wv_module)
 
-    # Return placeholders — the real instances aren't created until start()
-    # runs. Tests should grab them via the holder after start().
-    return holder  # type: ignore[return-value]
+    return holder
+
+
+def _speech_script(count: int) -> list[bool]:
+    """A script of ``count`` consecutive True (speech) frames."""
+    return [True] * count
+
+
+def _silence_script(count: int) -> list[bool]:
+    """A script of ``count`` consecutive False (silence) frames."""
+    return [False] * count
+
+
+def _utterance_script(speech_frames: int = _START_FRAMES, silence_frames: int = _END_SILENCE_FRAMES) -> list[bool]:
+    """Speech-then-silence sequence that triggers exactly one start + one end."""
+    return _speech_script(speech_frames) + _silence_script(silence_frames)
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +149,7 @@ def test_constructor_accepts_no_arguments() -> None:
 
     adapter = FasterWhisperSTTAdapter()
     assert adapter._model is None
-    assert adapter._vad_iterator is None
+    assert adapter._vad_gate is None
 
 
 def test_constructor_accepts_should_drop_frame() -> None:
@@ -181,7 +189,7 @@ async def test_reset_per_session_state_is_noop() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_loads_model_and_vad_iterator(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_start_loads_model_and_vad(monkeypatch: pytest.MonkeyPatch) -> None:
     from robot_comic.adapters import FasterWhisperSTTAdapter
 
     holder = _install_stubs(monkeypatch)
@@ -194,8 +202,9 @@ async def test_start_loads_model_and_vad_iterator(monkeypatch: pytest.MonkeyPatc
     assert holder["model"] is not None
     assert holder["model"].model_name == "tiny.en"
     assert holder["model"].compute_type == "int8"
-    assert holder["vad_iter"] is not None
-    assert holder["vad_iter"].sampling_rate == 16000
+    assert holder["vad"] is not None
+    # Aggressiveness 2 — module-level default.
+    assert holder["vad"].aggressiveness == 2
 
 
 @pytest.mark.asyncio
@@ -290,7 +299,7 @@ async def test_start_load_failure_clears_state_for_retry(monkeypatch: pytest.Mon
         await adapter.start(_cb)
 
     assert adapter._model is None
-    assert adapter._vad_iterator is None
+    assert adapter._vad_gate is None
     assert adapter._on_completed is None
 
 
@@ -304,11 +313,48 @@ async def test_start_raises_dependency_error_when_faster_whisper_missing(
     )
 
     # Force the import inside _load_model_and_vad to fail by injecting a
-    # module that raises on attribute access.
+    # module that doesn't expose WhisperModel.
     fw_module = types.ModuleType("faster_whisper")
     # Don't set WhisperModel — `from faster_whisper import WhisperModel` will
     # raise ImportError.
     monkeypatch.setitem(sys.modules, "faster_whisper", fw_module)
+
+    adapter = FasterWhisperSTTAdapter()
+
+    async def _cb(_t: str) -> None: ...
+
+    with pytest.raises(FasterWhisperSTTDependencyError):
+        await adapter.start(_cb)
+
+
+@pytest.mark.asyncio
+async def test_start_raises_dependency_error_when_webrtcvad_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """webrtcvad import failure surfaces as FasterWhisperSTTDependencyError."""
+    from robot_comic.adapters.faster_whisper_stt_adapter import (
+        FasterWhisperSTTAdapter,
+        FasterWhisperSTTDependencyError,
+    )
+
+    # Provide a working faster-whisper stub so the failure is isolated to
+    # the webrtcvad import.
+    fw_module = types.ModuleType("faster_whisper")
+    fw_module.WhisperModel = _StubWhisperModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "faster_whisper", fw_module)
+
+    # Remove webrtcvad from sys.modules entirely so the import raises.
+    monkeypatch.delitem(sys.modules, "webrtcvad", raising=False)
+
+    # And block re-import by intercepting the import machinery — easiest
+    # way is a finder that raises ImportError for webrtcvad.
+    class _Blocker:
+        def find_spec(self, name: str, *_a: Any, **_k: Any) -> None:
+            if name == "webrtcvad":
+                raise ImportError("blocked for test")
+            return None
+
+    monkeypatch.setattr(sys, "meta_path", [_Blocker()] + sys.meta_path)
 
     adapter = FasterWhisperSTTAdapter()
 
@@ -323,15 +369,15 @@ async def test_start_raises_dependency_error_when_faster_whisper_missing(
 # ---------------------------------------------------------------------------
 
 
-def _silence_frame(num_samples: int = 1024, sample_rate: int = 16000) -> AudioFrame:
+def _silence_frame(num_samples: int = _VAD_CHUNK * 2, sample_rate: int = 16000) -> AudioFrame:
     return AudioFrame(samples=np.zeros(num_samples, dtype=np.int16), sample_rate=sample_rate)
 
 
 @pytest.mark.asyncio
-async def test_feed_audio_chunks_into_512_sample_blocks(
+async def test_feed_audio_chunks_into_vad_frame_sized_blocks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A 1024-sample frame → 2 chunks of 512 samples each into the VAD iterator."""
+    """A 1024-sample frame → 2 full 480-sample VAD frames (64 sample remainder)."""
     from robot_comic.adapters import FasterWhisperSTTAdapter
 
     holder = _install_stubs(monkeypatch)
@@ -342,15 +388,16 @@ async def test_feed_audio_chunks_into_512_sample_blocks(
     await adapter.start(_cb)
     await adapter.feed_audio(_silence_frame(num_samples=1024))
 
-    vad = holder["vad_iter"]
-    assert len(vad.received_chunks) == 2
-    assert all(c.shape == (512,) for c in vad.received_chunks)
+    vad = holder["vad"]
+    assert len(vad.received_frames) == 2
+    assert all(len(f) == _VAD_CHUNK * 2 for f in vad.received_frames)  # int16 = 2 bytes
 
 
 @pytest.mark.asyncio
-async def test_feed_audio_starts_utterance_on_vad_start_event(
+async def test_feed_audio_starts_utterance_after_debounced_speech_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """``_START_FRAMES`` consecutive speech frames fire ``on_speech_started`` once."""
     from robot_comic.adapters import FasterWhisperSTTAdapter
 
     holder = _install_stubs(monkeypatch)
@@ -365,12 +412,38 @@ async def test_feed_audio_starts_utterance_on_vad_start_event(
 
     await adapter.start(_on_completed, on_speech_started=_on_speech_started)
 
-    # First chunk fires "start", second is silent — no transcribe yet.
-    holder["vad_iter"].script = [{"start": 0}, None]
-    await adapter.feed_audio(_silence_frame(num_samples=1024))
+    holder["vad"].script = _speech_script(_START_FRAMES)
+    # Enough samples for _START_FRAMES VAD frames.
+    await adapter.feed_audio(_silence_frame(num_samples=_VAD_CHUNK * _START_FRAMES))
 
     assert started_calls == 1
+    # No silence yet → no transcribe.
     assert holder["model"].transcribe_calls == []
+
+
+@pytest.mark.asyncio
+async def test_feed_audio_does_not_start_utterance_below_debounce_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fewer than ``_START_FRAMES`` speech frames must NOT fire ``on_speech_started``."""
+    from robot_comic.adapters import FasterWhisperSTTAdapter
+
+    holder = _install_stubs(monkeypatch)
+    adapter = FasterWhisperSTTAdapter()
+    started_calls = 0
+
+    async def _on_completed(_t: str) -> None: ...
+
+    async def _on_speech_started() -> None:
+        nonlocal started_calls
+        started_calls += 1
+
+    await adapter.start(_on_completed, on_speech_started=_on_speech_started)
+
+    holder["vad"].script = _speech_script(_START_FRAMES - 1) + _silence_script(5)
+    await adapter.feed_audio(_silence_frame(num_samples=_VAD_CHUNK * (_START_FRAMES - 1 + 5)))
+
+    assert started_calls == 0
 
 
 @pytest.mark.asyncio
@@ -386,9 +459,9 @@ async def test_feed_audio_does_not_call_speech_started_without_callback(
     async def _on_completed(_t: str) -> None: ...
 
     await adapter.start(_on_completed)
-    holder["vad_iter"].script = [{"start": 0}]
+    holder["vad"].script = _speech_script(_START_FRAMES)
     # Must not raise.
-    await adapter.feed_audio(_silence_frame(num_samples=512))
+    await adapter.feed_audio(_silence_frame(num_samples=_VAD_CHUNK * _START_FRAMES))
 
 
 # ---------------------------------------------------------------------------
@@ -397,7 +470,7 @@ async def test_feed_audio_does_not_call_speech_started_without_callback(
 
 
 @pytest.mark.asyncio
-async def test_feed_audio_transcribes_and_fires_on_completed_on_vad_end(
+async def test_feed_audio_transcribes_and_fires_on_completed_after_silence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from robot_comic.adapters import FasterWhisperSTTAdapter
@@ -411,11 +484,11 @@ async def test_feed_audio_transcribes_and_fires_on_completed_on_vad_end(
 
     await adapter.start(_on_completed)
 
-    # Chunk 1: start. Chunks 2-3: in-speech. Chunk 4: end.
-    holder["vad_iter"].script = [{"start": 0}, None, None, {"end": 0}]
+    total_frames = _START_FRAMES + _END_SILENCE_FRAMES
+    holder["vad"].script = _utterance_script()
     holder["model"].queued_results = ["hello robot"]
 
-    await adapter.feed_audio(_silence_frame(num_samples=512 * 4))
+    await adapter.feed_audio(_silence_frame(num_samples=_VAD_CHUNK * total_frames))
 
     assert captured == ["hello robot"]
     assert len(holder["model"].transcribe_calls) == 1
@@ -435,9 +508,10 @@ async def test_feed_audio_joins_multi_segment_transcribe_result(
         captured.append(t)
 
     await adapter.start(_on_completed)
-    holder["vad_iter"].script = [{"start": 0}, {"end": 0}]
+    total_frames = _START_FRAMES + _END_SILENCE_FRAMES
+    holder["vad"].script = _utterance_script()
     holder["model"].queued_results = [["hello", " robot", " how are you"]]
-    await adapter.feed_audio(_silence_frame(num_samples=512 * 2))
+    await adapter.feed_audio(_silence_frame(num_samples=_VAD_CHUNK * total_frames))
 
     assert captured == ["hello robot how are you"]
 
@@ -456,9 +530,10 @@ async def test_feed_audio_empty_transcribe_result_does_not_fire_callback(
         captured.append(t)
 
     await adapter.start(_on_completed)
-    holder["vad_iter"].script = [{"start": 0}, {"end": 0}]
+    total_frames = _START_FRAMES + _END_SILENCE_FRAMES
+    holder["vad"].script = _utterance_script()
     holder["model"].queued_results = [""]
-    await adapter.feed_audio(_silence_frame(num_samples=512 * 2))
+    await adapter.feed_audio(_silence_frame(num_samples=_VAD_CHUNK * total_frames))
 
     assert captured == []
 
@@ -477,9 +552,10 @@ async def test_feed_audio_whitespace_transcribe_result_is_dropped(
         captured.append(t)
 
     await adapter.start(_on_completed)
-    holder["vad_iter"].script = [{"start": 0}, {"end": 0}]
+    total_frames = _START_FRAMES + _END_SILENCE_FRAMES
+    holder["vad"].script = _utterance_script()
     holder["model"].queued_results = ["   "]
-    await adapter.feed_audio(_silence_frame(num_samples=512 * 2))
+    await adapter.feed_audio(_silence_frame(num_samples=_VAD_CHUNK * total_frames))
 
     assert captured == []
 
@@ -497,14 +573,11 @@ async def test_feed_audio_back_to_back_utterances(monkeypatch: pytest.MonkeyPatc
         captured.append(t)
 
     await adapter.start(_on_completed)
-    holder["vad_iter"].script = [
-        {"start": 0},  # utterance 1 starts
-        {"end": 0},  # utterance 1 ends
-        {"start": 0},  # utterance 2 starts
-        {"end": 0},  # utterance 2 ends
-    ]
+    # Two complete utterances in sequence.
+    holder["vad"].script = _utterance_script() + _utterance_script()
     holder["model"].queued_results = ["first", "second"]
-    await adapter.feed_audio(_silence_frame(num_samples=512 * 4))
+    total_frames = 2 * (_START_FRAMES + _END_SILENCE_FRAMES)
+    await adapter.feed_audio(_silence_frame(num_samples=_VAD_CHUNK * total_frames))
 
     assert captured == ["first", "second"]
 
@@ -526,9 +599,9 @@ async def test_should_drop_frame_when_true_skips_feed_audio(
     async def _cb(_t: str) -> None: ...
 
     await adapter.start(_cb)
-    await adapter.feed_audio(_silence_frame(num_samples=512))
+    await adapter.feed_audio(_silence_frame(num_samples=_VAD_CHUNK))
 
-    assert holder["vad_iter"].received_chunks == []
+    assert holder["vad"].received_frames == []
     assert holder["model"].transcribe_calls == []
 
 
@@ -544,9 +617,9 @@ async def test_should_drop_frame_when_false_processes_normally(
     async def _cb(_t: str) -> None: ...
 
     await adapter.start(_cb)
-    await adapter.feed_audio(_silence_frame(num_samples=512))
+    await adapter.feed_audio(_silence_frame(num_samples=_VAD_CHUNK))
 
-    assert len(holder["vad_iter"].received_chunks) == 1
+    assert len(holder["vad"].received_frames) == 1
 
 
 @pytest.mark.asyncio
@@ -561,9 +634,9 @@ async def test_should_drop_frame_default_none_processes_every_frame(
     async def _cb(_t: str) -> None: ...
 
     await adapter.start(_cb)
-    await adapter.feed_audio(_silence_frame(num_samples=1024))
+    await adapter.feed_audio(_silence_frame(num_samples=_VAD_CHUNK * 2))
 
-    assert len(holder["vad_iter"].received_chunks) == 2
+    assert len(holder["vad"].received_frames) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -577,7 +650,7 @@ async def test_feed_audio_before_start_is_safe_noop() -> None:
 
     adapter = FasterWhisperSTTAdapter()
     # Must not raise — silently drops the frame because model/VAD aren't loaded.
-    await adapter.feed_audio(_silence_frame(num_samples=512))
+    await adapter.feed_audio(_silence_frame(num_samples=_VAD_CHUNK))
 
 
 @pytest.mark.asyncio
@@ -591,9 +664,9 @@ async def test_feed_audio_handles_list_samples(monkeypatch: pytest.MonkeyPatch) 
     async def _cb(_t: str) -> None: ...
 
     await adapter.start(_cb)
-    await adapter.feed_audio(AudioFrame(samples=[0] * 512, sample_rate=16000))
+    await adapter.feed_audio(AudioFrame(samples=[0] * _VAD_CHUNK, sample_rate=16000))
 
-    assert len(holder["vad_iter"].received_chunks) == 1
+    assert len(holder["vad"].received_frames) == 1
 
 
 @pytest.mark.asyncio
@@ -607,10 +680,10 @@ async def test_feed_audio_resamples_when_sample_rate_differs(monkeypatch: pytest
     async def _cb(_t: str) -> None: ...
 
     await adapter.start(_cb)
-    # 1024 samples at 24 kHz → ~683 samples at 16 kHz → 1 full 512-sample
-    # chunk plus a remainder. Assert at least one chunk made it through.
+    # 1024 samples at 24 kHz → ~683 samples at 16 kHz → 1 full 480-sample
+    # frame plus a remainder. Assert at least one VAD frame made it through.
     await adapter.feed_audio(AudioFrame(samples=np.zeros(1024, dtype=np.int16), sample_rate=24000))
-    assert len(holder["vad_iter"].received_chunks) >= 1
+    assert len(holder["vad"].received_frames) >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -631,10 +704,9 @@ async def test_stop_clears_state_and_releases_model(monkeypatch: pytest.MonkeyPa
     await adapter.stop()
 
     assert adapter._model is None
-    assert adapter._vad_iterator is None
+    assert adapter._vad_gate is None
     assert adapter._on_completed is None
     assert holder["model"].close_called is True
-    assert holder["vad_iter"].reset_called is True
 
 
 @pytest.mark.asyncio
@@ -678,10 +750,11 @@ async def test_on_completed_exception_does_not_crash_adapter(
         raise ValueError("user code bug")
 
     await adapter.start(_bad)
-    holder["vad_iter"].script = [{"start": 0}, {"end": 0}]
+    holder["vad"].script = _utterance_script()
     holder["model"].queued_results = ["payload"]
+    total_frames = _START_FRAMES + _END_SILENCE_FRAMES
     # Must not raise.
-    await adapter.feed_audio(_silence_frame(num_samples=512 * 2))
+    await adapter.feed_audio(_silence_frame(num_samples=_VAD_CHUNK * total_frames))
 
 
 @pytest.mark.asyncio
@@ -699,9 +772,9 @@ async def test_on_speech_started_exception_does_not_crash_adapter(
         raise ValueError("user code bug")
 
     await adapter.start(_cb, on_speech_started=_bad_started)
-    holder["vad_iter"].script = [{"start": 0}]
+    holder["vad"].script = _speech_script(_START_FRAMES)
     # Must not raise.
-    await adapter.feed_audio(_silence_frame(num_samples=512))
+    await adapter.feed_audio(_silence_frame(num_samples=_VAD_CHUNK * _START_FRAMES))
 
 
 @pytest.mark.asyncio
@@ -724,7 +797,37 @@ async def test_transcribe_exception_does_not_crash_adapter(
         raise RuntimeError("transcribe boom")
 
     holder["model"].transcribe = _bad_transcribe  # type: ignore[method-assign]
-    holder["vad_iter"].script = [{"start": 0}, {"end": 0}]
+    holder["vad"].script = _utterance_script()
+    total_frames = _START_FRAMES + _END_SILENCE_FRAMES
     # Must not raise.
-    await adapter.feed_audio(_silence_frame(num_samples=512 * 2))
+    await adapter.feed_audio(_silence_frame(num_samples=_VAD_CHUNK * total_frames))
     assert captured == []
+
+
+@pytest.mark.asyncio
+async def test_vad_is_speech_exception_is_treated_as_silence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If webrtcvad raises (e.g. wrong frame size), the gate must not crash."""
+    from robot_comic.adapters import FasterWhisperSTTAdapter
+
+    holder = _install_stubs(monkeypatch)
+    adapter = FasterWhisperSTTAdapter()
+    started_calls = 0
+
+    async def _cb(_t: str) -> None: ...
+
+    async def _on_speech_started() -> None:
+        nonlocal started_calls
+        started_calls += 1
+
+    await adapter.start(_cb, on_speech_started=_on_speech_started)
+
+    def _bad_is_speech(_frame: bytes, _sr: int) -> bool:
+        raise RuntimeError("webrtcvad boom")
+
+    holder["vad"].is_speech = _bad_is_speech  # type: ignore[method-assign]
+    # Several frames of "speech" that the VAD will explode on — must not
+    # crash and must not trigger an utterance start (treated as silence).
+    await adapter.feed_audio(_silence_frame(num_samples=_VAD_CHUNK * 5))
+    assert started_calls == 0

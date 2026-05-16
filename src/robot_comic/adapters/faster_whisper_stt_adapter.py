@@ -8,22 +8,43 @@ alternate to Moonshine: ~2s cold-load (vs Moonshine's ~20s), mature C++
 runtime with no equivalent of Moonshine's "rearm-N-then-die" stall pattern
 (#314), and a clean batch-call API.
 
+Phase 5f.1 — VAD swap
+---------------------
+
+The original 5f adapter used ``silero-vad`` for utterance chunking.
+``silero-vad`` transitively depends on ``torch`` (~2 GB unpacked) which
+does NOT fit on the chassis eMMC (14 GB total, ~1.4 GB free after the
+base install). 5f.1 swaps in ``webrtcvad`` — Google's WebRTC VAD wrapped
+as a Python C extension. ~50 KB wheel, no torch, instant construction.
+
+webrtcvad's contract differs from silero's:
+
+- Constructed with an aggressiveness mode 0-3 (we default to 2).
+- Accepts **bytes** (int16 PCM), not float32.
+- Frame must be **exactly** 10/20/30 ms at 8/16/32/48 kHz. We pick
+  16 kHz / 30 ms = 480 samples = 960 bytes — the longest webrtcvad
+  accepts, which keeps per-frame overhead low.
+- Returns a plain bool per frame, not start/end events.
+
+We synthesise the silero-style start/end semantics with a small state
+machine — see :class:`_WebRTCVadGate` below.
+
 Architecture
 ------------
 
 Faster-whisper is batch-only — it transcribes a complete utterance buffer
 in one call, not a streaming pipeline. The adapter chunks streaming audio
-frames into utterances via `silero-vad`:
+frames into utterances via webrtcvad:
 
 1. ``feed_audio`` receives an :class:`AudioFrame` (int16 PCM, any sample
-   rate). The adapter converts to float32 mono normalised to [-1, 1] and
-   resamples to silero-vad's required 16 kHz target.
-2. The audio is fed into a fixed-size chunk buffer; each 512-sample chunk
-   is passed through :class:`silero_vad.VADIterator`.
-3. On a ``{"start": …}`` event from the VAD iterator, the adapter fires
-   ``on_speech_started()`` (if registered) and begins accumulating audio
-   into an utterance buffer.
-4. On a ``{"end": …}`` event, the accumulated buffer is submitted to
+   rate). The adapter converts to int16 mono @ 16 kHz.
+2. The audio is fed into a fixed-size chunk buffer; each 480-sample chunk
+   is passed through webrtcvad.
+3. After ``_VAD_START_FRAMES`` consecutive speech frames, the adapter
+   fires ``on_speech_started()`` (if registered) and begins accumulating
+   audio into an utterance buffer.
+4. After ``_VAD_END_SILENCE_FRAMES`` consecutive non-speech frames during
+   an utterance, the accumulated buffer is submitted to
    ``WhisperModel.transcribe`` on a background thread (via
    :func:`asyncio.to_thread` so the asyncio loop keeps draining), and the
    joined segment text fires ``on_completed(text)``.
@@ -78,15 +99,95 @@ from robot_comic.backends import (
 logger = logging.getLogger(__name__)
 
 
-# silero-vad operates on 512-sample chunks at 16 kHz (32 ms). The VAD
-# iterator buffers smaller chunks internally but a fixed 512 makes the
-# adapter's accounting straightforward.
+# webrtcvad accepts 10/20/30 ms frames at 8/16/32/48 kHz. We pick 16 kHz
+# (faster-whisper's preferred sample rate) and 30 ms (the longest, which
+# minimises per-frame call overhead).
 _VAD_SAMPLE_RATE = 16000
-_VAD_CHUNK_SAMPLES = 512
+_VAD_FRAME_MS = 30
+_VAD_CHUNK_SAMPLES = _VAD_SAMPLE_RATE * _VAD_FRAME_MS // 1000  # 480
+# Aggressiveness mode 0-3, higher = more aggressive at filtering
+# non-speech. 2 is a reasonable starting middle ground; on-device A/B
+# can dial it.
+_VAD_AGGRESSIVENESS = 2
+# Debounce: N consecutive speech frames before we declare an utterance
+# started. 3 × 30 ms ≈ 90 ms — filters single-frame noise spikes.
+_VAD_START_FRAMES = 3
+# Trailing silence: N consecutive non-speech frames before we declare
+# the utterance ended. 17 × 30 ms ≈ 510 ms — generous enough that the
+# comedian persona's deliberate pauses don't trigger early flushes.
+_VAD_END_SILENCE_FRAMES = 17
 
 
 class FasterWhisperSTTDependencyError(RuntimeError):
     """Raised when the optional ``faster_whisper_stt`` extras aren't installed."""
+
+
+class _WebRTCVadGate:
+    """State machine wrapping ``webrtcvad.Vad`` with start/end semantics.
+
+    webrtcvad gives one bool per frame; silero-vad gave us explicit
+    ``start`` / ``end`` events. This class bridges the two:
+
+    - After ``_VAD_START_FRAMES`` consecutive speech frames, ``feed()``
+      returns ``"start"`` on the frame that crosses the boundary and
+      transitions to the in-utterance state.
+    - After ``_VAD_END_SILENCE_FRAMES`` consecutive non-speech frames
+      while in an utterance, ``feed()`` returns ``"end"`` on the frame
+      that crosses the boundary and transitions back to idle.
+    - Otherwise ``feed()`` returns ``None``.
+
+    The class is intentionally inert with regard to the audio payload —
+    callers handle the buffer themselves. The gate only owns the
+    is-speech bool + counter state.
+    """
+
+    def __init__(self, vad: Any) -> None:
+        self._vad = vad
+        self._in_utterance: bool = False
+        self._speech_run: int = 0
+        self._silence_run: int = 0
+
+    def feed(self, frame_bytes: bytes) -> str | None:
+        """Push one VAD-frame-sized chunk; return ``"start"``, ``"end"``, or ``None``.
+
+        ``frame_bytes`` must be exactly ``_VAD_CHUNK_SAMPLES * 2`` bytes
+        of int16 PCM at ``_VAD_SAMPLE_RATE``. webrtcvad will raise
+        otherwise — that's a programming error, surface it.
+        """
+        try:
+            is_speech = bool(self._vad.is_speech(frame_bytes, _VAD_SAMPLE_RATE))
+        except Exception as e:
+            logger.debug("webrtcvad.is_speech raised on frame: %s", e)
+            return None
+
+        if is_speech:
+            self._speech_run += 1
+            self._silence_run = 0
+        else:
+            self._silence_run += 1
+            self._speech_run = 0
+
+        if not self._in_utterance:
+            if self._speech_run >= _VAD_START_FRAMES:
+                self._in_utterance = True
+                # Reset silence counter for the end-of-utterance check.
+                self._silence_run = 0
+                return "start"
+            return None
+
+        # In an utterance.
+        if self._silence_run >= _VAD_END_SILENCE_FRAMES:
+            self._in_utterance = False
+            self._speech_run = 0
+            self._silence_run = 0
+            return "end"
+        return None
+
+    def reset(self) -> None:
+        """Drop accumulated counters. Used on stop()."""
+        self._in_utterance = False
+        self._speech_run = 0
+        self._silence_run = 0
 
 
 class FasterWhisperSTTAdapter:
@@ -126,11 +227,12 @@ class FasterWhisperSTTAdapter:
         # on_partial intentionally NOT stored — faster-whisper is batch.
 
         self._model: Any = None
-        self._vad_iterator: Any = None
-        # Pending audio that has not yet been split into 512-sample chunks.
-        self._chunk_remainder: NDArray[np.float32] = np.zeros(0, dtype=np.float32)
-        # Audio accumulated between VAD start and end events (float32 @ 16 kHz).
-        self._utterance_buffer: list[NDArray[np.float32]] = []
+        self._vad_gate: _WebRTCVadGate | None = None
+        # Pending audio that has not yet been split into VAD-frame-sized
+        # chunks. int16 PCM @ 16 kHz mono.
+        self._chunk_remainder: NDArray[np.int16] = np.zeros(0, dtype=np.int16)
+        # Audio accumulated between VAD start and end events (int16 @ 16 kHz).
+        self._utterance_buffer: list[NDArray[np.int16]] = []
         self._in_utterance: bool = False
 
     async def start(
@@ -139,7 +241,7 @@ class FasterWhisperSTTAdapter:
         on_partial: TranscriptCallback | None = None,
         on_speech_started: SpeechStartedCallback | None = None,
     ) -> None:
-        """Load the model + VAD iterator and bind transcript callbacks.
+        """Load the model + VAD and bind transcript callbacks.
 
         ``on_partial`` is accepted for Protocol compatibility but is
         **ignored** — faster-whisper is batch-only and does not produce
@@ -164,11 +266,11 @@ class FasterWhisperSTTAdapter:
             self._on_completed = None
             self._on_speech_started = None
             self._model = None
-            self._vad_iterator = None
+            self._vad_gate = None
             raise
 
     def _load_model_and_vad(self) -> None:
-        """Load faster-whisper + silero-vad. Synchronous — runs in a thread."""
+        """Load faster-whisper + webrtcvad. Synchronous — runs in a thread."""
         try:
             from faster_whisper import WhisperModel
         except Exception as e:  # pragma: no cover — covered via stubbed tests
@@ -178,10 +280,10 @@ class FasterWhisperSTTAdapter:
             ) from e
 
         try:
-            from silero_vad import VADIterator, load_silero_vad
+            import webrtcvad
         except Exception as e:  # pragma: no cover — covered via stubbed tests
             raise FasterWhisperSTTDependencyError(
-                "faster-whisper STT requires silero-vad: install with `uv pip install -e .[faster_whisper_stt]`."
+                "faster-whisper STT requires webrtcvad: install with `uv pip install -e .[faster_whisper_stt]`."
             ) from e
 
         logger.info(
@@ -194,58 +296,55 @@ class FasterWhisperSTTAdapter:
             device="cpu",
             compute_type=self._compute_type,
         )
-        vad_model = load_silero_vad()
-        self._vad_iterator = VADIterator(vad_model, sampling_rate=_VAD_SAMPLE_RATE)
+        vad = webrtcvad.Vad(_VAD_AGGRESSIVENESS)
+        self._vad_gate = _WebRTCVadGate(vad)
 
     async def feed_audio(self, frame: AudioFrame) -> None:
         """Push one audio frame through the VAD chunker.
 
         Consults ``should_drop_frame`` first (echo-guard) and short-circuits
-        before any conversion if truthy. Otherwise: convert to float32 @ 16
-        kHz, append to the chunk-remainder buffer, and process every full
-        512-sample chunk through the VAD iterator.
+        before any conversion if truthy. Otherwise: convert to int16 mono
+        @ 16 kHz, append to the chunk-remainder buffer, and process every
+        full 480-sample chunk through webrtcvad.
         """
         if self._should_drop_frame is not None and self._should_drop_frame():
             return
-        if self._vad_iterator is None or self._model is None:
+        if self._vad_gate is None or self._model is None:
             # start() not called or load failed — drop silently.
             return
 
-        audio_f32 = _to_float32_mono(frame.samples, frame.sample_rate)
-        if audio_f32.size == 0:
+        audio_i16 = _to_int16_mono(frame.samples, frame.sample_rate)
+        if audio_i16.size == 0:
             return
 
-        # Append + slice into 512-sample chunks.
-        self._chunk_remainder = np.concatenate([self._chunk_remainder, audio_f32])
+        # Append + slice into VAD-frame-sized chunks.
+        self._chunk_remainder = np.concatenate([self._chunk_remainder, audio_i16])
         while self._chunk_remainder.size >= _VAD_CHUNK_SAMPLES:
             chunk = self._chunk_remainder[:_VAD_CHUNK_SAMPLES]
             self._chunk_remainder = self._chunk_remainder[_VAD_CHUNK_SAMPLES:]
             await self._process_vad_chunk(chunk)
 
-    async def _process_vad_chunk(self, chunk: NDArray[np.float32]) -> None:
-        """Push one 512-sample chunk through silero-vad; dispatch on start/end."""
-        event: Any = None
-        try:
-            event = self._vad_iterator(chunk)
-        except Exception as e:
-            logger.debug("silero-vad iterator raised on chunk: %s", e)
+    async def _process_vad_chunk(self, chunk: NDArray[np.int16]) -> None:
+        """Push one VAD-frame-sized chunk through webrtcvad; dispatch on start/end."""
+        gate = self._vad_gate
+        if gate is None:  # pragma: no cover — guarded by feed_audio
+            return
+        event = gate.feed(chunk.tobytes())
+
+        if event == "start":
+            self._in_utterance = True
+            # Restart the buffer with this chunk (speech began here, so
+            # include the leading audio in the transcription buffer).
+            self._utterance_buffer = [chunk]
+            await self._fire_speech_started()
             return
 
         if self._in_utterance:
             self._utterance_buffer.append(chunk)
 
-        if event is None:
-            return
-
-        if "start" in event:
-            self._in_utterance = True
-            # Restart the buffer with this chunk (the VAD start landmark
-            # is at the START of speech in this chunk; include it).
-            self._utterance_buffer = [chunk]
-            await self._fire_speech_started()
-        elif "end" in event:
-            # The "end" event lands AFTER the trailing silence so the buffer
-            # already contains the closing samples. Flush.
+        if event == "end":
+            # The "end" event lands after the trailing silence so the
+            # buffer already contains the closing samples. Flush.
             buffer = self._utterance_buffer
             self._utterance_buffer = []
             self._in_utterance = False
@@ -260,14 +359,16 @@ class FasterWhisperSTTAdapter:
         except Exception:
             logger.exception("FasterWhisperSTTAdapter on_speech_started callback raised")
 
-    async def _transcribe_and_dispatch(self, buffer: list[NDArray[np.float32]]) -> None:
+    async def _transcribe_and_dispatch(self, buffer: list[NDArray[np.int16]]) -> None:
         """Run transcribe on a thread and fire ``on_completed`` with the text."""
         if not buffer:
             return
         cb = self._on_completed
         if cb is None:
             return
-        audio = np.concatenate(buffer)
+        audio_i16 = np.concatenate(buffer)
+        # faster-whisper accepts float32 in [-1, 1]; convert from int16.
+        audio = (audio_i16.astype(np.float32) / 32768.0).astype(np.float32, copy=False)
         try:
             text = await asyncio.to_thread(self._transcribe_sync, audio)
         except Exception:
@@ -276,7 +377,7 @@ class FasterWhisperSTTAdapter:
         text = text.strip()
         if not text:
             # Mirror the moonshine partial-empty-drop behaviour: empty
-            # transcripts are uninteresting noise (e.g. silero-vad fired
+            # transcripts are uninteresting noise (e.g. webrtcvad fired
             # on a brief noise spike with no speech content).
             return
         try:
@@ -302,35 +403,30 @@ class FasterWhisperSTTAdapter:
     async def stop(self) -> None:
         """Release model + VAD state. Idempotent."""
         model = self._model
-        vad = self._vad_iterator
+        gate = self._vad_gate
         self._model = None
-        self._vad_iterator = None
+        self._vad_gate = None
         self._on_completed = None
         self._on_speech_started = None
         self._utterance_buffer = []
-        self._chunk_remainder = np.zeros(0, dtype=np.float32)
+        self._chunk_remainder = np.zeros(0, dtype=np.int16)
         self._in_utterance = False
 
         def _close() -> None:
-            for obj, methods in (
-                (vad, ("reset_states",)),
-                (model, ("close",)),
-            ):
-                if obj is None:
-                    continue
-                for method_name in methods:
-                    method = getattr(obj, method_name, None)
-                    if callable(method):
-                        try:
-                            method()
-                        except Exception as e:  # pragma: no cover — best-effort
-                            logger.debug(
-                                "FasterWhisperSTTAdapter %s during shutdown: %s",
-                                method_name,
-                                e,
-                            )
+            if gate is not None:
+                try:
+                    gate.reset()
+                except Exception as e:  # pragma: no cover — best-effort
+                    logger.debug("FasterWhisperSTTAdapter VAD reset failed: %s", e)
+            if model is not None:
+                close = getattr(model, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception as e:  # pragma: no cover — best-effort
+                        logger.debug("FasterWhisperSTTAdapter model close failed: %s", e)
 
-        if model is not None or vad is not None:
+        if model is not None or gate is not None:
             await asyncio.to_thread(_close)
 
     async def reset_per_session_state(self) -> None:
@@ -345,12 +441,12 @@ class FasterWhisperSTTAdapter:
         return None
 
 
-def _to_float32_mono(samples: Any, sample_rate: int) -> NDArray[np.float32]:
-    """Convert a frame's samples to float32 mono @ 16 kHz, normalised [-1, 1].
+def _to_int16_mono(samples: Any, sample_rate: int) -> NDArray[np.int16]:
+    """Convert a frame's samples to int16 mono @ 16 kHz.
 
-    Mirrors the conversion :class:`MoonshineListener.feed_audio` performs,
-    with two differences: (1) silero-vad wants float32 not int16, and (2)
-    the target sample rate is always 16 kHz regardless of source.
+    webrtcvad expects int16 PCM bytes, so we keep the audio in int16 the
+    whole way through the chunker and only float-convert for the actual
+    transcribe call.
     """
     arr = samples
     if not isinstance(arr, np.ndarray):
@@ -363,14 +459,15 @@ def _to_float32_mono(samples: Any, sample_rate: int) -> NDArray[np.float32]:
         if arr.shape[1] > 1:
             arr = arr[:, 0]
 
-    # int16 → float32 normalised. Other input dtypes (already float?) get
-    # coerced; we trust the AudioFrame contract that samples are int16.
-    if arr.dtype != np.float32:
-        if np.issubdtype(arr.dtype, np.integer):
-            max_val = float(np.iinfo(arr.dtype).max)
-            arr = arr.astype(np.float32) / max_val
+    # Coerce to int16. AudioFrame's contract is int16 PCM but defend
+    # against float inputs (e.g. tests passing float arrays).
+    if arr.dtype != np.int16:
+        if np.issubdtype(arr.dtype, np.floating):
+            # Assume float in [-1, 1].
+            arr = np.clip(arr, -1.0, 1.0)
+            arr = (arr * 32767.0).astype(np.int16)
         else:
-            arr = arr.astype(np.float32)
+            arr = arr.astype(np.int16)
 
     if sample_rate != _VAD_SAMPLE_RATE and arr.size > 0:
         # Deferred import: scipy is heavy and the unit tests stub the model
@@ -378,9 +475,10 @@ def _to_float32_mono(samples: Any, sample_rate: int) -> NDArray[np.float32]:
         from scipy.signal import resample
 
         target_len = int(round(arr.size * _VAD_SAMPLE_RATE / sample_rate))
-        arr = resample(arr, target_len).astype(np.float32, copy=False)
+        # scipy.signal.resample returns float; clip + cast back to int16.
+        resampled = resample(arr.astype(np.float32), target_len)
+        resampled = np.clip(resampled, -32768.0, 32767.0)
+        arr = resampled.astype(np.int16, copy=False)
 
-    # Annotate the final type for mypy — the intermediate scipy.signal.resample
-    # return is loosely typed but we know we coerced to float32 above.
-    out: NDArray[np.float32] = arr.astype(np.float32, copy=False)
+    out: NDArray[np.int16] = arr.astype(np.int16, copy=False)
     return out
