@@ -12,7 +12,7 @@ LLM round-trip with _run_llm_with_tools mock to keep tests focused on TTS.
 
 from __future__ import annotations
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import numpy as np
@@ -1132,3 +1132,63 @@ async def test_dispatch_api_budget_bailout_uses_canned_filler_and_records_histor
     assert roles == ["user", "model"], f"Expected ['user', 'model'], got {roles}"
     last = handler._conversation_history[-1]["parts"][0]["text"]
     assert last in mod._EMPTY_RESPONSE_FILLERS
+
+
+# ---------------------------------------------------------------------------
+# Phase 5e.5 — leaf guard on GeminiTextElevenLabsResponseHandler
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_gemini_elevenlabs_prepare_startup_credentials_is_idempotent() -> None:
+    """Second call must NOT re-instantiate ``genai.Client`` / ``GeminiLLMClient``.
+
+    Pre-5e.5, the mixin shell's ``_prepare_startup_credentials`` gated
+    the whole chain. Post-5e.5 the migrated triple's factory composes a
+    plain leaf handler (no shell), and the LLM and TTS adapters each
+    call ``handler._prepare_startup_credentials`` once.
+
+    The leaf calls
+    ``ElevenLabsTTSResponseHandler._prepare_startup_credentials(self)``
+    **explicitly** (not via ``super()``), because the diamond bases
+    aren't cooperative-``super`` ancestors. The base method has no
+    idempotency guard of its own, so without a leaf-level guard each
+    duplicate call leaks a fresh ``genai.Client`` (base), a fresh
+    ``httpx.AsyncClient`` (base), and a fresh ``GeminiLLMClient`` wrapper
+    (leaf).
+
+    The leaf guard wraps the whole leaf body — base call + leaf-specific
+    reassignments — so the second invocation is a cheap no-op.
+    """
+    from robot_comic.gemini_text_handlers import GeminiTextElevenLabsResponseHandler
+
+    handler = GeminiTextElevenLabsResponseHandler(_make_deps())
+    handler.tool_manager = MagicMock()
+
+    with (
+        patch("google.genai.Client") as mock_genai_client_cls,
+        patch("robot_comic.gemini_llm.GeminiLLMClient") as mock_gemini_llm_cls,
+    ):
+        mock_genai_client_cls.return_value = MagicMock(name="genai_Client_instance")
+        mock_gemini_llm_cls.return_value = MagicMock(name="GeminiLLMClient_instance")
+
+        await handler._prepare_startup_credentials()
+        first_client = handler._client
+        first_http = handler._http
+        first_gemini_llm = handler._gemini_llm
+        assert first_client is not None
+        assert first_http is not None
+        assert first_gemini_llm is not None
+        assert mock_genai_client_cls.call_count == 1
+        assert mock_gemini_llm_cls.call_count == 1
+        assert handler.tool_manager.start_up.call_count == 1
+
+        await handler._prepare_startup_credentials()
+        # Same instances; no leak. Base + leaf bodies are no-ops on the
+        # second call.
+        assert handler._client is first_client
+        assert handler._http is first_http
+        assert handler._gemini_llm is first_gemini_llm
+        assert mock_genai_client_cls.call_count == 1
+        assert mock_gemini_llm_cls.call_count == 1
+        assert handler.tool_manager.start_up.call_count == 1
