@@ -235,13 +235,22 @@ class ComposableConversationHandler(ConversationHandler):
                 setattr(handler, field, value)
 
     async def get_available_voices(self) -> list[str]:
-        """Forward to the underlying TTS handler's voice catalog."""
-        return await self._tts_handler.get_available_voices()
+        """Forward to the pipeline's TTS adapter (Phase 5c.1).
+
+        Replaces the prior ``self._tts_handler.get_available_voices()``
+        forward — the adapter now implements the voice-method surface
+        directly via :class:`~robot_comic.backends.TTSBackend`'s Phase
+        5c.1 Protocol extension, so the wrapper no longer needs to reach
+        into the legacy handler for voice queries. ``self._tts_handler``
+        is still consulted by :meth:`_reset_tts_per_session_state`
+        (Phase 5c.2 / 5d will revisit).
+        """
+        return await self.pipeline.tts.get_available_voices()
 
     def get_current_voice(self) -> str:
-        """Forward to the underlying TTS handler's current-voice getter."""
-        return self._tts_handler.get_current_voice()
+        """Forward to the pipeline's TTS adapter (Phase 5c.1)."""
+        return self.pipeline.tts.get_current_voice()
 
     async def change_voice(self, voice: str) -> str:
-        """Forward to the underlying TTS handler's voice switcher."""
-        return await self._tts_handler.change_voice(voice)
+        """Forward to the pipeline's TTS adapter (Phase 5c.1)."""
+        return await self.pipeline.tts.change_voice(voice)
