@@ -283,7 +283,16 @@ def mount_personality_routes(
 
             async def _do_apply() -> tuple[str, Optional[str]]:
                 sel = None if sel_name == DEFAULT_OPTION else sel_name
-                status = await handler.apply_personality(sel)
+                # Phase 5d: ``apply_personality`` is no longer on the
+                # ``ConversationHandler`` ABC (moved onto ``ComposablePipeline``
+                # in 5c.2; bundled-realtime handlers keep their own impl).
+                # Reach via ``getattr`` so concrete handlers that still expose
+                # it are called and any future handler without it returns a
+                # clear error rather than an AttributeError.
+                apply_personality = getattr(handler, "apply_personality", None)
+                if not callable(apply_personality):
+                    return ("Handler does not support personality switching.", None)
+                status = await apply_personality(sel)
                 get_current_voice = getattr(handler, "get_current_voice", None)
                 voice_override = get_current_voice() if callable(get_current_voice) else None
                 return status, voice_override
@@ -312,8 +321,16 @@ def mount_personality_routes(
             return get_available_voices_for_provider()
 
         async def _get_v() -> list[str]:
+            # Phase 5d: ``get_available_voices`` is no longer on the ABC
+            # (moved onto ``TTSBackend`` in 5c.1). Duck-type the call so
+            # mypy stays clean and any future handler without the method
+            # falls back to the static provider catalog.
+            get_available_voices = getattr(handler, "get_available_voices", None)
+            if not callable(get_available_voices):
+                return get_available_voices_for_provider()
             try:
-                return await handler.get_available_voices()
+                voices = await get_available_voices()
+                return list(voices) if voices is not None else get_available_voices_for_provider()
             except Exception:
                 return get_available_voices_for_provider()
 
@@ -331,8 +348,15 @@ def mount_personality_routes(
             return {"voice": fallback_voice}
 
         def _get_current() -> str:
+            # Phase 5d: ``get_current_voice`` is no longer on the ABC
+            # (moved onto ``TTSBackend`` in 5c.1). Duck-type so concrete
+            # handlers that still expose it are called and others fall back.
+            get_current_voice = getattr(handler, "get_current_voice", None)
+            if not callable(get_current_voice):
+                return fallback_voice
             try:
-                return handler.get_current_voice()
+                result = get_current_voice()
+                return str(result) if result is not None else fallback_voice
             except Exception:
                 return fallback_voice
 
@@ -358,7 +382,14 @@ def mount_personality_routes(
             return JSONResponse({"ok": False, "error": "loop_unavailable"}, status_code=503)  # type: ignore
 
         async def _do() -> str:
-            return await handler.change_voice(voice)
+            # Phase 5d: ``change_voice`` is no longer on the ABC (moved onto
+            # ``TTSBackend`` in 5c.1). Duck-type so callers get a clear
+            # response when a handler genuinely lacks voice switching.
+            change_voice = getattr(handler, "change_voice", None)
+            if not callable(change_voice):
+                return "Handler does not support voice switching."
+            result = await change_voice(voice)
+            return str(result) if result is not None else "Voice change requested."
 
         try:
             fut = asyncio.run_coroutine_threadsafe(_do(), loop)
