@@ -14,7 +14,6 @@ from typing import Any
 
 import pytest
 
-from robot_comic.backends import AudioFrame
 from robot_comic.adapters.elevenlabs_tts_adapter import ElevenLabsTTSAdapter
 
 
@@ -53,40 +52,15 @@ class _StubElevenLabsHandler:
 
 
 # ---------------------------------------------------------------------------
-# prepare()
+# synthesize() — adapter-specific: text + tags forwarding
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_prepare_calls_handler_prepare() -> None:
-    handler = _StubElevenLabsHandler()
-    adapter = ElevenLabsTTSAdapter(handler)
-    await adapter.prepare()
-    assert handler.prepare_called is True
-
-
-# ---------------------------------------------------------------------------
-# synthesize() — happy path
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_synthesize_yields_one_audio_frame_per_pushed_item() -> None:
-    """Each (sample_rate, ndarray) tuple → one AudioFrame."""
-    frames = [
-        (24000, [1, 2, 3]),
-        (24000, [4, 5, 6]),
-        (24000, [7, 8, 9]),
-    ]
-    handler = _StubElevenLabsHandler(frames_to_push=frames)
-    adapter = ElevenLabsTTSAdapter(handler)
-    out = [frame async for frame in adapter.synthesize("hi")]
-
-    assert len(out) == 3
-    for i, frame in enumerate(out):
-        assert isinstance(frame, AudioFrame)
-        assert frame.sample_rate == 24000
-        assert frame.samples == frames[i][1]
+#
+# Shared "prepare invokes handler", "synthesize yields AudioFrames", and
+# Protocol-conformance assertions now live in
+# ``tests/adapters/test_tts_backend_contract.py``. The tests below pin
+# behaviour that is *specific* to the ElevenLabs adapter (text/tags
+# forwarding shape, queue isolation, exception propagation, duck-typed
+# handler acceptance, _http shutdown).
 
 
 @pytest.mark.asyncio
@@ -144,16 +118,8 @@ async def test_synthesize_restores_original_queue_after_exception() -> None:
 
 
 # ---------------------------------------------------------------------------
-# synthesize() — empty / error paths
+# synthesize() — error paths (empty-frames case lives in the contract suite)
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_synthesize_with_no_frames_yields_nothing() -> None:
-    handler = _StubElevenLabsHandler(frames_to_push=[])
-    adapter = ElevenLabsTTSAdapter(handler)
-    out = [frame async for frame in adapter.synthesize("hi")]
-    assert out == []
 
 
 @pytest.mark.asyncio
@@ -302,19 +268,6 @@ async def test_shutdown_with_no_open_http_is_safe() -> None:
     adapter = ElevenLabsTTSAdapter(handler)
     await adapter.shutdown()
     assert handler._http is None
-
-
-# ---------------------------------------------------------------------------
-# Protocol conformance
-# ---------------------------------------------------------------------------
-
-
-def test_adapter_satisfies_tts_backend_protocol() -> None:
-    """``ElevenLabsTTSAdapter`` passes ``isinstance(TTSBackend)``."""
-    from robot_comic.backends import TTSBackend
-
-    adapter = ElevenLabsTTSAdapter(_StubElevenLabsHandler())
-    assert isinstance(adapter, TTSBackend)
 
 
 # ---------------------------------------------------------------------------
