@@ -38,13 +38,6 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
-from robot_comic.backends import ToolCall
-from robot_comic.tools.core_tools import (
-    dispatch_tool_call,
-    dispatch_tool_call_with_manager,
-)
-from robot_comic.tools.tool_constants import SystemTool
-
 from robot_comic.config import (
     AUDIO_INPUT_HF,
     AUDIO_OUTPUT_HF,
@@ -68,14 +61,20 @@ from robot_comic.config import (
     config,
     derive_pipeline_mode,
 )
+from robot_comic.backends import ToolCall
 from robot_comic.gemini_tts import GeminiTTSResponseHandler
 from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
+from robot_comic.tools.core_tools import (
+    dispatch_tool_call,
+    dispatch_tool_call_with_manager,
+)
 from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.gemini_text_handlers import (
     GeminiTextChatterboxResponseHandler,
     GeminiTextElevenLabsResponseHandler,
 )
 from robot_comic.llama_elevenlabs_tts import LlamaElevenLabsTTSResponseHandler
+from robot_comic.tools.tool_constants import SystemTool
 
 
 if TYPE_CHECKING:

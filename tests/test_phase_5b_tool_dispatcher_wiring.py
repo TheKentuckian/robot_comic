@@ -41,7 +41,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from robot_comic.backends import ToolCall
 from robot_comic.config import (
     LLM_BACKEND_LLAMA,
     LLM_BACKEND_GEMINI,
@@ -50,6 +49,7 @@ from robot_comic.config import (
     AUDIO_OUTPUT_ELEVENLABS,
     PIPELINE_MODE_COMPOSABLE,
 )
+from robot_comic.backends import ToolCall
 from robot_comic.handler_factory import HandlerFactory
 from robot_comic.composable_conversation_handler import ComposableConversationHandler
 
@@ -148,9 +148,7 @@ async def test_wired_dispatcher_invokes_dispatch_tool_call(
 
     captured: dict[str, Any] = {}
 
-    async def _fake_dispatch(
-        tool_name: str, args_json: str, deps: Any
-    ) -> dict[str, Any]:
+    async def _fake_dispatch(tool_name: str, args_json: str, deps: Any) -> dict[str, Any]:
         captured["tool_name"] = tool_name
         captured["args_json"] = args_json
         captured["deps"] = deps
@@ -207,9 +205,7 @@ async def test_wired_dispatcher_returns_error_string_on_unknown_tool(
         AUDIO_OUTPUT_ELEVENLABS,
     )
 
-    async def _fake_dispatch(
-        tool_name: str, args_json: str, deps: Any
-    ) -> dict[str, Any]:
+    async def _fake_dispatch(tool_name: str, args_json: str, deps: Any) -> dict[str, Any]:
         return {"error": f"unknown tool: {tool_name}"}
 
     import robot_comic.handler_factory as factory_mod
@@ -279,9 +275,7 @@ async def test_dispatcher_emits_tool_execute_span_with_outcome_success(
         AUDIO_OUTPUT_ELEVENLABS,
     )
 
-    async def _fake_dispatch(
-        tool_name: str, args_json: str, deps: Any
-    ) -> dict[str, Any]:
+    async def _fake_dispatch(tool_name: str, args_json: str, deps: Any) -> dict[str, Any]:
         return {"ok": True}
 
     import robot_comic.handler_factory as factory_mod
@@ -337,9 +331,7 @@ async def test_dispatcher_emits_tool_execute_span_with_outcome_error(
         AUDIO_OUTPUT_ELEVENLABS,
     )
 
-    async def _fake_dispatch(
-        tool_name: str, args_json: str, deps: Any
-    ) -> dict[str, Any]:
+    async def _fake_dispatch(tool_name: str, args_json: str, deps: Any) -> dict[str, Any]:
         return {"error": "boom"}
 
     import robot_comic.handler_factory as factory_mod
