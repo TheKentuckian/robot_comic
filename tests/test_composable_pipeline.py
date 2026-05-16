@@ -131,8 +131,15 @@ async def test_single_text_turn_produces_one_frame() -> None:
 
     await stt.on_completed("hi robot")
 
-    frame = await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
-    assert frame.sample_rate == 24000
+    # Pipeline pushes the legacy ``(sample_rate, samples)`` tuple shape
+    # so the downstream FastRTC playback consumer in ``console.py``
+    # (``isinstance(handler_output, tuple)`` branch at :1466) picks it up.
+    # Pre-hotfix the orchestrator was pushing the ``AudioFrame`` dataclass
+    # directly and audio was silently dropped on hardware.
+    item = await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+    assert isinstance(item, tuple)
+    sample_rate, samples = item
+    assert sample_rate == 24000
     assert tts.calls == [("Hello there!", ())]
     assert pipeline.conversation_history == [
         {"role": "user", "content": "hi robot"},
@@ -886,6 +893,43 @@ async def test_speak_assistant_text_allocates_fresh_marker_per_turn() -> None:
 
     assert len(tts.marker_refs) == 2
     assert tts.marker_refs[0] is not tts.marker_refs[1]
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_speak_assistant_text_puts_tuple_shape_for_fastrtc_consumer() -> None:
+    """Regression: TTS frames go onto ``output_queue`` as ``(sample_rate, samples)``
+    tuples, not ``AudioFrame`` dataclasses.
+
+    ``console.py``'s playback loop dispatches with
+    ``isinstance(handler_output, tuple)`` to route to ALSA (see
+    ``console.py:1466``). Pre-hotfix the orchestrator pushed the ``AudioFrame``
+    dataclass straight from ``TTSBackend.synthesize`` onto the queue; the
+    isinstance check failed silently and TTS audio never reached the
+    speaker. Caught during 2026-05-16 hardware validation on ricci.
+    """
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([LLMResponse(text="Hi.")])
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+    await stt.on_completed("ping")
+
+    item = await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+    assert isinstance(item, tuple), (
+        f"output_queue must hold (sample_rate, samples) tuples for the "
+        f"FastRTC playback consumer; got {type(item).__name__}"
+    )
+    assert len(item) == 2
+    sample_rate, samples = item
+    assert sample_rate == 24000
+    # Samples is whatever the adapter put inside the AudioFrame — we don't
+    # constrain the dtype here, just confirm the unwrap happened.
+    assert samples is not None
 
     await pipeline.shutdown()
     await task
