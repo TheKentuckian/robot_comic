@@ -122,6 +122,20 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
         )
 
     async def _prepare_startup_credentials(self) -> None:
+        """Set up the httpx client + log the resolved pipeline.
+
+        Phase 5e.2 idempotency: the migrated triple's factory composes
+        a plain handler (no :class:`LocalSTTInputMixin` shell), and the
+        LLM and TTS adapters each call this method during their
+        ``prepare`` lifecycle. The mixin used to gate the call chain
+        behind ``_startup_credentials_ready``; without that wrapper the
+        second invocation would leak a fresh ``httpx.AsyncClient`` and
+        re-fetch the model name. Guard the body so duplicate calls are
+        cheap no-ops. The flag is only set on success so a failed
+        attempt still re-tries.
+        """
+        if getattr(self, "_startup_credentials_ready", False):
+            return
         await super()._prepare_startup_credentials()
         self._http = httpx.AsyncClient(timeout=30.0)
 
@@ -134,6 +148,7 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
             self._llama_cpp_url,
             self.get_current_voice(),
         )
+        self._startup_credentials_ready = True
 
     async def _fetch_llm_model_name(self) -> str:
         assert self._http is not None

@@ -135,13 +135,6 @@ _SUPPORTED_MATRIX_DOC = (
 # ---------------------------------------------------------------------------
 
 
-class _LocalSTTLlamaElevenLabsHost(LocalSTTInputMixin, LlamaElevenLabsTTSResponseHandler):
-    """Composable host: Moonshine STT input + Llama LLM + ElevenLabs TTS."""
-
-    async def _dispatch_completed_transcript(self, transcript: str) -> None:
-        await LlamaElevenLabsTTSResponseHandler._dispatch_completed_transcript(self, transcript)
-
-
 class _LocalSTTLlamaChatterboxHost(LocalSTTInputMixin, ChatterboxTTSResponseHandler):
     """Composable host: Moonshine STT input + Llama LLM + Chatterbox TTS."""
 
@@ -511,18 +504,53 @@ def _make_tool_dispatcher(host: Any) -> Any:
     return _dispatch
 
 
+def _maybe_build_welcome_gate() -> Any:
+    """Return a :class:`WelcomeGate` for the current profile, or ``None``.
+
+    Mirrors the pre-5e.2 :meth:`LocalSTTInputMixin._build_welcome_gate`
+    helper. Returns ``None`` when ``REACHY_MINI_WELCOME_GATE_ENABLED`` is
+    false or no profile directory can be resolved.
+
+    Shared across 5e.* triple builders so each migrated triple gets the
+    same gating behaviour. The legacy host mirror in
+    :class:`LocalSTTInputMixin._build_welcome_gate` survives for the
+    un-migrated triples (5e.3-5e.6 retire them one by one).
+    """
+    from pathlib import Path
+
+    if not getattr(config, "WELCOME_GATE_ENABLED", False):
+        return None
+    profile = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
+    profiles_dir = getattr(config, "PROFILES_DIRECTORY", None)
+    if not profile or profiles_dir is None:
+        logger.info("welcome gate: enabled but no profile selected — gate inactive")
+        return None
+    from robot_comic.welcome_gate import make_gate_for_profile
+
+    profile_dir = Path(profiles_dir) / profile
+    gate = make_gate_for_profile(profile_dir)
+    logger.info("welcome gate: active for profile %r", profile)
+    return gate
+
+
 def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
     """Construct the composable (moonshine, llama, elevenlabs) pipeline.
 
-    Composes :class:`LocalSTTInputMixin` over
-    :class:`LlamaElevenLabsTTSResponseHandler` via the factory-private
-    :class:`_LocalSTTLlamaElevenLabsHost` shell, wraps it with the three
-    Phase 3 adapters, composes them into a :class:`ComposablePipeline`
-    seeded with the current session instructions, and returns a
-    :class:`ComposableConversationHandler` whose ``build`` closure re-runs
-    the same construction. FastRTC's ``copy()`` per-peer cloning invokes
-    the closure for fresh state on each new peer.
+    Phase 5e.2: this triple is the first to migrate off
+    :class:`LocalSTTInputMixin`. The handler is now a plain
+    :class:`LlamaElevenLabsTTSResponseHandler` (no mixin shell); STT is
+    a standalone :class:`MoonshineSTTAdapter` with a
+    ``should_drop_frame`` echo-guard closure; the orchestrator-level
+    concerns (turn-span, output_queue publishing, set_listening,
+    pause-controller, welcome gate, name-validation transcript
+    recording) live on :class:`ComposablePipeline` behind the ``deps``
+    and ``welcome_gate`` kwargs.
+
+    Subsequent 5e.* triples follow the same pattern; the pipeline-level
+    host-concern wiring is shared and needs no further changes.
     """
+    import time as _time
+
     from robot_comic.prompts import get_session_instructions
     from robot_comic.adapters import (
         LlamaLLMAdapter,
@@ -533,8 +561,18 @@ def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
     from robot_comic.composable_conversation_handler import ComposableConversationHandler
 
     def _build() -> ComposableConversationHandler:
-        host = _LocalSTTLlamaElevenLabsHost(**handler_kwargs)
-        stt = MoonshineSTTAdapter(host)
+        # Plain handler — no LocalSTTInputMixin shell. The handler
+        # exposes ``_speaking_until`` (set by ``_enqueue_audio_frame``,
+        # see ``llama_base.py:233-242``) which the STT echo-guard reads.
+        host = LlamaElevenLabsTTSResponseHandler(**handler_kwargs)
+
+        def _should_drop_frame() -> bool:
+            # Drop input frames while TTS is still playing — same check
+            # the legacy ``LocalSTTInputMixin.receive`` ran inline
+            # (``local_stt_realtime.py:796-798``).
+            return _time.perf_counter() < getattr(host, "_speaking_until", 0.0)
+
+        stt = MoonshineSTTAdapter(should_drop_frame=_should_drop_frame)
         llm = LlamaLLMAdapter(host)
         # LlamaElevenLabsTTSResponseHandler structurally matches the
         # ElevenLabsTTSAdapter Protocol surface (broadened in 4c.3) even
@@ -547,6 +585,8 @@ def _build_composable_llama_elevenlabs(**handler_kwargs: Any) -> Any:
             tts,
             tool_dispatcher=_make_tool_dispatcher(host),
             system_prompt=get_session_instructions(),
+            deps=handler_kwargs["deps"],
+            welcome_gate=_maybe_build_welcome_gate(),
         )
         return ComposableConversationHandler(
             pipeline=pipeline,

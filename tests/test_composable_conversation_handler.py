@@ -298,7 +298,12 @@ async def test_integration_transcript_to_audio_frame() -> None:
     callback_holder: dict[str, TranscriptCallback] = {}
 
     class StubSTT:
-        async def start(self, on_completed: TranscriptCallback) -> None:
+        async def start(
+            self,
+            on_completed: TranscriptCallback,
+            on_partial: TranscriptCallback | None = None,  # noqa: ARG002
+            on_speech_started: Any = None,  # noqa: ARG002
+        ) -> None:
             callback_holder["fn"] = on_completed
 
         async def feed_audio(self, frame: Any) -> None:  # noqa: ARG002
@@ -376,7 +381,10 @@ async def test_integration_transcript_to_audio_frame() -> None:
 def test_clear_queue_assignment_propagates_to_tts_handler() -> None:
     """LocalStream sets handler._clear_queue on the wrapper; the LocalSTTInputMixin
     listener reads it off the legacy handler. Forward the assignment so barge-in
-    on the composable path still reaches console.clear_audio_queue."""
+    on the composable path still reaches console.clear_audio_queue.
+
+    Survives until 5e.6 retires the last triple off the mixin host.
+    """
     wrapper = _make_wrapper()
 
     def cb() -> None:
@@ -393,6 +401,32 @@ def test_clear_queue_assignment_handles_none() -> None:
     wrapper._clear_queue = None
     assert wrapper._clear_queue is None
     assert wrapper._tts_handler._clear_queue is None
+
+
+def test_clear_queue_assignment_also_mirrors_onto_pipeline() -> None:
+    """Phase 5e.2: migrated triples read ``_clear_queue`` off the pipeline.
+
+    The legacy host-mirror is retained for un-migrated triples (5e.3-5e.6
+    each retire one); the pipeline-mirror is needed so the new
+    :meth:`ComposablePipeline._on_speech_started` can fire the barge-in
+    flush on the migrated triple. Both mirrors coexist during the 5e.*
+    transition.
+    """
+    wrapper = _make_wrapper()
+
+    def cb() -> None:
+        return None
+
+    wrapper._clear_queue = cb
+    assert wrapper.pipeline._clear_queue is cb
+
+
+def test_clear_queue_assignment_mirrors_none_onto_pipeline() -> None:
+    """Clearing the callback (None) propagates the None to the pipeline too."""
+    wrapper = _make_wrapper()
+    wrapper._clear_queue = lambda: None
+    wrapper._clear_queue = None
+    assert wrapper.pipeline._clear_queue is None
 
 
 def test_output_queue_getter_returns_pipeline_queue() -> None:

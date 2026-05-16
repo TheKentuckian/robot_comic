@@ -88,18 +88,28 @@ class ComposableConversationHandler(ConversationHandler):
 
     @_clear_queue.setter
     def _clear_queue(self, callback: Callable[[], None] | None) -> None:
-        """Mirror the queue-flush callback onto the underlying TTS handler.
+        """Mirror the queue-flush callback onto the pipeline AND the host.
 
-        The ``LocalSTTInputMixin`` listener calls ``self._clear_queue`` on the
-        factory-private host instance it is mixed into (e.g.
-        ``_LocalSTTLlamaElevenLabsHost``); that instance is our
-        ``_tts_handler``, not the wrapper. So when
-        ``LocalStream.__init__`` does ``self.handler._clear_queue =
-        self.clear_audio_queue`` on the wrapper, we forward the assignment to
-        the legacy handler — otherwise barge-in stops flushing the player on
-        the composable path.
+        Two readers during the Phase 5e.* transition:
+
+        1. **Pipeline (Phase 5e.2+, migrated triples).**
+           :meth:`ComposablePipeline._on_speech_started` fires the
+           barge-in flush at the start of a new user turn. Migrated
+           triples (currently only ``moonshine + llama + elevenlabs``)
+           rely on this mirror.
+        2. **Legacy ``_tts_handler`` host (un-migrated triples).**
+           :class:`LocalSTTInputMixin` calls ``self._clear_queue`` on the
+           factory-private host instance it is mixed into (e.g.
+           ``_LocalSTTLlamaChatterboxHost``). This mirror retires when
+           the last triple migrates off the mixin (Phase 5e.6).
+
+        Double-mirror is intentional: 5e.2 migrates one triple, the other
+        four still rely on the host path. Cost is one no-op ``setattr``
+        per assignment.
         """
         self.__clear_queue = callback
+        if getattr(self, "pipeline", None) is not None:
+            self.pipeline._clear_queue = callback
         if getattr(self, "_tts_handler", None) is not None:
             self._tts_handler._clear_queue = callback
 

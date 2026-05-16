@@ -53,10 +53,17 @@ class is only for composable-mode pipelines.
 """
 
 from __future__ import annotations
+import time
+import uuid
 import asyncio
 import logging
-from typing import Any, Callable, Awaitable
+from typing import TYPE_CHECKING, Any, Callable, Awaitable
 
+from opentelemetry import trace
+from opentelemetry import context as otel_context
+
+from robot_comic import telemetry
+from robot_comic.pause import TranscriptDisposition
 from robot_comic.config import set_custom_profile
 from robot_comic.prompts import get_session_instructions
 from robot_comic.backends import (
@@ -69,6 +76,12 @@ from robot_comic.backends import (
 )
 from robot_comic.history_trim import trim_history_in_place
 from robot_comic.joke_history import record_joke_history
+from robot_comic.welcome_gate import GateState, WelcomeGate
+from robot_comic.tools.name_validation import record_user_transcript
+
+
+if TYPE_CHECKING:
+    from robot_comic.tools.core_tools import ToolDependencies
 
 
 logger = logging.getLogger(__name__)
@@ -103,20 +116,60 @@ class ComposablePipeline:
         llm: LLMBackend,
         tts: TTSBackend,
         *,
-        output_queue: asyncio.Queue[AudioFrame] | None = None,
+        output_queue: "asyncio.Queue[Any] | None" = None,
         tool_dispatcher: ToolDispatcher | None = None,
         tools_spec: list[dict[str, Any]] | None = None,
         max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
         system_prompt: str | None = None,
+        deps: "ToolDependencies | None" = None,
+        welcome_gate: WelcomeGate | None = None,
     ) -> None:
-        """Build the pipeline. See class docstring for arg semantics."""
+        """Build the pipeline. See class docstring for arg semantics.
+
+        Phase 5e.2 kwargs:
+
+        - ``deps`` — when provided, the pipeline drives
+          movement-manager listening state, head-wobbler reset,
+          pause-controller integration, and
+          name-validation transcript recording on each turn. Pre-5e.2
+          callers that route those concerns through
+          :class:`LocalSTTInputMixin` on the host pass ``None`` and the
+          pipeline-side callbacks become safe no-ops.
+        - ``welcome_gate`` — when provided, completed transcripts are
+          checked against the gate before dispatch; in ``WAITING``
+          state non-matching transcripts are dropped.
+        """
         self.stt = stt
         self.llm = llm
         self.tts = tts
-        self.output_queue: asyncio.Queue[AudioFrame] = output_queue or asyncio.Queue()
+        # The queue is heterogeneous post-5e.2: TTS pushes ``AudioFrame``;
+        # the orchestrator's transcript callbacks push
+        # ``fastrtc.AdditionalOutputs`` envelopes for the admin UI.
+        # Drainers (``ComposableConversationHandler.emit`` via
+        # ``wait_for_item``) tolerate both.
+        self.output_queue: "asyncio.Queue[Any]" = output_queue or asyncio.Queue()
         self.tool_dispatcher = tool_dispatcher
         self.tools_spec = tools_spec or []
         self.max_tool_rounds = max_tool_rounds
+        self.deps = deps
+        self.welcome_gate = welcome_gate
+
+        # Barge-in flush callback (Phase 5e.2). The wrapper's
+        # ``_clear_queue`` setter mirrors onto this attribute so the
+        # ``_on_speech_started`` hook can flush the player when a new
+        # user turn begins. ``None`` until ``LocalStream`` installs it.
+        self._clear_queue: Callable[[], None] | None = None
+
+        # Per-turn STT spans + duplicate-suppression state (Phase 5e.2,
+        # mirrors ``LocalSTTInputMixin._handle_local_stt_event``).
+        self._turn_span: Any = None
+        self._turn_ctx_token: Any = None
+        self._stt_infer_span: Any = None
+        self._stt_infer_start: float = 0.0
+        self._turn_id: str | None = None
+        self._turn_start_at: float | None = None
+        self._last_completed_transcript: str = ""
+        self._last_completed_at: float = 0.0
 
         self._conversation_history: list[dict[str, Any]] = []
         if system_prompt:
@@ -142,7 +195,11 @@ class ComposablePipeline:
             return
         await self.llm.prepare()
         await self.tts.prepare()
-        await self.stt.start(on_completed=self._on_transcript_completed)
+        await self.stt.start(
+            on_completed=self._on_transcript_completed,
+            on_partial=self._on_partial_transcript,
+            on_speech_started=self._on_speech_started,
+        )
         self._started = True
         logger.info(
             "ComposablePipeline ready (stt=%s llm=%s tts=%s)",
@@ -244,10 +301,172 @@ class ComposablePipeline:
     # Internal — transcript-triggered turn loop
     # ---------------------------------------------------------------------
 
-    async def _on_transcript_completed(self, transcript: str) -> None:
-        """Handle one completed user line: append to history, run LLM, speak."""
+    async def _on_speech_started(self) -> None:
+        """STT speech-started callback (Phase 5e.2).
+
+        Opens the root ``turn`` span + child ``stt.infer`` span, fires
+        the barge-in flush callback if registered, resets the head
+        wobbler, and signals the movement manager to enter "listening"
+        state. All deps-dependent steps are guarded — pipelines
+        constructed without ``deps`` (pre-5e.2 host-coupled triples)
+        get the span open but skip the movement/wobbler hooks.
+
+        Mirrors :class:`LocalSTTInputMixin._handle_local_stt_event`
+        (``local_stt_realtime.py:518-562``) — the started-event arm.
+        """
+        # Close any leftover turn span from a previous (interrupted) turn.
+        if self._turn_span is not None:
+            try:
+                self._turn_span.set_attribute("turn.outcome", "interrupted")
+                self._turn_span.end()
+            except Exception:  # pragma: no cover — best-effort span cleanup
+                logger.debug("Failed to close prior turn span", exc_info=True)
+            self._turn_span = None
+        if self._stt_infer_span is not None:
+            try:
+                self._stt_infer_span.end()
+            except Exception:  # pragma: no cover
+                logger.debug("Failed to close prior stt.infer span", exc_info=True)
+            self._stt_infer_span = None
+
+        now = time.perf_counter()
+        tracer = telemetry.get_tracer()
+        self._turn_id = str(uuid.uuid4())
+        self._turn_start_at = now
+        self._turn_span = tracer.start_span(
+            "turn",
+            attributes={
+                "turn.id": self._turn_id,
+                "robot.mode": "local_stt",
+                "robot.persona": telemetry.current_persona(),
+            },
+        )
+        self._turn_ctx_token = otel_context.attach(trace.set_span_in_context(self._turn_span))
+        self._stt_infer_span = tracer.start_span("stt.infer")
+        self._stt_infer_start = now
+
+        # Barge-in flush: dump any queued TTS frames from the prior turn so
+        # the user's new utterance isn't preceded by stale audio.
+        if self._clear_queue is not None:
+            try:
+                self._clear_queue()
+            except Exception:  # pragma: no cover — flush is best-effort
+                logger.debug("clear_queue raised in _on_speech_started", exc_info=True)
+
+        if self.deps is not None:
+            head_wobbler = getattr(self.deps, "head_wobbler", None)
+            if head_wobbler is not None:
+                try:
+                    head_wobbler.reset()
+                except Exception:  # pragma: no cover
+                    logger.debug("head_wobbler.reset raised", exc_info=True)
+            movement_manager = getattr(self.deps, "movement_manager", None)
+            if movement_manager is not None:
+                try:
+                    movement_manager.set_listening(True)
+                except Exception:  # pragma: no cover
+                    logger.debug("movement_manager.set_listening(True) raised", exc_info=True)
+
+    async def _on_partial_transcript(self, transcript: str) -> None:
+        """STT partial-transcript callback (Phase 5e.2).
+
+        Publishes the in-progress transcript to the output queue as a
+        ``user_partial`` row so the admin UI live-transcript widget can
+        render incremental updates. Mirrors
+        :class:`LocalSTTInputMixin._handle_local_stt_event`
+        (``local_stt_realtime.py:564-568``).
+        """
         if not transcript:
             return
+        from fastrtc import AdditionalOutputs  # deferred — fastrtc pulls gradio at boot
+
+        await self.output_queue.put(AdditionalOutputs({"role": "user_partial", "content": transcript}))
+
+    async def _on_transcript_completed(self, transcript: str) -> None:
+        """Handle one completed user line: append to history, run LLM, speak.
+
+        Phase 5e.2 extension: when ``deps`` is provided the pipeline
+        also drives the per-turn closing rituals previously owned by
+        :class:`LocalSTTInputMixin` — duplicate suppression, ``user``
+        publication, ``set_listening(False)``,
+        :func:`record_user_transcript` for tool-side name validation,
+        pause-controller routing, welcome-gate gating, and ``stt.infer``
+        span closure. Pre-5e.2 pipelines (``deps=None``) skip all of
+        that and behave as before.
+        """
+        transcript = (transcript or "").strip()
+        if not transcript:
+            return
+
+        # Duplicate-suppression window. Mirrors mixin lines 574-578.
+        now = time.perf_counter()
+        if transcript == self._last_completed_transcript and now - self._last_completed_at < 0.75:
+            logger.debug("Ignoring duplicate transcript: %s", transcript)
+            return
+        self._last_completed_transcript = transcript
+        self._last_completed_at = now
+
+        if self.deps is not None:
+            movement_manager = getattr(self.deps, "movement_manager", None)
+            if movement_manager is not None:
+                try:
+                    movement_manager.set_listening(False)
+                except Exception:  # pragma: no cover
+                    logger.debug("movement_manager.set_listening(False) raised", exc_info=True)
+
+            # Close stt.infer span with turn excerpt before LLM round-trip
+            # so monitor consumers see the excerpt while the outer turn
+            # span is still open.
+            words = transcript.split()
+            excerpt = " ".join(words[:5]) + ("…" if len(words) > 5 else "")
+            stt_span = self._stt_infer_span
+            if stt_span is not None:
+                try:
+                    stt_span.set_attribute("turn.excerpt", excerpt)
+                    stt_span.end()
+                    stt_s = now - self._stt_infer_start
+                    telemetry.record_stt(
+                        stt_s,
+                        {"gen_ai.system": "local_stt", "stt.type": "moonshine"},
+                    )
+                except Exception:  # pragma: no cover
+                    logger.debug("Failed to close stt.infer span", exc_info=True)
+                self._stt_infer_span = None
+            if self._turn_span is not None:
+                try:
+                    self._turn_span.set_attribute("turn.excerpt", excerpt)
+                except Exception:  # pragma: no cover
+                    logger.debug("Failed to tag turn span", exc_info=True)
+
+            # Tool-side name-validation guard (#287).
+            recent = getattr(self.deps, "recent_user_transcripts", None)
+            if recent is not None:
+                record_user_transcript(recent, transcript)
+
+            # Publish completed transcript to the admin UI.
+            from fastrtc import AdditionalOutputs  # deferred — fastrtc pulls gradio
+
+            await self.output_queue.put(AdditionalOutputs({"role": "user", "content": transcript}))
+
+            # Pause-controller routing. HANDLED short-circuits dispatch.
+            pause_controller = getattr(self.deps, "pause_controller", None)
+            if pause_controller is not None:
+                try:
+                    disposition = pause_controller.handle_transcript(transcript)
+                except Exception as exc:
+                    logger.error("pause_controller.handle_transcript raised: %s", exc)
+                    disposition = TranscriptDisposition.DISPATCH
+                if disposition is TranscriptDisposition.HANDLED:
+                    return
+
+        # Welcome-gate: drop WAITING transcripts that don't match the wake name.
+        gate = self.welcome_gate
+        if gate is not None and gate.state is GateState.WAITING:
+            if not gate.consider(transcript):
+                logger.debug("welcome gate: WAITING — transcript not dispatched: %r", transcript[:60])
+                return
+            # Gate just opened — dispatch this transcript normally.
+
         self._conversation_history.append({"role": "user", "content": transcript})
         try:
             await self._run_llm_loop_and_speak()
