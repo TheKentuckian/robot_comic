@@ -14,7 +14,9 @@ follow-up PR between 4b and 4d:
       ``ComposablePipeline._speak_assistant_text``
     - history_trim.trim_history_in_place — wired (Hook #5) at
       ``ComposablePipeline._run_llm_loop_and_speak``
-    - _speaking_until echo-guard timestamps (elevenlabs_tts.py:471-473)
+    - _speaking_until echo-guard timestamps (elevenlabs_tts.py:471-473) —
+      per-turn write site wired (Hook #1, PR #372); per-persona reset
+      wired (Phase 5a.1) at ``apply_personality``
 """
 
 from __future__ import annotations
@@ -168,23 +170,69 @@ class ComposableConversationHandler(ConversationHandler):
         return await wait_for_item(self.pipeline.output_queue)
 
     async def apply_personality(self, profile: str | None) -> str:
-        """Switch personality, reset pipeline history, re-seed system prompt."""
-        # TODO(phase4-lifecycle): legacy handlers also clear per-session
-        # echo-guard state on persona switch. Compose that in when the
-        # echo-guard hook lands. Joke history is a cross-persona file
-        # (``~/.robot-comic/joke-history.json``) read in
-        # ``prompts.py:_append_joke_history`` — it intentionally persists
-        # across personality switches so each persona avoids the others'
-        # punchlines (legacy parity, see joke_history.format_for_prompt
-        # comment "Pulls entries from ALL personas (cross-persona dedup)").
+        """Switch personality, reset pipeline history, clear per-session state, re-seed system prompt.
+
+        Persona switch is a hard cut on listening state: the wrapped TTS
+        handler's echo-guard accumulators are cleared via
+        :meth:`_reset_tts_per_session_state` so a stale ``_speaking_until``
+        from an in-flight or just-finished playback does not bleed into the
+        new persona's listening window. See spec
+        ``docs/superpowers/specs/2026-05-16-phase-5a1-echo-guard-persona-reset.md``
+        for the audit + rationale; Phase 4 lifecycle hook #1 (PR #372) wired
+        the per-turn write site, this is the per-persona reset complement.
+
+        Joke history is a cross-persona file
+        (``~/.robot-comic/joke-history.json``) read in
+        ``prompts.py:_append_joke_history`` — it intentionally persists
+        across personality switches so each persona avoids the others'
+        punchlines (legacy parity, see ``joke_history.format_for_prompt``
+        comment "Pulls entries from ALL personas (cross-persona dedup)").
+        """
         try:
             set_custom_profile(profile)
         except Exception as exc:
             logger.error("Error applying personality %r: %s", profile, exc)
             return f"Failed to apply personality: {exc}"
         self.pipeline.reset_history(keep_system=False)
+        self._reset_tts_per_session_state()
         self.pipeline._conversation_history.append({"role": "system", "content": get_session_instructions()})
         return f"Applied personality {profile!r}. Conversation history reset."
+
+    def _reset_tts_per_session_state(self) -> None:
+        """Clear per-session echo-guard accumulators on the wrapped TTS handler.
+
+        Defensively guarded via :func:`hasattr` so handlers without echo-guard
+        state (e.g. :class:`~robot_comic.gemini_tts.GeminiTTSResponseHandler`,
+        which has no ``_speaking_until`` field) are a clean no-op.
+
+        Three fields are reset, mirroring the per-turn reset site in
+        ``ElevenLabsTTSResponseHandler._dispatch_completed_transcript_impl``
+        (``elevenlabs_tts.py:558-560``) and the canned-opener reset at
+        ``llama_base.py:182-184``:
+
+        - ``_speaking_until`` — playback-deadline timestamp consulted by
+          ``LocalSTTInputMixin._handle_local_stt_event`` (see
+          ``local_stt_realtime.py:619``).
+        - ``_response_start_ts`` / ``_response_audio_bytes`` — the byte-count
+          accumulators that feed the next ``_speaking_until`` derivation in
+          ``_enqueue_audio_frame`` (lifecycle hook #1, PR #372).
+
+        ``_is_responding`` / ``_dispatch_in_flight`` on
+        ``ElevenLabsTTSResponseHandler`` are intentionally NOT touched —
+        they only guard the legacy ``_dispatch_completed_transcript`` path
+        that the composable pipeline bypasses. Clearing them would mask
+        bugs if the legacy dispatch ever re-engaged.
+        """
+        handler = getattr(self, "_tts_handler", None)
+        if handler is None:
+            return
+        for field, value in (
+            ("_speaking_until", 0.0),
+            ("_response_start_ts", 0.0),
+            ("_response_audio_bytes", 0),
+        ):
+            if hasattr(handler, field):
+                setattr(handler, field, value)
 
     async def get_available_voices(self) -> list[str]:
         """Forward to the underlying TTS handler's voice catalog."""
