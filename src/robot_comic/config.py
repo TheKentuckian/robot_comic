@@ -393,14 +393,12 @@ _SUPPORTED_AUDIO_COMBINATIONS: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
-LOCAL_STT_OUTPUT_LABELS = {
-    OPENAI_BACKEND: "Local STT + OpenAI voice",
-    HF_BACKEND: "Local STT + Hugging Face voice",
-    GEMINI_TTS_OUTPUT: "Local STT + Gemini TTS",
-    CHATTERBOX_OUTPUT: "Local STT + Chatterbox TTS",
-    LLAMA_GEMINI_TTS_OUTPUT: "Local STT + llama.cpp + Gemini TTS",
-    ELEVENLABS_OUTPUT: "Local STT + ElevenLabs TTS",
-    LLAMA_ELEVENLABS_TTS_OUTPUT: "Local STT + llama.cpp + ElevenLabs TTS",
+_LOCAL_STT_OUTPUT_BASE_LABELS: dict[str, str] = {
+    "openai_realtime_output": "Local STT + OpenAI voice",
+    "hf_output": "Local STT + Hugging Face voice",
+    "gemini_tts": "Local STT + Gemini TTS",
+    "chatterbox": "Local STT + Chatterbox TTS",
+    "elevenlabs": "Local STT + ElevenLabs TTS",
 }
 DEFAULT_VOICE_BY_BACKEND = {
     OPENAI_BACKEND: OPENAI_DEFAULT_VOICE,
@@ -1285,11 +1283,51 @@ def refresh_runtime_config_from_env() -> None:
     )
 
 
+def provider_id_from_pipeline(pipeline_mode: str, audio_output_backend: str) -> str:
+    """Return the realtime-handler ``PROVIDER_ID`` implied by a pipeline.
+
+    Bundled pipeline modes map directly to their realtime provider; the
+    composable pipeline derives the provider from the audio output backend
+    so the voice catalog / required-credential helpers keep working.
+
+    Returns one of ``OPENAI_BACKEND``, ``GEMINI_BACKEND``, ``HF_BACKEND``,
+    ``LOCAL_STT_BACKEND``.
+    """
+    if pipeline_mode == PIPELINE_MODE_OPENAI_REALTIME:
+        return OPENAI_BACKEND
+    if pipeline_mode == PIPELINE_MODE_GEMINI_LIVE:
+        return GEMINI_BACKEND
+    if pipeline_mode == PIPELINE_MODE_HF_REALTIME:
+        return HF_BACKEND
+    # PIPELINE_MODE_COMPOSABLE — derive provider from the TTS output.  This
+    # mirrors the LocalSTT*RealtimeHandler ClassVar overrides: the hybrid
+    # classes report the *response* backend (openai / huggingface) rather
+    # than ``local_stt`` so the voice catalog matches the spoken voice.
+    if audio_output_backend == AUDIO_OUTPUT_OPENAI_REALTIME:
+        return OPENAI_BACKEND
+    if audio_output_backend == AUDIO_OUTPUT_HF:
+        return HF_BACKEND
+    return LOCAL_STT_BACKEND
+
+
+def get_provider_id() -> str:
+    """Return the active realtime-handler ``PROVIDER_ID``.
+
+    Derived from ``config.PIPELINE_MODE`` and ``config.AUDIO_OUTPUT_BACKEND``.
+    Replaces ``get_backend_choice()`` from before Phase 4f.
+    """
+    return provider_id_from_pipeline(config.PIPELINE_MODE, config.AUDIO_OUTPUT_BACKEND)
+
+
 def get_backend_choice(model_name: str | None = None) -> str:
-    """Return the configured backend family."""
+    """Return the configured backend family.
+
+    Kept as a transitional alias during the Phase 4f cut-over.  Use
+    :func:`get_provider_id` in new code.
+    """
     if model_name is not None:
         return _normalize_backend_provider(model_name=model_name)
-    return _normalize_backend_provider(config.BACKEND_PROVIDER, config.MODEL_NAME)
+    return get_provider_id()
 
 
 def get_model_name_for_backend(backend: str) -> str:
@@ -1298,28 +1336,63 @@ def get_model_name_for_backend(backend: str) -> str:
 
 
 def get_backend_label(backend: str | None = None) -> str:
-    """Return a human-readable label for a backend selector value."""
-    normalized_backend = get_backend_choice() if backend is None else _normalize_backend_provider(backend)
-    if normalized_backend == LOCAL_STT_BACKEND:
-        response_backend = getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
-        return LOCAL_STT_OUTPUT_LABELS.get(response_backend, LOCAL_STT_OUTPUT_LABELS[OPENAI_BACKEND])
-    return BACKEND_LABEL_BY_PROVIDER[normalized_backend]
+    """Return a human-readable label for the active (or specified) pipeline.
+
+    When ``backend`` is supplied, it is treated as a coarse ``PROVIDER_ID``
+    (the legacy ``BACKEND_PROVIDER`` value set) so older call sites keep
+    working.  When omitted, the label is derived from the active
+    ``PIPELINE_MODE`` / ``AUDIO_OUTPUT_BACKEND`` / ``LLM_BACKEND`` so the
+    text reflects the composable pipeline that's actually running.
+    """
+    if backend is not None:
+        normalized = _normalize_backend_provider(backend)
+        if normalized != LOCAL_STT_BACKEND:
+            return BACKEND_LABEL_BY_PROVIDER[normalized]
+        # Fall through to the composable label-from-config path below.
+
+    provider = get_provider_id()
+    if provider != LOCAL_STT_BACKEND:
+        return BACKEND_LABEL_BY_PROVIDER[provider]
+
+    audio_output = getattr(config, "AUDIO_OUTPUT_BACKEND", AUDIO_OUTPUT_CHATTERBOX)
+    llm_backend = getattr(config, "LLM_BACKEND", LLM_BACKEND_LLAMA)
+    base_label = _LOCAL_STT_OUTPUT_BASE_LABELS.get(
+        audio_output, _LOCAL_STT_OUTPUT_BASE_LABELS["openai_realtime_output"]
+    )
+    # The legacy ``llama_*_tts`` labels surfaced the LLM choice in the
+    # human-readable string.  Preserve that for the gemini-TTS + elevenlabs
+    # outputs where the LLM choice is operator-visible.
+    if llm_backend == LLM_BACKEND_LLAMA and audio_output == AUDIO_OUTPUT_GEMINI_TTS:
+        return "Local STT + llama.cpp + Gemini TTS"
+    if llm_backend == LLM_BACKEND_LLAMA and audio_output == AUDIO_OUTPUT_ELEVENLABS:
+        return "Local STT + llama.cpp + ElevenLabs TTS"
+    return base_label
 
 
-def get_available_voices_for_backend(backend: str | None = None) -> list[str]:
-    """Return the curated voice list for a backend selector value."""
-    normalized_backend = get_backend_choice() if backend is None else _normalize_backend_provider(backend)
-    if normalized_backend == GEMINI_BACKEND:
+def get_available_voices_for_provider(provider_id: str | None = None) -> list[str]:
+    """Return the curated voice list for a realtime-handler ``PROVIDER_ID``.
+
+    Renamed from ``get_available_voices_for_backend`` in Phase 4f. The
+    ``provider_id`` argument is one of ``OPENAI_BACKEND``, ``GEMINI_BACKEND``,
+    ``HF_BACKEND``, or ``LOCAL_STT_BACKEND`` — the same set of values that
+    were historically read from ``BACKEND_PROVIDER``.
+    """
+    normalized = get_provider_id() if provider_id is None else _normalize_backend_provider(provider_id)
+    if normalized == GEMINI_BACKEND:
         return list(GEMINI_AVAILABLE_VOICES)
-    if normalized_backend == HF_BACKEND:
+    if normalized == HF_BACKEND:
         return list(HF_AVAILABLE_VOICES)
     return list(AVAILABLE_VOICES)
 
 
-def get_default_voice_for_backend(backend: str | None = None) -> str:
-    """Return the default voice for a backend selector value."""
-    normalized_backend = get_backend_choice() if backend is None else _normalize_backend_provider(backend)
-    return DEFAULT_VOICE_BY_BACKEND[normalized_backend]
+def get_default_voice_for_provider(provider_id: str | None = None) -> str:
+    """Return the default voice for a realtime-handler ``PROVIDER_ID``.
+
+    Renamed from ``get_default_voice_for_backend`` in Phase 4f. See
+    :func:`get_available_voices_for_provider` for argument semantics.
+    """
+    normalized = get_provider_id() if provider_id is None else _normalize_backend_provider(provider_id)
+    return DEFAULT_VOICE_BY_BACKEND[normalized]
 
 
 def get_hf_session_url() -> str | None:

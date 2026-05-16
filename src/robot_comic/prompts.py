@@ -4,12 +4,10 @@ import logging
 from pathlib import Path
 
 from robot_comic.config import (
-    GEMINI_TTS_OUTPUT,
-    LOCAL_STT_BACKEND,
-    LLAMA_GEMINI_TTS_OUTPUT,
+    AUDIO_OUTPUT_GEMINI_TTS,
     DEFAULT_PROFILES_DIRECTORY,
     config,
-    get_default_voice_for_backend,
+    get_default_voice_for_provider,
 )
 
 
@@ -28,22 +26,15 @@ _TTS_SECTION_RE = re.compile(
 )
 
 
-def _uses_gemini_tts(backend: str, local_stt_response: str) -> bool:
-    """Return True when the active audio pipeline renders Gemini TTS delivery tags.
+def _uses_gemini_tts(audio_output_backend: str) -> bool:
+    """Return True when the active audio output backend renders Gemini TTS delivery tags.
 
-    Delivery tags are consumed by:
-    - ``gemini_tts`` output (GEMINI_TTS_OUTPUT)
-    - ``llama_gemini_tts`` output (LLAMA_GEMINI_TTS_OUTPUT)
-
-    They are NOT consumed by Gemini Live (``gemini`` BACKEND_PROVIDER), which
-    has its own speech synthesis and already strips the section internally, nor
-    by any other backend (Chatterbox, HuggingFace, OpenAI, ElevenLabs …).
-
-    For the LOCAL_STT backend the effective audio output is ``local_stt_response``.
+    Delivery tags are consumed only by the Gemini TTS audio output backend
+    (``AUDIO_OUTPUT_GEMINI_TTS``).  Every other audio output (Chatterbox,
+    ElevenLabs, OpenAI Realtime, Gemini Live, Hugging Face …) ignores the
+    section and would only waste tokens.
     """
-    if backend == LOCAL_STT_BACKEND:
-        return local_stt_response in (GEMINI_TTS_OUTPUT, LLAMA_GEMINI_TTS_OUTPUT)
-    return backend in (GEMINI_TTS_OUTPUT, LLAMA_GEMINI_TTS_OUTPUT)
+    return audio_output_backend == AUDIO_OUTPUT_GEMINI_TTS
 
 
 def _strip_tts_section(instructions: str) -> str:
@@ -71,10 +62,9 @@ def _filter_delivery_tags(instructions: str) -> str:
     if force:
         return instructions
 
-    backend: str = getattr(config, "BACKEND_PROVIDER", "")
-    local_stt_response: str = getattr(config, "LOCAL_STT_RESPONSE_BACKEND", "")
+    audio_output_backend: str = getattr(config, "AUDIO_OUTPUT_BACKEND", "")
 
-    if _uses_gemini_tts(backend, local_stt_response):
+    if _uses_gemini_tts(audio_output_backend):
         # Tags are consumed — leave the section in place.
         return instructions
 
@@ -191,7 +181,7 @@ def get_session_voice(default: str | None = None) -> str:
     trimmed content; otherwise return the provided default or the active
     backend default voice.
     """
-    fallback = get_default_voice_for_backend() if default is None else default
+    fallback = get_default_voice_for_provider() if default is None else default
     profile = config.REACHY_MINI_CUSTOM_PROFILE
     if not profile:
         return fallback
