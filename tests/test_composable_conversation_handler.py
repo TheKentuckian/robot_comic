@@ -366,7 +366,7 @@ async def test_integration_transcript_to_audio_frame() -> None:
     assert "fn" in callback_holder, "pipeline did not register STT callback"
 
     # Drive a "completed transcript" through the registered callback.
-    await callback_holder["fn"]("hello")
+    await callback_holder["fn"]("hello there")
 
     # The TTS frame should now be on the wrapper's output queue.
     # Hotfix #2 (2026-05-16): the orchestrator unwraps the adapter's

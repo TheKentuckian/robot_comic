@@ -311,12 +311,12 @@ async def test_system_prompt_seeded_into_history() -> None:
     task = asyncio.create_task(pipeline.start_up())
     await _wait_for_callback(stt)
 
-    await stt.on_completed("hello")
+    await stt.on_completed("hello there")
     await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
 
     assert pipeline.conversation_history[0] == {"role": "system", "content": "You are Bill Hicks."}
     assert llm.calls[0][0] == {"role": "system", "content": "You are Bill Hicks."}
-    assert llm.calls[0][1] == {"role": "user", "content": "hello"}
+    assert llm.calls[0][1] == {"role": "user", "content": "hello there"}
 
     await pipeline.shutdown()
     await task
@@ -402,6 +402,164 @@ async def test_empty_assistant_text_does_not_speak() -> None:
 
     assert tts.calls == []
     assert pipeline.output_queue.empty()
+
+    await pipeline.shutdown()
+    await task
+
+
+# ---------------------------------------------------------------------------
+# Phase 5f.2 — minimum-utterance filter (self-echo cascade defence)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_single_word_transcript_dropped_as_likely_echo() -> None:
+    """Single-word transcripts (``"You"``) must not reach the LLM.
+
+    Hardware finding 2026-05-16: faster-whisper transcribes speaker
+    echo as short stock fragments (`"You"`, `"Thank you"`). Dropping
+    them at the orchestrator boundary breaks the cascade.
+    """
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([])  # would raise if called
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    await stt.on_completed("You")
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert llm.calls == []
+    assert pipeline.conversation_history == []
+    assert pipeline.output_queue.empty()
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_short_char_transcript_dropped_as_likely_echo() -> None:
+    """Two-character transcripts (``"hi"``) fail both filter arms and are dropped."""
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([])
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    await stt.on_completed("hi")
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert llm.calls == []
+    assert pipeline.conversation_history == []
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_two_word_transcript_below_char_floor_dropped() -> None:
+    """Two-word but ≤7-char transcripts (``"go on"``) drop via the char floor.
+
+    Documents the deliberate trade-off: legitimate ultra-short prompts
+    fail the filter. Operator-facing rationale lives in the 5f.2 spec.
+    """
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([])
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    await stt.on_completed("go on")  # 2 words, 5 chars — fails char floor
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert llm.calls == []
+    assert pipeline.conversation_history == []
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_normal_transcript_passes_filter() -> None:
+    """Regression guard: ordinary user input clears both filter arms."""
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([LLMResponse(text="Hello!")])
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    await stt.on_completed("hi robot can you dance")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    assert llm.calls != []
+    assert pipeline.conversation_history[0] == {
+        "role": "user",
+        "content": "hi robot can you dance",
+    }
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_short_transcript_drop_logged_at_debug(caplog) -> None:
+    """The short-drop path emits a DEBUG log for operator visibility."""
+    import logging
+
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([])
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    with caplog.at_level(logging.DEBUG, logger="robot_comic.composable_pipeline"):
+        await stt.on_completed("You")
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+    assert any("short transcript" in rec.getMessage() for rec in caplog.records)
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_short_drop_runs_before_duplicate_suppression() -> None:
+    """The short-drop must precede duplicate-suppression cache writes.
+
+    Proves ordering: the duplicate-suppression cache never sees a
+    dropped value, so the same short fragment can be sent repeatedly
+    and each is still rejected via the short-drop path (not the
+    duplicate path) — i.e. the LLM still never runs.
+    """
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([])
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    await stt.on_completed("You")
+    await stt.on_completed("You")
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert llm.calls == []
+    assert pipeline._last_completed_transcript == ""
 
     await pipeline.shutdown()
     await task
@@ -561,7 +719,7 @@ async def test_record_joke_history_exception_does_not_crash_turn(
     task = asyncio.create_task(pipeline.start_up())
     await _wait_for_callback(stt)
 
-    await stt.on_completed("hi")
+    await stt.on_completed("hi there")
     # Yield several loop iterations so the turn either completes or fails.
     for _ in range(20):
         await asyncio.sleep(0)
@@ -692,7 +850,7 @@ async def test_trim_history_uses_orchestrator_history_list(
     task = asyncio.create_task(pipeline.start_up())
     await _wait_for_callback(stt)
 
-    await stt.on_completed("test")
+    await stt.on_completed("test prompt")
     await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
 
     assert len(seen) == 1
@@ -818,7 +976,7 @@ async def test_speak_assistant_text_threads_delivery_tags_to_tts() -> None:
     task = asyncio.create_task(pipeline.start_up())
     await _wait_for_callback(stt)
 
-    await stt.on_completed("ping")
+    await stt.on_completed("ping pong")
     await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
 
     assert tts.calls == [("Hi!", ("fast",))]
@@ -839,7 +997,7 @@ async def test_speak_assistant_text_passes_empty_tags_when_response_unpopulated(
 
     task = asyncio.create_task(pipeline.start_up())
     await _wait_for_callback(stt)
-    await stt.on_completed("ping")
+    await stt.on_completed("ping pong")
     await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
 
     assert tts.calls == [("Plain reply.", ())]
@@ -861,7 +1019,7 @@ async def test_speak_assistant_text_allocates_first_audio_marker() -> None:
 
     task = asyncio.create_task(pipeline.start_up())
     await _wait_for_callback(stt)
-    await stt.on_completed("ping")
+    await stt.on_completed("ping pong")
     await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
 
     assert len(tts.marker_refs) == 1
@@ -886,9 +1044,9 @@ async def test_speak_assistant_text_allocates_fresh_marker_per_turn() -> None:
 
     task = asyncio.create_task(pipeline.start_up())
     await _wait_for_callback(stt)
-    await stt.on_completed("first")
+    await stt.on_completed("first turn")
     await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
-    await stt.on_completed("second")
+    await stt.on_completed("second turn")
     await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
 
     assert len(tts.marker_refs) == 2
@@ -917,7 +1075,7 @@ async def test_speak_assistant_text_puts_tuple_shape_for_fastrtc_consumer() -> N
 
     task = asyncio.create_task(pipeline.start_up())
     await _wait_for_callback(stt)
-    await stt.on_completed("ping")
+    await stt.on_completed("ping pong")
 
     item = await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
     assert isinstance(item, tuple), (
@@ -1274,7 +1432,7 @@ async def test_completed_callback_calls_set_listening_false_when_deps_provided()
         deps=deps,
     )
 
-    await pipeline._on_transcript_completed("hi")
+    await pipeline._on_transcript_completed("hi there")
 
     deps.movement_manager.set_listening.assert_called_with(False)
 
@@ -1430,7 +1588,7 @@ async def test_completed_callback_welcome_gate_gated_dispatches_immediately() ->
         welcome_gate=gate,
     )
 
-    await pipeline._on_transcript_completed("anything")
+    await pipeline._on_transcript_completed("anything else")
 
     assert pipeline.conversation_history[-1]["role"] == "assistant"
 

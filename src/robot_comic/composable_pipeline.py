@@ -99,6 +99,23 @@ ToolDispatcher = Callable[[ToolCall], Awaitable[str]]
 DEFAULT_MAX_TOOL_ROUNDS = 8
 
 
+# Phase 5f.2 — minimum-utterance filter (self-echo cascade defence).
+#
+# Drops transcripts that look like speaker-echo / whisper-family
+# hallucinations BEFORE they reach duplicate-suppression or the LLM.
+# faster-whisper's webrtcvad-based segment dispatch is aggressive enough
+# that room-acoustic reverb tail occasionally slips past the input-side
+# echo guard; this orchestrator-side filter is the second line of defence
+# and also helps Moonshine (which can occasionally hallucinate short
+# partials too — see #19).
+#
+# Thresholds are heuristic; on-device tuning is a one-line change here.
+# Rationale + the hardware finding that motivated the constants are in
+# docs/superpowers/specs/2026-05-16-phase-5f-2-echo-cascade-fix.md.
+MIN_TRANSCRIPT_WORDS = 2
+MIN_TRANSCRIPT_CHARS = 8
+
+
 class ComposablePipeline:
     """Orchestrates one STT + LLM + TTS pipeline via injected backends.
 
@@ -396,6 +413,16 @@ class ComposablePipeline:
         """
         transcript = (transcript or "").strip()
         if not transcript:
+            return
+
+        # Phase 5f.2 — minimum-utterance filter. Drops short transcripts
+        # that almost always come from speaker-echo / whisper hallucination
+        # (e.g. ``"You"``, ``"Thank you"``) before they reach the LLM and
+        # restart the echo-cascade. Runs BEFORE duplicate-suppression so a
+        # dropped fragment never poisons the dedupe cache. See spec
+        # ``docs/superpowers/specs/2026-05-16-phase-5f-2-echo-cascade-fix.md``.
+        if len(transcript.split()) < MIN_TRANSCRIPT_WORDS or len(transcript) < MIN_TRANSCRIPT_CHARS:
+            logger.debug("dropping short transcript as likely echo: %r", transcript)
             return
 
         # Duplicate-suppression window. Mirrors mixin lines 574-578.
