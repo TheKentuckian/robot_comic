@@ -96,9 +96,7 @@ async def test_apply_personality_clears_tts_handler_echo_guard_state(
 
     result = await wrapper.apply_personality("rodney")
 
-    assert "Applied personality 'rodney'" in result, (
-        f"apply_personality should succeed; got {result!r}"
-    )
+    assert "Applied personality 'rodney'" in result, f"apply_personality should succeed; got {result!r}"
     # The fix: per-session echo-guard accumulators on the wrapped TTS
     # handler are cleared so persona switch is a hard cut on listening
     # state. Without it, the next persona's first transcripts get
