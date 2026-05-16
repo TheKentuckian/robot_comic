@@ -253,3 +253,240 @@ def test_adapter_satisfies_stt_backend_protocol() -> None:
 
     adapter = MoonshineSTTAdapter(_StubMoonshineHandler())
     assert isinstance(adapter, STTBackend)
+
+
+# ---------------------------------------------------------------------------
+# Standalone mode (Phase 5e.1)
+#
+# The adapter can be constructed without a host handler. In that mode it
+# owns a :class:`MoonshineListener` internally and surfaces only
+# ``completed`` events to the ``STTBackend`` callback. We stub the
+# listener so these tests don't need the ``moonshine_voice`` optional
+# dependency installed.
+# ---------------------------------------------------------------------------
+
+
+class _StubMoonshineListener:
+    """Mimics MoonshineListener's externally-visible surface (no model load)."""
+
+    def __init__(self) -> None:
+        self.start_called = False
+        self.stop_called = False
+        self.fed_frames: list[tuple[int, np.ndarray[Any, Any]]] = []
+        self._on_event: Any = None
+
+    async def start(self, on_event: Any) -> None:
+        self.start_called = True
+        self._on_event = on_event
+
+    async def feed_audio(self, sample_rate: int, samples: np.ndarray[Any, Any]) -> None:
+        self.fed_frames.append((sample_rate, samples))
+
+    async def stop(self) -> None:
+        self.stop_called = True
+
+    async def fire_event(self, kind: str, text: str) -> None:
+        """Test helper: pretend Moonshine fired a stream event."""
+        assert self._on_event is not None, "fire_event called before start()"
+        await self._on_event(kind, text)
+
+
+def _install_stub_listener(monkeypatch: pytest.MonkeyPatch) -> _StubMoonshineListener:
+    """Replace MoonshineListener in the adapter module with a stub.
+
+    Returns the stub instance so tests can poke it (fire events, assert
+    state). The factory always returns the SAME stub so the adapter's
+    internal handle and the test's reference point at the same object.
+    """
+    stub = _StubMoonshineListener()
+
+    def _factory(**_kwargs: Any) -> _StubMoonshineListener:
+        return stub
+
+    monkeypatch.setattr("robot_comic.adapters.moonshine_stt_adapter.MoonshineListener", _factory)
+    return stub
+
+
+def test_standalone_mode_constructor_accepts_no_handler() -> None:
+    """``MoonshineSTTAdapter()`` is valid; no host handler required."""
+    adapter = MoonshineSTTAdapter()
+    assert adapter._standalone is True
+    assert adapter._handler is None
+
+
+def test_standalone_mode_satisfies_stt_backend_protocol() -> None:
+    """Standalone-shape ``MoonshineSTTAdapter`` passes ``isinstance(STTBackend)``."""
+    from robot_comic.backends import STTBackend
+
+    adapter = MoonshineSTTAdapter()
+    assert isinstance(adapter, STTBackend)
+
+
+@pytest.mark.asyncio
+async def test_standalone_start_invokes_listener_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter()
+
+    async def _cb(_t: str) -> None: ...
+
+    await adapter.start(_cb)
+    assert stub.start_called is True
+
+
+@pytest.mark.asyncio
+async def test_standalone_completed_event_routes_to_protocol_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only ``completed`` events surface to the STTBackend callback."""
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter()
+    captured: list[str] = []
+
+    async def _cb(transcript: str) -> None:
+        captured.append(transcript)
+
+    await adapter.start(_cb)
+    await stub.fire_event("completed", "hello robot")
+
+    assert captured == ["hello robot"]
+
+
+@pytest.mark.asyncio
+async def test_standalone_drops_started_partial_and_error_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """started / partial / error are orchestration concerns; not surfaced."""
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter()
+    captured: list[str] = []
+
+    async def _cb(transcript: str) -> None:
+        captured.append(transcript)
+
+    await adapter.start(_cb)
+    await stub.fire_event("started", "hello")
+    await stub.fire_event("partial", "hello rob")
+    await stub.fire_event("error", "boom")
+
+    assert captured == []
+
+
+@pytest.mark.asyncio
+async def test_standalone_callback_exception_does_not_crash_listener(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A misbehaving callback must not propagate to the listener thread."""
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter()
+
+    async def _bad(_t: str) -> None:
+        raise ValueError("user code bug")
+
+    await adapter.start(_bad)
+    # Must not raise.
+    await stub.fire_event("completed", "boom")
+
+
+@pytest.mark.asyncio
+async def test_standalone_feed_audio_forwards_to_listener(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter()
+
+    async def _cb(_t: str) -> None: ...
+
+    await adapter.start(_cb)
+    samples = np.array([1, 2, 3], dtype=np.int16)
+    await adapter.feed_audio(AudioFrame(samples=samples, sample_rate=24000))
+
+    assert len(stub.fed_frames) == 1
+    sr, frame = stub.fed_frames[0]
+    assert sr == 24000
+    assert frame is samples
+
+
+@pytest.mark.asyncio
+async def test_standalone_feed_audio_coerces_list_samples_to_int16_ndarray(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter()
+
+    async def _cb(_t: str) -> None: ...
+
+    await adapter.start(_cb)
+    await adapter.feed_audio(AudioFrame(samples=[10, 20, 30], sample_rate=16000))
+
+    sr, frame = stub.fed_frames[0]
+    assert sr == 16000
+    assert isinstance(frame, np.ndarray)
+    assert frame.dtype == np.int16
+    assert list(frame) == [10, 20, 30]
+
+
+@pytest.mark.asyncio
+async def test_standalone_stop_calls_listener_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter()
+
+    async def _cb(_t: str) -> None: ...
+
+    await adapter.start(_cb)
+    await adapter.stop()
+
+    assert stub.stop_called is True
+    assert adapter._listener is None
+
+
+@pytest.mark.asyncio
+async def test_standalone_stop_is_safe_when_never_started() -> None:
+    """stop() before start() must not raise."""
+    adapter = MoonshineSTTAdapter()
+    await adapter.stop()  # must not raise
+    assert adapter._listener is None
+
+
+@pytest.mark.asyncio
+async def test_standalone_start_failure_clears_callback_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the listener's start raises, the adapter must be re-startable."""
+
+    class _BadListener(_StubMoonshineListener):
+        async def start(self, on_event: Any) -> None:
+            raise RuntimeError("listener start failed")
+
+    bad = _BadListener()
+    monkeypatch.setattr(
+        "robot_comic.adapters.moonshine_stt_adapter.MoonshineListener",
+        lambda **_k: bad,
+    )
+
+    adapter = MoonshineSTTAdapter()
+
+    async def _cb(_t: str) -> None: ...
+
+    with pytest.raises(RuntimeError, match="listener start failed"):
+        await adapter.start(_cb)
+
+    assert adapter._on_completed is None
+    assert adapter._listener is None
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compat: the host-coupled shape is unchanged.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_host_coupled_mode_is_default_when_handler_provided() -> None:
+    """Providing a handler explicitly opts out of standalone mode."""
+    handler = _StubMoonshineHandler()
+    adapter = MoonshineSTTAdapter(handler)
+    assert adapter._standalone is False
+    assert adapter._handler is handler
