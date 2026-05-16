@@ -57,8 +57,22 @@ _SPAN_ATTRS_TO_KEEP = frozenset(
         "gen_ai.request.model",
         "gen_ai.usage.input_tokens",
         "gen_ai.usage.output_tokens",
+        # GenAI semconv attrs set on spans but previously dropped at export.
+        # ``gen_ai.usage.api_call_count`` is set per turn in
+        # ``elevenlabs_tts.py:901`` (counts LLM retries inside a single turn).
+        # ``gen_ai.server.time_to_first_token`` is set on ``llm.request`` in
+        # ``base_realtime.py:1028`` and ``gemini_live.py:1010``; the histogram
+        # side already exports it, but operators reading raw spans want the
+        # attribute too. Instrumentation audit (PR #385) §3 / §4.
+        "gen_ai.usage.api_call_count",
+        "gen_ai.server.time_to_first_token",
         "tool.name",
         "tool.id",
+        # TTS attribution set on ``tts.synthesize`` in ``elevenlabs_tts.py:973-975``
+        # but previously dropped at export. Instrumentation audit §4 "orphan
+        # emissions".
+        "tts.voice_id",
+        "tts.char_count",
         "vad.duration_ms",
         "stt.type",
         # Supporting-event spans surfaced to the monitor's parallel lane.
