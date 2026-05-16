@@ -21,7 +21,7 @@ authoritative roadmap; per-sub-phase specs and TDD plans live under
 | 4c-tris | `HybridRealtimePipeline` for `LocalSTTOpenAIRealtimeHandler` / `LocalSTTHuggingFaceRealtimeHandler` | ⏭ Skipped (Option B per memo `docs/superpowers/specs/2026-05-15-phase-4c-tris-hybrid-realtime-design.md`) | #369 |
 | 4d | Flip default `FACTORY_PATH=composable` | ✅ Done | #378 (commit 814efd8) |
 | 4e | Delete legacy concrete handlers + the dual-path dial + rewrite tests | ✅ Done | #379 (commit 4bb06d1) |
-| 4f | Retire `BACKEND_PROVIDER` / `LOCAL_STT_RESPONSE_BACKEND` config dials | ✅ Done | #TBD (manager fixes on merge) |
+| 4f | Retire `BACKEND_PROVIDER` / `LOCAL_STT_RESPONSE_BACKEND` config dials | ✅ Done | #381 (commit 8873fa2) |
 
 Between sub-phases: small lifecycle-hook follow-up PRs (see "Deferred
 lifecycle hooks" below).
