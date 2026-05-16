@@ -25,11 +25,12 @@ This document is the operating manual for both phases. Per-sub-phase specs and T
 
 ## Phase 5 status table
 
+**Tracking epic:** #391.
 Source-of-truth plan: `docs/superpowers/specs/2026-05-16-phase-5-exploration.md`.
 
 | Sub-phase | Goal | Status | PR / branch |
 |-----------|------|--------|-------------|
-| 5a | Surviving TODO cleanup (composable_conversation_handler.py:158, composable_pipeline.py:278, chatterbox_tts_adapter.py:47, OTel `gen_ai.system` artifact, test-fixture `coroutine never awaited` smell) | ⏸ Pending | — |
+| 5a | Surviving TODO cleanup (composable_conversation_handler.py:158, composable_pipeline.py:278, chatterbox_tts_adapter.py:47, OTel `gen_ai.system` artifact, test-fixture `coroutine never awaited` smell) | 🚧 In flight (5a.1: echo-guard persona reset) | — |
 | 5b | Wire `ComposablePipeline.tool_dispatcher` in factory + `tool.execute` span (was latent prod bug — tool-triggered turns silently dropped on 4 of 5 composable triples) | ✅ Done | #388 (commit a8754d5) |
 | 5c | Voice/personality method redesign (`apply_personality` ABC + wrapper forwarding) | ⏸ Pending operator input |  — |
 | 5d | `ConversationHandler` ABC: shrink (FastRTC-shim only) or collapse | ⏸ Pending **operator decision** (shrink vs collapse) | — |
