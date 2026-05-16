@@ -57,6 +57,8 @@ import asyncio
 import logging
 from typing import Any, Callable, Awaitable
 
+from robot_comic.config import set_custom_profile
+from robot_comic.prompts import get_session_instructions
 from robot_comic.backends import (
     ToolCall,
     AudioFrame,
@@ -65,10 +67,8 @@ from robot_comic.backends import (
     TTSBackend,
     LLMResponse,
 )
-from robot_comic.config import set_custom_profile
 from robot_comic.history_trim import trim_history_in_place
 from robot_comic.joke_history import record_joke_history
-from robot_comic.prompts import get_session_instructions
 
 
 logger = logging.getLogger(__name__)
@@ -237,9 +237,7 @@ class ComposablePipeline:
             return f"Failed to apply personality: {exc}"
         self.reset_history(keep_system=False)
         await self.tts.reset_per_session_state()
-        self._conversation_history.append(
-            {"role": "system", "content": get_session_instructions()}
-        )
+        self._conversation_history.append({"role": "system", "content": get_session_instructions()})
         return f"Applied personality {profile!r}. Conversation history reset."
 
     # ---------------------------------------------------------------------

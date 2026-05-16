@@ -398,6 +398,4 @@ async def test_reset_per_session_state_no_op_when_fields_absent(build: Any) -> N
 
     # And must not have grown the fields back.
     for field in ("_speaking_until", "_response_start_ts", "_response_audio_bytes"):
-        assert not hasattr(handler, field), (
-            f"reset_per_session_state must not create {field!r} when it was absent"
-        )
+        assert not hasattr(handler, field), f"reset_per_session_state must not create {field!r} when it was absent"

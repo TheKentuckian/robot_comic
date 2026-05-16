@@ -31,8 +31,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from robot_comic.backends import AudioFrame, LLMResponse, TranscriptCallback
-from robot_comic.composable_pipeline import ComposablePipeline
 from robot_comic.tools.core_tools import ToolDependencies
+from robot_comic.composable_pipeline import ComposablePipeline
 
 
 def _make_deps() -> ToolDependencies:
@@ -91,8 +91,8 @@ async def test_apply_personality_clears_tts_handler_echo_guard_state(
     """
     from robot_comic import elevenlabs_tts as mod
     from robot_comic import composable_pipeline as pipeline_mod
-    from robot_comic.adapters.elevenlabs_tts_adapter import ElevenLabsTTSAdapter
     from robot_comic.elevenlabs_tts import ElevenLabsTTSResponseHandler
+    from robot_comic.adapters.elevenlabs_tts_adapter import ElevenLabsTTSAdapter
 
     monkeypatch.setattr(mod.config, "ELEVENLABS_API_KEY", "k", raising=False)
     monkeypatch.setattr(mod, "load_profile_elevenlabs_config", lambda: {"voice_id": "v"})
@@ -110,9 +110,7 @@ async def test_apply_personality_clears_tts_handler_echo_guard_state(
 
     result = await pipeline.apply_personality("rodney")
 
-    assert "Applied personality 'rodney'" in result, (
-        f"apply_personality should succeed; got {result!r}"
-    )
+    assert "Applied personality 'rodney'" in result, f"apply_personality should succeed; got {result!r}"
     # Phase 5c.2 contract: per-session echo-guard accumulators on the
     # wrapped TTS handler are cleared so persona switch is a hard cut on
     # listening state. The reset happens in the adapter's
