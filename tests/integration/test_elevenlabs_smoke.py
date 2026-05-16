@@ -1,4 +1,4 @@
-"""End-to-end integration smoke test — LocalSTTGeminiElevenLabsHandler lifecycle.
+"""End-to-end integration smoke test — Moonshine + Gemini + ElevenLabs lifecycle.
 
 Boots the handler in sim mode, injects a synthetic transcript through the
 public ``_dispatch_completed_transcript`` entry point, drains the output queue,
@@ -22,7 +22,19 @@ import pytest
 
 import robot_comic.elevenlabs_tts as elevenlabs_mod
 from .conftest import drain_queue, make_tool_deps
-from robot_comic.elevenlabs_tts import LocalSTTGeminiElevenLabsHandler
+from robot_comic.elevenlabs_tts import ElevenLabsTTSResponseHandler
+from robot_comic.local_stt_realtime import LocalSTTInputMixin
+
+
+# Phase 4e (#337) retired LocalSTTGeminiElevenLabsHandler. The composable
+# factory composes LocalSTTInputMixin over ElevenLabsTTSResponseHandler via
+# a factory-private host class; we mirror that shape here so the smoke test
+# still exercises both halves end-to-end.
+class _LocalSTTGeminiElevenLabsHost(LocalSTTInputMixin, ElevenLabsTTSResponseHandler):
+    async def _dispatch_completed_transcript(self, transcript: str) -> None:
+        # Route past LocalSTTInputMixin's OpenAI-realtime default —
+        # mirrors the factory-private host shape.
+        await ElevenLabsTTSResponseHandler._dispatch_completed_transcript(self, transcript)
 
 
 # ---------------------------------------------------------------------------
@@ -77,9 +89,9 @@ def _make_fake_http_stream(pcm_data: bytes) -> Any:
     return stream_cm
 
 
-def _make_handler() -> LocalSTTGeminiElevenLabsHandler:
+def _make_handler() -> _LocalSTTGeminiElevenLabsHost:
     deps = make_tool_deps()
-    handler = LocalSTTGeminiElevenLabsHandler(deps, sim_mode=True)
+    handler = _LocalSTTGeminiElevenLabsHost(deps, sim_mode=True)
     # Pre-initialise the Gemini client mock so no real API calls are made.
     handler._client = MagicMock()
     handler._http = MagicMock()

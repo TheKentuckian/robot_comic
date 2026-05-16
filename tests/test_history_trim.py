@@ -234,12 +234,12 @@ async def test_llama_handler_trims_history_before_request(monkeypatch) -> None:
     The primary LLM pass now goes through _stream_response_and_synthesize, so we
     mock that method directly to observe the history length at call time.
     """
-    from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
 
     monkeypatch.setenv("REACHY_MINI_MAX_HISTORY_TURNS", "2")
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
-    handler = LocalSTTChatterboxHandler(deps)
+    handler = ChatterboxTTSResponseHandler(deps)
 
     # Seed older turns so the new user message will push us past the cap.
     for i in range(4):
@@ -284,12 +284,12 @@ async def test_chatterbox_handler_trims_history_before_request(monkeypatch) -> N
     3. Setting REACHY_MINI_MAX_HISTORY_TURNS=0 disables trimming (see
        test_chatterbox_handler_trim_disabled_when_cap_zero).
     """
-    from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
 
     monkeypatch.setenv("REACHY_MINI_MAX_HISTORY_TURNS", "3")
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
-    handler = LocalSTTChatterboxHandler(deps)
+    handler = ChatterboxTTSResponseHandler(deps)
 
     # Seed 5 old turns (10 entries) — well above the cap of 3.
     for i in range(5):
@@ -326,12 +326,12 @@ async def test_chatterbox_handler_trims_history_before_request(monkeypatch) -> N
 @pytest.mark.asyncio
 async def test_chatterbox_handler_trim_disabled_when_cap_zero(monkeypatch) -> None:
     """Setting REACHY_MINI_MAX_HISTORY_TURNS=0 disables history trimming entirely."""
-    from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
 
     monkeypatch.setenv("REACHY_MINI_MAX_HISTORY_TURNS", "0")
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
-    handler = LocalSTTChatterboxHandler(deps)
+    handler = ChatterboxTTSResponseHandler(deps)
 
     # Seed 10 turns — far above any sensible cap.
     for i in range(10):

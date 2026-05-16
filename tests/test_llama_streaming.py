@@ -30,11 +30,11 @@ from _helpers import make_stream_response, make_stream_response_with_error
 
 
 def _make_handler():
-    from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
     from robot_comic.tools.core_tools import ToolDependencies
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
-    handler = LocalSTTChatterboxHandler(deps)
+    handler = ChatterboxTTSResponseHandler(deps)
     handler._http = MagicMock()
     return handler
 

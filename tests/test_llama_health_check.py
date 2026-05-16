@@ -11,10 +11,10 @@ from robot_comic.tools.core_tools import ToolDependencies
 
 def _make_handler():
     """Create a ChatterboxTTSResponseHandler with a mocked HTTP client."""
-    from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
-    handler = LocalSTTChatterboxHandler(deps)
+    handler = ChatterboxTTSResponseHandler(deps)
     handler._http = AsyncMock()
     return handler
 

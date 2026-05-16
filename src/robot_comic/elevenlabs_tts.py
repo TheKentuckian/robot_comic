@@ -54,7 +54,6 @@ from robot_comic.gemini_retry import (
 from robot_comic.history_trim import trim_history_in_place, is_synthetic_status_marker
 from robot_comic.tools.core_tools import ToolDependencies, dispatch_tool_call, get_active_tool_specs
 from robot_comic.elevenlabs_voices import resolve_voice_id_by_name
-from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.conversation_handler import ConversationHandler
 from robot_comic.tools.name_validation import record_user_transcript
 from robot_comic.chatterbox_tag_translator import strip_gemini_tags
@@ -1055,26 +1054,3 @@ class ElevenLabsTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             for i in range(0, len(audio), _CHUNK_SAMPLES)
             if len(audio[i : i + _CHUNK_SAMPLES]) > 0
         ]
-
-
-class LocalSTTGeminiElevenLabsHandler(LocalSTTInputMixin, ElevenLabsTTSResponseHandler):
-    """Moonshine STT + Gemini LLM (hardcoded) + ElevenLabs TTS.
-
-    The Gemini hardcode lives in ``ElevenLabsTTSResponseHandler._prepare_startup_credentials``
-    (``genai.Client(...)``), which this class inherits. Use ``LocalSTTLlamaElevenLabsHandler``
-    (in ``llama_elevenlabs_tts.py``) for the llama-LLM variant — they share the
-    elevenlabs TTS path but diverge on the LLM phase.
-
-    Renamed from ``LocalSTTElevenLabsHandler`` to reflect its actual LLM
-    behaviour. The old name is kept as a backward-compat alias at the
-    bottom of this module.
-    """
-
-    async def _dispatch_completed_transcript(self, transcript: str) -> None:
-        # Route explicitly past LocalSTTInputMixin's OpenAI-specific override.
-        await ElevenLabsTTSResponseHandler._dispatch_completed_transcript(self, transcript)
-
-
-# Backward-compat alias for callers that imported the old name. Safe to remove
-# once nothing outside the repo references it.
-LocalSTTElevenLabsHandler = LocalSTTGeminiElevenLabsHandler

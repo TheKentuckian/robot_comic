@@ -16,10 +16,10 @@ def _make_deps() -> ToolDependencies:
 
 
 def _make_handler():
-    from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
 
     deps = _make_deps()
-    handler = LocalSTTChatterboxHandler(deps)
+    handler = ChatterboxTTSResponseHandler(deps)
     handler._http = AsyncMock()
     return handler
 

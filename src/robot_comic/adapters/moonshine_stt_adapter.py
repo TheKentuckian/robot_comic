@@ -1,8 +1,10 @@
 """MoonshineSTTAdapter: expose LocalSTTInputMixin as STTBackend.
 
-The legacy ``LocalSTTInputMixin`` is a mixin baked into the response-handler
-hierarchy (``LocalSTTLlamaElevenLabsHandler``, ``LocalSTTGeminiElevenLabsHandler``,
-…). It owns the Moonshine transcriber + stream + listener, ingests audio via
+The :class:`LocalSTTInputMixin` is composed by the factory over each
+surviving response-handler base (``LlamaElevenLabsTTSResponseHandler``,
+``GeminiTextChatterboxResponseHandler``, …) to host the Moonshine
+listener. It owns the Moonshine transcriber + stream + listener, ingests
+audio via
 ``receive((sample_rate, ndarray))``, and dispatches completed transcripts
 into the rest of the handler via ``_dispatch_completed_transcript(text)``.
 

@@ -20,9 +20,10 @@ triple — tools are dispatched inside the wrapped handler against its
 
 This is intentional and documented:
 
-- The legacy ``LocalSTTGeminiTTSHandler`` (the wrapped handler) already
-  dispatches tools internally with no orchestrator involvement, so the
-  composable path behaves identically to legacy.
+- The wrapped ``GeminiTTSResponseHandler`` already dispatches tools
+  internally with no orchestrator involvement, so the composable path
+  behaves identically to the pre-4e bundled handler that Phase 4e of
+  #337 retired.
 - Phase 4e cleanup may refactor ``GeminiTTSResponseHandler`` to expose
   ``_call_llm``-shaped LLM step so a single :class:`GeminiLLMAdapter` can
   drive both this triple and ``(moonshine, *, gemini)``. That migration is

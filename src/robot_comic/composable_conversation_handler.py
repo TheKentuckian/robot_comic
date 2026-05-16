@@ -81,8 +81,9 @@ class ComposableConversationHandler(ConversationHandler):
         """Mirror the queue-flush callback onto the underlying TTS handler.
 
         The ``LocalSTTInputMixin`` listener calls ``self._clear_queue`` on the
-        legacy ``LocalSTTLlamaElevenLabsHandler`` instance it is mixed into;
-        that instance is our ``_tts_handler``, not the wrapper. So when
+        factory-private host instance it is mixed into (e.g.
+        ``_LocalSTTLlamaElevenLabsHost``); that instance is our
+        ``_tts_handler``, not the wrapper. So when
         ``LocalStream.__init__`` does ``self.handler._clear_queue =
         self.clear_audio_queue`` on the wrapper, we forward the assignment to
         the legacy handler — otherwise barge-in stops flushing the player on

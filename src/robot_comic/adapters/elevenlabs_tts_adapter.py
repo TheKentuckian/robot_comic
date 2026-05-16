@@ -33,8 +33,6 @@ duck-typed surface the adapter actually uses. Today that includes:
 - ``LlamaElevenLabsTTSResponseHandler`` (structural match, parallel
   inheritance chain — no nominal relation to
   ``ElevenLabsTTSResponseHandler``).
-- ``LocalSTTGeminiElevenLabsHandler`` (structural match — will be wired
-  in 4c.4).
 
 Broadening from the concrete class to a Protocol pays down the
 ``cast(Any, legacy)`` workaround introduced in Phase 4b for the llama

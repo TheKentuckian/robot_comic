@@ -50,7 +50,6 @@ from robot_comic.gemini_retry import (
 )
 from robot_comic.history_trim import trim_history_in_place, is_synthetic_status_marker
 from robot_comic.tools.core_tools import ToolDependencies, dispatch_tool_call, get_active_tool_specs
-from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.conversation_handler import ConversationHandler
 from robot_comic.tools.name_validation import record_user_transcript
 
@@ -578,12 +577,3 @@ class GeminiTTSResponseHandler(AsyncStreamHandler, ConversationHandler):
             for i in range(0, len(audio), _CHUNK_SAMPLES)
             if len(audio[i : i + _CHUNK_SAMPLES]) > 0
         ]
-
-
-class LocalSTTGeminiTTSHandler(LocalSTTInputMixin, GeminiTTSResponseHandler):
-    """Moonshine STT input + Gemini 3.1 Flash TTS voice output."""
-
-    async def _dispatch_completed_transcript(self, transcript: str) -> None:
-        # LocalSTTInputMixin._dispatch_completed_transcript is OpenAI-specific and
-        # shadows GeminiTTSResponseHandler's override due to MRO; route explicitly.
-        await GeminiTTSResponseHandler._dispatch_completed_transcript(self, transcript)

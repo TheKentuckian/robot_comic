@@ -21,7 +21,6 @@ if TYPE_CHECKING:
 
 from robot_comic import telemetry
 from robot_comic.config import (
-    LLAMA_GEMINI_TTS_OUTPUT,
     GEMINI_TTS_DEFAULT_VOICE,
     GEMINI_TTS_AVAILABLE_VOICES,
     config,
@@ -46,7 +45,6 @@ from robot_comic.gemini_retry import (
     extract_retry_after_seconds,
 )
 from robot_comic.tools.core_tools import ToolDependencies
-from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.chatterbox_tag_translator import strip_gemini_tags
 
 
@@ -229,12 +227,3 @@ class LlamaGeminiTTSResponseHandler(BaseLlamaResponseHandler):
                         exc,
                     )
         return None
-
-
-class LocalSTTLlamaGeminiTTSHandler(LocalSTTInputMixin, LlamaGeminiTTSResponseHandler):
-    """Moonshine STT input + llama-server LLM + Gemini 3.1 Flash TTS voice output."""
-
-    BACKEND_PROVIDER = LLAMA_GEMINI_TTS_OUTPUT
-
-    async def _dispatch_completed_transcript(self, transcript: str) -> None:
-        await LlamaGeminiTTSResponseHandler._dispatch_completed_transcript(self, transcript)

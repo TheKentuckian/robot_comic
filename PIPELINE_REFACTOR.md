@@ -19,8 +19,8 @@ authoritative roadmap; per-sub-phase specs and TDD plans live under
 | 4c.4 | `(moonshine, elevenlabs, gemini-fallback)` routing | ✅ Done | #365 (commit ac1232e) |
 | 4c.5 | `GeminiTTSAdapter` + `GeminiBundledLLMAdapter` + `(moonshine, gemini_tts)` routing | ✅ Done | #366 (commit 808da59) |
 | 4c-tris | `HybridRealtimePipeline` for `LocalSTTOpenAIRealtimeHandler` / `LocalSTTHuggingFaceRealtimeHandler` | ⏭ Skipped (Option B per memo `docs/superpowers/specs/2026-05-15-phase-4c-tris-hybrid-realtime-design.md`) | #369 |
-| 4d | Flip default `FACTORY_PATH=composable` | ✅ Done | #TBD |
-| 4e | Delete legacy concrete handlers + the dual-path dial + rewrite tests | ⏸ Pending | — |
+| 4d | Flip default `FACTORY_PATH=composable` | ✅ Done | #378 (commit 814efd8) |
+| 4e | Delete legacy concrete handlers + the dual-path dial + rewrite tests | ✅ Done | #TBD |
 | 4f | Retire `BACKEND_PROVIDER` / `LOCAL_STT_RESPONSE_BACKEND` config dials | ⏸ Pending | — |
 
 Between sub-phases: small lifecycle-hook follow-up PRs (see "Deferred

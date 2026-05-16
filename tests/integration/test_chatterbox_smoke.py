@@ -1,4 +1,4 @@
-"""End-to-end integration smoke test — LocalSTTChatterboxHandler lifecycle.
+"""End-to-end integration smoke test — Moonshine + Llama + Chatterbox lifecycle.
 
 Boots the handler in sim mode, injects a synthetic transcript through the
 public ``_dispatch_completed_transcript`` entry point, drains the output queue,
@@ -53,10 +53,21 @@ def _make_sse_stream(lines: list[str]) -> MagicMock:
 
 
 def _make_handler() -> Any:
-    from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
+    # Phase 4e (#337) retired LocalSTTChatterboxHandler. The composable
+    # factory composes LocalSTTInputMixin over ChatterboxTTSResponseHandler
+    # via a factory-private host class; we mirror that shape here so the
+    # smoke test still exercises both halves end-to-end.
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
+    from robot_comic.local_stt_realtime import LocalSTTInputMixin
+
+    class _Host(LocalSTTInputMixin, ChatterboxTTSResponseHandler):
+        async def _dispatch_completed_transcript(self, transcript: str) -> None:
+            # Route past LocalSTTInputMixin's OpenAI-realtime default —
+            # mirrors the factory-private host shape.
+            await ChatterboxTTSResponseHandler._dispatch_completed_transcript(self, transcript)
 
     deps = make_tool_deps()
-    handler = LocalSTTChatterboxHandler(deps, sim_mode=True)
+    handler = _Host(deps, sim_mode=True)
     # Replace the HTTP client so no real network calls are made.
     handler._http = AsyncMock()
     return handler

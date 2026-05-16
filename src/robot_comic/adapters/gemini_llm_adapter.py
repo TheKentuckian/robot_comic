@@ -5,10 +5,11 @@ The legacy ``GeminiTextResponseHandler`` (``gemini_text_base.py``) overrides
 so the Gemini API drives the LLM step while tool dispatch, history
 management, and TTS orchestration are inherited from the base class unchanged.
 
-This adapter takes a pre-constructed handler instance (typically a concrete
-``GeminiTextChatterboxHandler`` / ``GeminiTextElevenLabsHandler`` subclass)
-and presents only the LLM-call surface (``LLMBackend.chat``) to consumers,
-leaving the rest of the legacy machinery untouched.
+This adapter takes a pre-constructed handler instance (typically a
+``GeminiTextChatterboxResponseHandler`` / ``GeminiTextElevenLabsResponseHandler``
+host composed with ``LocalSTTInputMixin`` by the factory) and presents
+only the LLM-call surface (``LLMBackend.chat``) to consumers, leaving the
+rest of the legacy machinery untouched.
 
 History semantics:
 
