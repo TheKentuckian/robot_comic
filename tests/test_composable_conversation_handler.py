@@ -183,27 +183,39 @@ async def test_emit_pulls_from_output_queue() -> None:
     assert result is sentinel
 
 
-def test_get_current_voice_delegates() -> None:
+def test_get_current_voice_delegates_to_pipeline_tts() -> None:
+    """Phase 5c.1: wrapper forwards voice queries through ``pipeline.tts``.
+
+    Pre-5c.1 the wrapper forwarded to ``self._tts_handler`` directly;
+    the Protocol extension lets the adapter own the surface.
+    ``_tts_handler`` is still held for ``_reset_tts_per_session_state``
+    (Phase 5c.2 / 5d will revisit).
+    """
     wrapper = _make_wrapper()
-    wrapper._tts_handler.get_current_voice = MagicMock(return_value="Brian")
+    wrapper.pipeline.tts = MagicMock()
+    wrapper.pipeline.tts.get_current_voice = MagicMock(return_value="Brian")
     assert wrapper.get_current_voice() == "Brian"
-    wrapper._tts_handler.get_current_voice.assert_called_once()
+    wrapper.pipeline.tts.get_current_voice.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_get_available_voices_delegates() -> None:
+async def test_get_available_voices_delegates_to_pipeline_tts() -> None:
+    """Phase 5c.1: wrapper forwards voice queries through ``pipeline.tts``."""
     wrapper = _make_wrapper()
-    wrapper._tts_handler.get_available_voices = AsyncMock(return_value=["A", "B"])
+    wrapper.pipeline.tts = MagicMock()
+    wrapper.pipeline.tts.get_available_voices = AsyncMock(return_value=["A", "B"])
     assert await wrapper.get_available_voices() == ["A", "B"]
-    wrapper._tts_handler.get_available_voices.assert_awaited_once()
+    wrapper.pipeline.tts.get_available_voices.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_change_voice_delegates() -> None:
+async def test_change_voice_delegates_to_pipeline_tts() -> None:
+    """Phase 5c.1: wrapper forwards voice queries through ``pipeline.tts``."""
     wrapper = _make_wrapper()
-    wrapper._tts_handler.change_voice = AsyncMock(return_value="Voice changed to X.")
+    wrapper.pipeline.tts = MagicMock()
+    wrapper.pipeline.tts.change_voice = AsyncMock(return_value="Voice changed to X.")
     assert await wrapper.change_voice("X") == "Voice changed to X."
-    wrapper._tts_handler.change_voice.assert_awaited_once_with("X")
+    wrapper.pipeline.tts.change_voice.assert_awaited_once_with("X")
 
 
 @pytest.mark.asyncio

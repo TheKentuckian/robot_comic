@@ -233,3 +233,41 @@ class TTSBackend(Protocol):
     async def shutdown(self) -> None:
         """Close client(s)."""
         ...
+
+    async def get_available_voices(self) -> list[str]:
+        """List voice IDs this backend can switch to.
+
+        Default raises :class:`NotImplementedError`. The legacy
+        TTS-holding handlers (ElevenLabs / Chatterbox / Gemini TTS) all
+        implement this; the adapters forward through. Pure TTS backends
+        without a voice concept (future Whisper-only or pipeline-debug
+        TTS stubs) inherit the default.
+
+        ``@runtime_checkable`` treats this as a required attribute for
+        ``isinstance`` checks even though it's defaulted, so test stubs
+        that satisfy :class:`TTSBackend` structurally (no inheritance)
+        must declare the method. Stubs that inherit from the Protocol
+        inherit the default raiser.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support voice listing")
+
+    def get_current_voice(self) -> str:
+        """Return the active voice ID.
+
+        Sync — admin-UI call sites consume the value without an event
+        loop. Default raises :class:`NotImplementedError`; see
+        :meth:`get_available_voices` for the inheritance-vs-structural
+        caveat.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support voice queries")
+
+    async def change_voice(self, voice: str) -> str:
+        """Switch the active voice; return a confirmation string.
+
+        The legacy contract is lenient: unknown voices are stored as-is
+        and resolved at synthesis time (or the synthesis path falls back
+        to a default). Adapters preserve that behavior — see
+        ``tests/adapters/test_tts_backend_contract.py::test_change_voice_to_unknown_voice_does_not_raise``.
+        Default raises :class:`NotImplementedError`.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support voice switching")

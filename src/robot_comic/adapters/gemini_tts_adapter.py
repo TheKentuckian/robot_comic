@@ -129,6 +129,13 @@ class _GeminiTTSCompatibleHandler(Protocol):
 
     async def _run_llm_with_tools(self) -> str: ...
 
+    # Phase 5c.1: voice-method surface forwarded by ``GeminiTTSAdapter``.
+    async def get_available_voices(self) -> list[str]: ...
+
+    def get_current_voice(self) -> str: ...
+
+    async def change_voice(self, voice: str) -> str: ...
+
 
 class GeminiTTSAdapter:
     """Adapter exposing ``GeminiTTSResponseHandler`` as ``TTSBackend``."""
@@ -243,3 +250,34 @@ class GeminiTTSAdapter:
     async def shutdown(self) -> None:
         """No-op — ``genai.Client`` has no explicit close path here."""
         return None
+
+    # ------------------------------------------------------------------ #
+    # Voice methods (Phase 5c.1) — thin forwards to the wrapped handler. #
+    # ------------------------------------------------------------------ #
+
+    async def get_available_voices(self) -> list[str]:
+        """Forward to ``GeminiTTSResponseHandler.get_available_voices``.
+
+        Returns ``list(GEMINI_TTS_AVAILABLE_VOICES)`` — a fixed catalog,
+        no network call. The adapter just bridges the Protocol surface.
+        """
+        return await self._handler.get_available_voices()
+
+    def get_current_voice(self) -> str:
+        """Forward to ``GeminiTTSResponseHandler.get_current_voice``.
+
+        Sync — the legacy handler validates against
+        ``GEMINI_TTS_AVAILABLE_VOICES`` and falls back to the default
+        when the override is unknown.
+        """
+        return self._handler.get_current_voice()
+
+    async def change_voice(self, voice: str) -> str:
+        """Forward to ``GeminiTTSResponseHandler.change_voice``.
+
+        Legacy contract is lenient — the override is stored as-is even
+        when the value isn't in ``GEMINI_TTS_AVAILABLE_VOICES``;
+        ``get_current_voice`` is where the validity check + default
+        fallback happens.
+        """
+        return await self._handler.change_voice(voice)
