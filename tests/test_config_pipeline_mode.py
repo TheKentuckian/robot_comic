@@ -137,8 +137,6 @@ def test_pipeline_mode_env_var_takes_priority(monkeypatch):
             # Make derivation point at composable so we can prove the override won.
             "REACHY_MINI_AUDIO_INPUT_BACKEND": "moonshine",
             "REACHY_MINI_AUDIO_OUTPUT_BACKEND": "elevenlabs",
-            "BACKEND_PROVIDER": "local_stt",
-            "LOCAL_STT_RESPONSE_BACKEND": "elevenlabs",
         },
     )
     assert cfg.config.PIPELINE_MODE == "openai_realtime"
@@ -150,39 +148,62 @@ def test_pipeline_mode_defaults_to_derived_when_env_unset(monkeypatch):
     cfg = _reload_config(
         monkeypatch,
         {
-            "BACKEND_PROVIDER": "local_stt",
-            "LOCAL_STT_RESPONSE_BACKEND": "elevenlabs",
+            "REACHY_MINI_AUDIO_INPUT_BACKEND": "moonshine",
+            "REACHY_MINI_AUDIO_OUTPUT_BACKEND": "elevenlabs",
         },
     )
-    # local_stt + elevenlabs derives to (moonshine, elevenlabs) → composable
+    # moonshine + elevenlabs is a composable pipeline.
     assert cfg.config.PIPELINE_MODE == "composable"
 
 
-def test_pipeline_mode_derived_openai_when_provider_is_openai(monkeypatch):
-    """``BACKEND_PROVIDER=openai`` derives to bundled openai_realtime pipeline."""
+def test_pipeline_mode_derived_openai_realtime_when_inputs_match(monkeypatch):
+    """The (openai_realtime_input, openai_realtime_output) pair derives to the bundled mode."""
     monkeypatch.delenv("REACHY_MINI_PIPELINE_MODE", raising=False)
-    cfg = _reload_config(monkeypatch, {"BACKEND_PROVIDER": "openai"})
+    cfg = _reload_config(
+        monkeypatch,
+        {
+            "REACHY_MINI_AUDIO_INPUT_BACKEND": "openai_realtime_input",
+            "REACHY_MINI_AUDIO_OUTPUT_BACKEND": "openai_realtime_output",
+        },
+    )
     assert cfg.config.PIPELINE_MODE == "openai_realtime"
 
 
-def test_pipeline_mode_derived_gemini_live_when_provider_is_gemini(monkeypatch):
+def test_pipeline_mode_derived_gemini_live_when_inputs_match(monkeypatch):
     monkeypatch.delenv("REACHY_MINI_PIPELINE_MODE", raising=False)
-    cfg = _reload_config(monkeypatch, {"BACKEND_PROVIDER": "gemini"})
+    cfg = _reload_config(
+        monkeypatch,
+        {
+            "REACHY_MINI_AUDIO_INPUT_BACKEND": "gemini_live_input",
+            "REACHY_MINI_AUDIO_OUTPUT_BACKEND": "gemini_live_output",
+        },
+    )
     assert cfg.config.PIPELINE_MODE == "gemini_live"
 
 
-def test_pipeline_mode_derived_hf_realtime_when_provider_is_hf(monkeypatch):
+def test_pipeline_mode_derived_hf_realtime_when_inputs_match(monkeypatch):
     monkeypatch.delenv("REACHY_MINI_PIPELINE_MODE", raising=False)
-    cfg = _reload_config(monkeypatch, {"BACKEND_PROVIDER": "huggingface"})
+    cfg = _reload_config(
+        monkeypatch,
+        {
+            "REACHY_MINI_AUDIO_INPUT_BACKEND": "hf_input",
+            "REACHY_MINI_AUDIO_OUTPUT_BACKEND": "hf_output",
+        },
+    )
     assert cfg.config.PIPELINE_MODE == "hf_realtime"
 
 
 def test_pipeline_mode_invalid_env_value_falls_back_to_derived(monkeypatch, caplog):
     """An unknown PIPELINE_MODE value logs a warning and falls back to derivation."""
     monkeypatch.setenv("REACHY_MINI_PIPELINE_MODE", "not-a-real-mode")
-    cfg = _reload_config(monkeypatch, {"BACKEND_PROVIDER": "local_stt"})
-    # Falls back to derivation (local_stt → composable by default since
-    # LOCAL_STT_RESPONSE_BACKEND is unset → chatterbox → composable).
+    cfg = _reload_config(
+        monkeypatch,
+        {
+            "REACHY_MINI_AUDIO_INPUT_BACKEND": "moonshine",
+            "REACHY_MINI_AUDIO_OUTPUT_BACKEND": "chatterbox",
+        },
+    )
+    # Falls back to derivation (moonshine + chatterbox → composable).
     assert cfg.config.PIPELINE_MODE == "composable"
 
 

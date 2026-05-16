@@ -535,10 +535,9 @@ class LocalStream:
     ) -> None:
         """Persist a pipeline selection into the instance `.env`.
 
-        Replaces the pre-Phase-4f ``_persist_backend_choice``: writes
-        ``REACHY_MINI_PIPELINE_MODE`` plus (for the composable pipeline)
-        ``REACHY_MINI_AUDIO_INPUT_BACKEND`` / ``REACHY_MINI_AUDIO_OUTPUT_BACKEND``
-        instead of the retired ``BACKEND_PROVIDER`` / ``MODEL_NAME`` dials.
+        Writes ``REACHY_MINI_PIPELINE_MODE`` plus (for the composable pipeline)
+        ``REACHY_MINI_AUDIO_INPUT_BACKEND`` / ``REACHY_MINI_AUDIO_OUTPUT_BACKEND``.
+        Replaces the pre-Phase-4f ``_persist_backend_choice`` helper.
         """
         updates: dict[str, str] = {PIPELINE_MODE_ENV: pipeline_mode}
         if pipeline_mode == PIPELINE_MODE_COMPOSABLE:

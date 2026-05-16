@@ -146,7 +146,6 @@ GEMINI_BACKEND = "gemini"
 HF_BACKEND = "huggingface"
 LOCAL_STT_BACKEND = "local_stt"
 GEMINI_TTS_OUTPUT = "gemini_tts"
-DEFAULT_BACKEND_PROVIDER = HF_BACKEND
 HF_REALTIME_CONNECTION_MODE_ENV = "HF_REALTIME_CONNECTION_MODE"
 HF_REALTIME_WS_URL_ENV = "HF_REALTIME_WS_URL"
 HF_LOCAL_CONNECTION_MODE = "local"
@@ -227,8 +226,7 @@ _GEMINI_LLM_MODEL_DEFAULT = "gemini-2.5-flash"
 # ---------------------------------------------------------------------------
 # Modular audio pipeline: separate input (STT) and output (TTS) backend IDs.
 # These are the canonical string values for AUDIO_INPUT_BACKEND and
-# AUDIO_OUTPUT_BACKEND — either derived from BACKEND_PROVIDER (backwards-compat
-# mode) or set explicitly via environment variables.
+# AUDIO_OUTPUT_BACKEND, set explicitly via environment variables.
 # ---------------------------------------------------------------------------
 
 # Input (STT) backend identifiers
@@ -374,21 +372,17 @@ def _normalize_pipeline_mode(value: str | None) -> str | None:
 # trigger a warning + fallback.
 _SUPPORTED_AUDIO_COMBINATIONS: frozenset[tuple[str, str]] = frozenset(
     {
-        # BACKEND_PROVIDER=huggingface
+        # Bundled hf_realtime
         (AUDIO_INPUT_HF, AUDIO_OUTPUT_HF),
-        # BACKEND_PROVIDER=openai
+        # Bundled openai_realtime
         (AUDIO_INPUT_OPENAI_REALTIME, AUDIO_OUTPUT_OPENAI_REALTIME),
-        # BACKEND_PROVIDER=gemini
+        # Bundled gemini_live
         (AUDIO_INPUT_GEMINI_LIVE, AUDIO_OUTPUT_GEMINI_LIVE),
-        # BACKEND_PROVIDER=local_stt, LOCAL_STT_RESPONSE_BACKEND=chatterbox
+        # Composable moonshine STT + various TTS outputs
         (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_CHATTERBOX),
-        # BACKEND_PROVIDER=local_stt, LOCAL_STT_RESPONSE_BACKEND=gemini_tts
         (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_GEMINI_TTS),
-        # BACKEND_PROVIDER=local_stt, LOCAL_STT_RESPONSE_BACKEND=elevenlabs
         (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_ELEVENLABS),
-        # BACKEND_PROVIDER=local_stt, LOCAL_STT_RESPONSE_BACKEND=openai
         (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_OPENAI_REALTIME),
-        # BACKEND_PROVIDER=local_stt, LOCAL_STT_RESPONSE_BACKEND=huggingface
         (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_HF),
     }
 )
@@ -409,23 +403,12 @@ DEFAULT_VOICE_BY_BACKEND = {
 
 LOCAL_STT_PROVIDER_ENV = "LOCAL_STT_PROVIDER"
 LOCAL_STT_CACHE_DIR_ENV = "LOCAL_STT_CACHE_DIR"
-LOCAL_STT_RESPONSE_BACKEND_ENV = "LOCAL_STT_RESPONSE_BACKEND"
 LOCAL_STT_LANGUAGE_ENV = "LOCAL_STT_LANGUAGE"
 LOCAL_STT_MODEL_ENV = "LOCAL_STT_MODEL"
 LOCAL_STT_UPDATE_INTERVAL_ENV = "LOCAL_STT_UPDATE_INTERVAL"
 LOCAL_STT_DEFAULT_PROVIDER = "moonshine"
 LOCAL_STT_DEFAULT_CACHE_DIR = "./cache/moonshine_voice"
 
-LOCAL_STT_DEFAULT_RESPONSE_BACKEND = OPENAI_BACKEND
-LOCAL_STT_RESPONSE_BACKEND_CHOICES = (
-    OPENAI_BACKEND,
-    HF_BACKEND,
-    GEMINI_TTS_OUTPUT,
-    CHATTERBOX_OUTPUT,
-    LLAMA_GEMINI_TTS_OUTPUT,
-    ELEVENLABS_OUTPUT,
-    LLAMA_ELEVENLABS_TTS_OUTPUT,
-)
 LOCAL_STT_DEFAULT_LANGUAGE = "en"
 LOCAL_STT_DEFAULT_MODEL = "tiny_streaming"
 LOCAL_STT_MODEL_CHOICES = ("tiny_streaming", "small_streaming")
@@ -446,48 +429,55 @@ DEFAULT_ECHO_COOLDOWN_MS = 300
 logger = logging.getLogger(__name__)
 
 
+# NOTE (Phase 4f, #337): The retired ``BACKEND_PROVIDER`` and
+# ``LOCAL_STT_RESPONSE_BACKEND`` dials have been deleted along with their
+# normalisation / model-name-derivation helpers
+# (``_normalize_backend_provider``, ``_resolve_model_name``,
+# ``_normalize_local_stt_response_backend``). The active pipeline is now
+# expressed via ``PIPELINE_MODE`` + ``AUDIO_INPUT_BACKEND`` +
+# ``AUDIO_OUTPUT_BACKEND`` + ``LLM_BACKEND``. See
+# docs/superpowers/specs/2026-05-16-phase-4f-backend-provider-retirement.md.
+
+
 def _is_gemini_model_name(model_name: str | None) -> bool:
     """Return True when the provided model name targets Gemini."""
     candidate = (model_name or "").strip().lower()
     return candidate.startswith("gemini")
 
 
-def _normalize_backend_provider(
-    backend_provider: str | None = None,
-    model_name: str | None = None,
-) -> str:
-    """Normalize the configured backend provider."""
-    candidate = (backend_provider or "").strip().lower()
-    if candidate in DEFAULT_MODEL_NAME_BY_BACKEND:
+_VALID_PROVIDER_IDS: frozenset[str] = frozenset({OPENAI_BACKEND, GEMINI_BACKEND, HF_BACKEND, LOCAL_STT_BACKEND})
+
+
+def _normalize_provider_id(provider_id: str | None) -> str:
+    """Validate that ``provider_id`` is a known PROVIDER_ID, defaulting to HF.
+
+    Unknown strings raise; ``None``/empty falls back to :data:`HF_BACKEND`
+    to keep the legacy default-on-unset semantic.
+    """
+    candidate = (provider_id or "").strip().lower()
+    if not candidate:
+        return HF_BACKEND
+    if candidate not in _VALID_PROVIDER_IDS:
+        raise ValueError(f"Invalid provider_id={provider_id!r}. Expected one of: {sorted(_VALID_PROVIDER_IDS)}.")
+    return candidate
+
+
+def _resolve_model_name_from_env(env_value: str | None, pipeline_mode: str | None = None) -> str:
+    """Resolve ``MODEL_NAME`` from the environment, applying pipeline defaults.
+
+    Provider defaults come from :data:`DEFAULT_MODEL_NAME_BY_BACKEND` keyed by
+    the ``PROVIDER_ID`` implied by ``pipeline_mode``.  The Hugging Face
+    realtime pipeline intentionally returns ``""`` so the OpenAI-compat
+    client omits the ``model`` connect kwarg (the HF server picks its own).
+    """
+    candidate = (env_value or "").strip()
+    if candidate:
         return candidate
-    if candidate:
-        expected = ", ".join(sorted(DEFAULT_MODEL_NAME_BY_BACKEND))
-        raise ValueError(f"Invalid BACKEND_PROVIDER={backend_provider!r}. Expected one of: {expected}.")
-    return GEMINI_BACKEND if _is_gemini_model_name(model_name) else DEFAULT_BACKEND_PROVIDER
-
-
-def _resolve_model_name(
-    backend_provider: str | None = None,
-    model_name: str | None = None,
-) -> str:
-    """Return a model name that matches the selected backend provider."""
-    normalized_backend = _normalize_backend_provider(backend_provider, model_name)
-    if normalized_backend == HF_BACKEND:
+    if pipeline_mode == PIPELINE_MODE_HF_REALTIME:
         return DEFAULT_MODEL_NAME_BY_BACKEND[HF_BACKEND]
-
-    candidate = (model_name or "").strip()
-    if candidate:
-        if normalized_backend == GEMINI_BACKEND and _is_gemini_model_name(candidate):
-            return candidate
-        if normalized_backend != GEMINI_BACKEND and not _is_gemini_model_name(candidate):
-            return candidate
-        logger.warning(
-            "MODEL_NAME=%r does not match BACKEND_PROVIDER=%r, using default %r",
-            candidate,
-            normalized_backend,
-            DEFAULT_MODEL_NAME_BY_BACKEND[normalized_backend],
-        )
-    return DEFAULT_MODEL_NAME_BY_BACKEND[normalized_backend]
+    if pipeline_mode == PIPELINE_MODE_GEMINI_LIVE:
+        return DEFAULT_MODEL_NAME_BY_BACKEND[GEMINI_BACKEND]
+    return DEFAULT_MODEL_NAME_BY_BACKEND[OPENAI_BACKEND]
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -565,23 +555,6 @@ def _normalize_local_stt_language(value: str | None) -> str:
     return candidate or LOCAL_STT_DEFAULT_LANGUAGE
 
 
-def _normalize_local_stt_response_backend(value: str | None) -> str:
-    """Normalize the response/audio backend for the local STT frontend."""
-    candidate = (value or "").strip().lower()
-    if not candidate:
-        return LOCAL_STT_DEFAULT_RESPONSE_BACKEND
-    if candidate not in LOCAL_STT_RESPONSE_BACKEND_CHOICES:
-        logger.warning(
-            "Invalid %s=%r. Expected one of %s; using %s.",
-            LOCAL_STT_RESPONSE_BACKEND_ENV,
-            value,
-            ", ".join(LOCAL_STT_RESPONSE_BACKEND_CHOICES),
-            LOCAL_STT_DEFAULT_RESPONSE_BACKEND,
-        )
-        return LOCAL_STT_DEFAULT_RESPONSE_BACKEND
-    return candidate
-
-
 def _normalize_local_stt_update_interval(value: str | None) -> float:
     """Normalize the local STT partial update interval in seconds."""
     if value is None or not value.strip():
@@ -607,57 +580,46 @@ def _normalize_local_stt_update_interval(value: str | None) -> float:
     return interval
 
 
-# Mapping from LOCAL_STT_RESPONSE_BACKEND values to canonical AUDIO_OUTPUT_*
-# constants. Used by derive_audio_backends() so that BACKEND_PROVIDER=local_stt
-# pipelines honour LOCAL_STT_RESPONSE_BACKEND instead of always falling back to
-# chatterbox. See issue #262.
-_LOCAL_STT_RESPONSE_TO_AUDIO_OUTPUT: dict[str, str] = {
-    CHATTERBOX_OUTPUT: AUDIO_OUTPUT_CHATTERBOX,
-    ELEVENLABS_OUTPUT: AUDIO_OUTPUT_ELEVENLABS,
-    LLAMA_ELEVENLABS_TTS_OUTPUT: AUDIO_OUTPUT_ELEVENLABS,
-    GEMINI_TTS_OUTPUT: AUDIO_OUTPUT_GEMINI_TTS,
-    LLAMA_GEMINI_TTS_OUTPUT: AUDIO_OUTPUT_GEMINI_TTS,
-    OPENAI_BACKEND: AUDIO_OUTPUT_OPENAI_REALTIME,
-    HF_BACKEND: AUDIO_OUTPUT_HF,
-}
-
-
 def derive_audio_backends(
-    backend_provider: str,
+    provider_id: str,
     response_backend: str | None = None,
 ) -> tuple[str, str]:
-    """Derive (AUDIO_INPUT_BACKEND, AUDIO_OUTPUT_BACKEND) from a BACKEND_PROVIDER value.
+    """Derive ``(AUDIO_INPUT_BACKEND, AUDIO_OUTPUT_BACKEND)`` from a ``PROVIDER_ID``.
 
-    This is the backwards-compatibility bridge: when the new granular env vars
-    are not set, the existing BACKEND_PROVIDER determines the bundled pair so
-    existing deployments keep working without any config changes.
+    Pure helper retained as a library / test convenience.  ``provider_id``
+    is one of :data:`OPENAI_BACKEND`, :data:`GEMINI_BACKEND`,
+    :data:`HF_BACKEND`, :data:`LOCAL_STT_BACKEND` — the same coarse provider
+    strings the realtime handlers carry on their ``PROVIDER_ID`` ClassVar.
 
-    For ``backend_provider == "local_stt"`` the ``response_backend`` argument
-    (the operator-set ``LOCAL_STT_RESPONSE_BACKEND``) selects which TTS output
-    backend is paired with moonshine. When ``response_backend`` is None or
-    unrecognised, falls back to ``AUDIO_OUTPUT_CHATTERBOX`` (the historical
-    default).
-
-    Args:
-        backend_provider: A valid BACKEND_PROVIDER string (e.g. "huggingface",
-            "openai", "gemini", "local_stt").
-        response_backend: Normalised ``LOCAL_STT_RESPONSE_BACKEND`` value, only
-            consulted when ``backend_provider == "local_stt"``.
-
-    Returns:
-        A ``(input_backend, output_backend)`` tuple of canonical backend IDs.
-
+    For ``provider_id == "local_stt"`` the ``response_backend`` argument
+    selects which TTS output is paired with moonshine.  Recognised values
+    are the historical response-backend strings (``chatterbox``,
+    ``gemini_tts``, ``elevenlabs``, ``llama_*_tts`` variants, ``openai``,
+    ``huggingface``).  When unset/unknown, falls back to
+    :data:`AUDIO_OUTPUT_CHATTERBOX`.
     """
-    normalized = _normalize_backend_provider(backend_provider)
-    if normalized == HF_BACKEND:
+    if provider_id not in _VALID_PROVIDER_IDS:
+        raise ValueError(f"Invalid provider_id={provider_id!r}. Expected one of: {sorted(_VALID_PROVIDER_IDS)}.")
+    if provider_id == HF_BACKEND:
         return (AUDIO_INPUT_HF, AUDIO_OUTPUT_HF)
-    if normalized == OPENAI_BACKEND:
+    if provider_id == OPENAI_BACKEND:
         return (AUDIO_INPUT_OPENAI_REALTIME, AUDIO_OUTPUT_OPENAI_REALTIME)
-    if normalized == GEMINI_BACKEND:
+    if provider_id == GEMINI_BACKEND:
         return (AUDIO_INPUT_GEMINI_LIVE, AUDIO_OUTPUT_GEMINI_LIVE)
-    # LOCAL_STT_BACKEND — input is always moonshine; output depends on
-    # LOCAL_STT_RESPONSE_BACKEND. Default to chatterbox when unset/unknown.
-    output = _LOCAL_STT_RESPONSE_TO_AUDIO_OUTPUT.get(
+    # LOCAL_STT_BACKEND — input is always moonshine; output mirrors the
+    # legacy response-backend table for back-compat with operators that
+    # still feed the function those strings (the live config path no
+    # longer reads them — only the test suite + library callers do).
+    _legacy_response_to_audio_output: dict[str, str] = {
+        CHATTERBOX_OUTPUT: AUDIO_OUTPUT_CHATTERBOX,
+        ELEVENLABS_OUTPUT: AUDIO_OUTPUT_ELEVENLABS,
+        LLAMA_ELEVENLABS_TTS_OUTPUT: AUDIO_OUTPUT_ELEVENLABS,
+        GEMINI_TTS_OUTPUT: AUDIO_OUTPUT_GEMINI_TTS,
+        LLAMA_GEMINI_TTS_OUTPUT: AUDIO_OUTPUT_GEMINI_TTS,
+        OPENAI_BACKEND: AUDIO_OUTPUT_OPENAI_REALTIME,
+        HF_BACKEND: AUDIO_OUTPUT_HF,
+    }
+    output = _legacy_response_to_audio_output.get(
         (response_backend or "").strip().lower(),
         AUDIO_OUTPUT_CHATTERBOX,
     )
@@ -705,61 +667,60 @@ def _normalize_audio_output_backend(value: str | None) -> str | None:
 
 
 def resolve_audio_backends(
-    backend_provider: str,
+    provider_id: str,
     explicit_input: str | None,
     explicit_output: str | None,
     response_backend: str | None = None,
 ) -> tuple[str, str]:
-    """Return the resolved (input, output) audio backend pair.
+    """Return the resolved ``(input, output)`` audio backend pair.
 
     Resolution order:
+
     1. If *both* explicit overrides are provided and the combination is
        supported, use them directly.
-    2. If *both* are provided but the combination is unsupported, log a WARNING
-       and fall back to the BACKEND_PROVIDER-derived defaults.
-    3. If only one override is set, treat it the same as unsupported (partial
-       overrides are not yet implemented) — log a WARNING and fall back.
-    4. If neither is set, derive from BACKEND_PROVIDER (backwards compat).
+    2. If *both* are provided but the combination is unsupported, log a
+       WARNING and fall back to the ``provider_id``-derived defaults.
+    3. If only one override is set, treat it the same as unsupported
+       (partial overrides are not yet implemented) — log a WARNING and
+       fall back.
+    4. If neither is set, derive from ``provider_id``.
 
     Args:
-        backend_provider:  The current BACKEND_PROVIDER value.
-        explicit_input:    Normalised AUDIO_INPUT_BACKEND override, or None.
-        explicit_output:   Normalised AUDIO_OUTPUT_BACKEND override, or None.
-        response_backend:  Normalised LOCAL_STT_RESPONSE_BACKEND value (only
-            consulted on the local_stt fallback path; ignored when explicit
-            overrides win).
+        provider_id:       A coarse provider id (``OPENAI_BACKEND``,
+            ``GEMINI_BACKEND``, ``HF_BACKEND``, ``LOCAL_STT_BACKEND``).
+        explicit_input:    Normalised ``AUDIO_INPUT_BACKEND`` override, or ``None``.
+        explicit_output:   Normalised ``AUDIO_OUTPUT_BACKEND`` override, or ``None``.
+        response_backend:  Optional legacy response-backend string, only
+            consulted on the ``local_stt`` derivation fallback path; ignored
+            when explicit overrides win.
 
     Returns:
         A ``(input_backend, output_backend)`` tuple of canonical backend IDs.
 
     """
-    derived = derive_audio_backends(backend_provider, response_backend)
+    derived = derive_audio_backends(provider_id, response_backend)
 
     both_set = explicit_input is not None and explicit_output is not None
     neither_set = explicit_input is None and explicit_output is None
 
     if neither_set:
-        # Pure backwards-compat path — nothing to validate.
         return derived
 
     if not both_set:
-        # Partial override — not supported yet.
         set_var = AUDIO_INPUT_BACKEND_ENV if explicit_input is not None else AUDIO_OUTPUT_BACKEND_ENV
         logger.warning(
             "Partial audio backend override detected: %s is set but the other is not. "
             "Both %s and %s must be set together to take effect. "
-            "Falling back to BACKEND_PROVIDER=%r defaults: input=%r, output=%r.",
+            "Falling back to provider_id=%r defaults: input=%r, output=%r.",
             set_var,
             AUDIO_INPUT_BACKEND_ENV,
             AUDIO_OUTPUT_BACKEND_ENV,
-            backend_provider,
+            provider_id,
             derived[0],
             derived[1],
         )
         return derived
 
-    # Both are set — validate the combination.
-    # At this point both_set is True so neither value is None.
     assert explicit_input is not None and explicit_output is not None
     combo = (explicit_input, explicit_output)
     if combo in _SUPPORTED_AUDIO_COMBINATIONS:
@@ -768,13 +729,13 @@ def resolve_audio_backends(
     logger.warning(
         "Unsupported audio backend combination: %s=%r + %s=%r. "
         "This pairing has no handler implementation yet. "
-        "Falling back to BACKEND_PROVIDER=%r defaults: input=%r, output=%r. "
+        "Falling back to provider_id=%r defaults: input=%r, output=%r. "
         "See docs/audio-backends.md for the supported matrix.",
         AUDIO_INPUT_BACKEND_ENV,
         explicit_input,
         AUDIO_OUTPUT_BACKEND_ENV,
         explicit_output,
-        backend_provider,
+        provider_id,
         derived[0],
         derived[1],
     )
@@ -917,18 +878,17 @@ else:
 class Config:
     """Configuration class for Robot Comic."""
 
-    # Required (one of these depending on BACKEND_PROVIDER)
+    # Required (one of these depending on the active pipeline)
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # The key is downloaded in console.py if needed
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     ELEVENLABS_API_KEY = os.getenv(ELEVENLABS_API_KEY_ENV)
     ELEVENLABS_VOICE = os.getenv(ELEVENLABS_VOICE_ENV) or ""
 
-    # Optional
-    BACKEND_PROVIDER = _normalize_backend_provider(
-        os.getenv("BACKEND_PROVIDER"),
-        os.getenv("MODEL_NAME"),
-    )
-    MODEL_NAME = _resolve_model_name(BACKEND_PROVIDER, os.getenv("MODEL_NAME"))
+    # MODEL_NAME — env override falls back to the pipeline-mode default (see
+    # ``_resolve_model_name_from_env``).  Resolved a second time at the bottom
+    # of the class body once ``PIPELINE_MODE`` is known so the HF-realtime
+    # path correctly gets the empty-string default.
+    MODEL_NAME = _resolve_model_name_from_env(os.getenv("MODEL_NAME"))
     HF_REALTIME_CONNECTION_MODE = (
         _normalize_hf_connection_mode(os.getenv(HF_REALTIME_CONNECTION_MODE_ENV)) or HF_DEFAULTS.connection_mode
     )
@@ -940,7 +900,6 @@ class Config:
     HF_TOKEN = os.getenv("HF_TOKEN")  # Optional, falls back to hf auth login if not set
     LOCAL_STT_PROVIDER = (os.getenv(LOCAL_STT_PROVIDER_ENV) or LOCAL_STT_DEFAULT_PROVIDER).strip().lower()
     LOCAL_STT_CACHE_DIR = os.getenv(LOCAL_STT_CACHE_DIR_ENV, LOCAL_STT_DEFAULT_CACHE_DIR)
-    LOCAL_STT_RESPONSE_BACKEND = _normalize_local_stt_response_backend(os.getenv(LOCAL_STT_RESPONSE_BACKEND_ENV))
     LOCAL_STT_LANGUAGE = _normalize_local_stt_language(os.getenv(LOCAL_STT_LANGUAGE_ENV))
     LOCAL_STT_MODEL = _normalize_local_stt_model(os.getenv(LOCAL_STT_MODEL_ENV))
     LOCAL_STT_UPDATE_INTERVAL = _normalize_local_stt_update_interval(os.getenv(LOCAL_STT_UPDATE_INTERVAL_ENV))
@@ -1038,8 +997,8 @@ class Config:
     FORCE_DELIVERY_TAGS = _env_flag("REACHY_MINI_FORCE_DELIVERY_TAGS", default=False)
 
     # Welcome-gate: when enabled, the handler is blocked until the user speaks
-    # the persona wake-name.  Only meaningful when BACKEND_PROVIDER uses the
-    # local STT pipeline.  Default is False (gate disabled).
+    # the persona wake-name.  Only meaningful when the composable pipeline
+    # uses the local STT (moonshine) input.  Default is False (gate disabled).
     WELCOME_GATE_ENABLED = _env_flag("REACHY_MINI_WELCOME_GATE_ENABLED", default=False)
 
     # Echo-guard cooldown after assistant audio ends.
@@ -1075,37 +1034,41 @@ class Config:
     WS_PAUSE_FLAG: bool = False
 
     # ---------------------------------------------------------------------------
-    # Modular audio pipeline (config scaffold — handler splitting is a follow-up).
-    # Set REACHY_MINI_AUDIO_INPUT_BACKEND and REACHY_MINI_AUDIO_OUTPUT_BACKEND to
-    # mix-and-match STT/TTS backends independently of BACKEND_PROVIDER.  When
-    # neither env var is set the values are derived from BACKEND_PROVIDER so
-    # existing deployments are unaffected.  Setting only one of the two is not
-    # supported yet and is treated as if neither were set (with a warning).
-    # Unsupported combinations (no handler exists) also fall back to defaults.
-    # See docs/audio-backends.md for the full supported matrix.
+    # Modular audio pipeline.  Operators set REACHY_MINI_AUDIO_INPUT_BACKEND +
+    # REACHY_MINI_AUDIO_OUTPUT_BACKEND (and optionally REACHY_MINI_PIPELINE_MODE)
+    # directly in the .env.  Defaults are the bundled HF realtime pair so a
+    # blank deploy still boots.  Setting only one of the two is treated as if
+    # neither were set (with a warning).  See docs/audio-backends.md.
     # ---------------------------------------------------------------------------
     _raw_audio_input = _normalize_audio_input_backend(os.getenv(AUDIO_INPUT_BACKEND_ENV))
     _raw_audio_output = _normalize_audio_output_backend(os.getenv(AUDIO_OUTPUT_BACKEND_ENV))
-    _resolved_audio = resolve_audio_backends(
-        BACKEND_PROVIDER,
-        _raw_audio_input,
-        _raw_audio_output,
-        response_backend=LOCAL_STT_RESPONSE_BACKEND,
-    )
+    # ``resolve_audio_backends`` handles every case (both set / one set /
+    # neither set) by falling back to the bundled HF pair when the explicit
+    # override is partial or unsupported.  Operators flip to a different
+    # pipeline via the admin UI, which writes both env vars + PIPELINE_MODE.
+    _resolved_audio = resolve_audio_backends(HF_BACKEND, _raw_audio_input, _raw_audio_output)
     AUDIO_INPUT_BACKEND: str = _resolved_audio[0]
     AUDIO_OUTPUT_BACKEND: str = _resolved_audio[1]
 
-    # 4th dial: PIPELINE_MODE. Composable (default) means the STT/LLM/TTS dials
-    # decide the pipeline; bundled values (openai_realtime / gemini_live /
-    # hf_realtime) fuse all three phases into one session. When the env var is
-    # unset we derive from the resolved (input, output) pair so existing .env
-    # files keep working — see derive_pipeline_mode.
+    # 4th dial: PIPELINE_MODE. Composable means the STT/LLM/TTS dials decide
+    # the pipeline; bundled values (openai_realtime / gemini_live /
+    # hf_realtime) fuse all three phases into one session.  When the env var
+    # is unset we derive from the resolved (input, output) pair — see
+    # ``derive_pipeline_mode``.
     _raw_pipeline_mode = _normalize_pipeline_mode(os.getenv(PIPELINE_MODE_ENV))
     PIPELINE_MODE: str = _raw_pipeline_mode or derive_pipeline_mode(AUDIO_INPUT_BACKEND, AUDIO_OUTPUT_BACKEND)
 
+    # Resolve MODEL_NAME a second time now that PIPELINE_MODE is known so the
+    # HF-realtime pipeline gets the correct empty-string default.
+    MODEL_NAME = _resolve_model_name_from_env(os.getenv("MODEL_NAME"), PIPELINE_MODE)
+
     logger.debug(
-        "Backend provider: %s, Model: %s, HF mode: %s, HF session URL set: %s, HF direct URL set: %s, HF_HOME: %s, Vision Model: %s, Local STT: %s/%s/%s response=%s cache=%s",
-        BACKEND_PROVIDER,
+        "Pipeline mode: %s, Audio: %s → %s, Model: %s, "
+        "HF mode: %s, HF session URL set: %s, HF direct URL set: %s, HF_HOME: %s, "
+        "Vision Model: %s, Local STT: %s/%s/%s cache=%s",
+        PIPELINE_MODE,
+        AUDIO_INPUT_BACKEND,
+        AUDIO_OUTPUT_BACKEND,
         MODEL_NAME,
         HF_REALTIME_CONNECTION_MODE,
         bool(HF_REALTIME_SESSION_URL and HF_REALTIME_SESSION_URL.strip()),
@@ -1115,7 +1078,6 @@ class Config:
         LOCAL_STT_PROVIDER,
         LOCAL_STT_LANGUAGE,
         LOCAL_STT_MODEL,
-        LOCAL_STT_RESPONSE_BACKEND,
         LOCAL_STT_CACHE_DIR,
     )
 
@@ -1198,11 +1160,9 @@ def refresh_runtime_config_from_env() -> None:
     config.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     config.ELEVENLABS_API_KEY = os.getenv(ELEVENLABS_API_KEY_ENV)
     config.ELEVENLABS_VOICE = os.getenv(ELEVENLABS_VOICE_ENV) or ""
-    config.BACKEND_PROVIDER = _normalize_backend_provider(
-        os.getenv("BACKEND_PROVIDER"),
-        os.getenv("MODEL_NAME"),
-    )
-    config.MODEL_NAME = _resolve_model_name(config.BACKEND_PROVIDER, os.getenv("MODEL_NAME"))
+    # First pass with no pipeline_mode so we can still pick up an env override;
+    # re-resolved below once ``config.PIPELINE_MODE`` is refreshed.
+    config.MODEL_NAME = _resolve_model_name_from_env(os.getenv("MODEL_NAME"))
     config.HF_REALTIME_CONNECTION_MODE = (
         _normalize_hf_connection_mode(os.getenv(HF_REALTIME_CONNECTION_MODE_ENV)) or HF_DEFAULTS.connection_mode
     )
@@ -1214,9 +1174,6 @@ def refresh_runtime_config_from_env() -> None:
     config.HF_TOKEN = os.getenv("HF_TOKEN")
     config.LOCAL_STT_PROVIDER = (os.getenv(LOCAL_STT_PROVIDER_ENV) or LOCAL_STT_DEFAULT_PROVIDER).strip().lower()
     config.LOCAL_STT_CACHE_DIR = os.getenv(LOCAL_STT_CACHE_DIR_ENV, LOCAL_STT_DEFAULT_CACHE_DIR)
-    config.LOCAL_STT_RESPONSE_BACKEND = _normalize_local_stt_response_backend(
-        os.getenv(LOCAL_STT_RESPONSE_BACKEND_ENV)
-    )
     config.LOCAL_STT_LANGUAGE = _normalize_local_stt_language(os.getenv(LOCAL_STT_LANGUAGE_ENV))
     config.LOCAL_STT_MODEL = _normalize_local_stt_model(os.getenv(LOCAL_STT_MODEL_ENV))
     config.LOCAL_STT_UPDATE_INTERVAL = _normalize_local_stt_update_interval(os.getenv(LOCAL_STT_UPDATE_INTERVAL_ENV))
@@ -1270,10 +1227,9 @@ def refresh_runtime_config_from_env() -> None:
     _refresh_raw_input = _normalize_audio_input_backend(os.getenv(AUDIO_INPUT_BACKEND_ENV))
     _refresh_raw_output = _normalize_audio_output_backend(os.getenv(AUDIO_OUTPUT_BACKEND_ENV))
     _refresh_audio = resolve_audio_backends(
-        config.BACKEND_PROVIDER,
+        HF_BACKEND,
         _refresh_raw_input,
         _refresh_raw_output,
-        response_backend=config.LOCAL_STT_RESPONSE_BACKEND,
     )
     config.AUDIO_INPUT_BACKEND = _refresh_audio[0]
     config.AUDIO_OUTPUT_BACKEND = _refresh_audio[1]
@@ -1281,6 +1237,10 @@ def refresh_runtime_config_from_env() -> None:
     config.PIPELINE_MODE = _refresh_pipeline_mode or derive_pipeline_mode(
         config.AUDIO_INPUT_BACKEND, config.AUDIO_OUTPUT_BACKEND
     )
+    # Second pass with the resolved pipeline_mode so HF-realtime gets the
+    # empty-string default that triggers the OpenAI-compat ``model`` kwarg
+    # omission in ``base_realtime._run_realtime_session``.
+    config.MODEL_NAME = _resolve_model_name_from_env(os.getenv("MODEL_NAME"), config.PIPELINE_MODE)
 
 
 def provider_id_from_pipeline(pipeline_mode: str, audio_output_backend: str) -> str:
@@ -1319,33 +1279,32 @@ def get_provider_id() -> str:
     return provider_id_from_pipeline(config.PIPELINE_MODE, config.AUDIO_OUTPUT_BACKEND)
 
 
-def get_backend_choice(model_name: str | None = None) -> str:
-    """Return the configured backend family.
+def get_backend_choice() -> str:
+    """Return the active realtime-handler ``PROVIDER_ID``.
 
-    Kept as a transitional alias during the Phase 4f cut-over.  Use
-    :func:`get_provider_id` in new code.
+    Kept as a transitional alias during the Phase 4f cut-over for any
+    external callers that hadn't migrated yet — use :func:`get_provider_id`
+    in new code.
     """
-    if model_name is not None:
-        return _normalize_backend_provider(model_name=model_name)
     return get_provider_id()
 
 
 def get_model_name_for_backend(backend: str) -> str:
-    """Return the default model name for a backend selector value."""
-    return DEFAULT_MODEL_NAME_BY_BACKEND[_normalize_backend_provider(backend)]
+    """Return the default model name for a ``PROVIDER_ID`` value."""
+    return DEFAULT_MODEL_NAME_BY_BACKEND[_normalize_provider_id(backend)]
 
 
 def get_backend_label(backend: str | None = None) -> str:
     """Return a human-readable label for the active (or specified) pipeline.
 
-    When ``backend`` is supplied, it is treated as a coarse ``PROVIDER_ID``
-    (the legacy ``BACKEND_PROVIDER`` value set) so older call sites keep
-    working.  When omitted, the label is derived from the active
-    ``PIPELINE_MODE`` / ``AUDIO_OUTPUT_BACKEND`` / ``LLM_BACKEND`` so the
-    text reflects the composable pipeline that's actually running.
+    When ``backend`` is supplied it is treated as a coarse ``PROVIDER_ID``
+    so older call sites keep working.  When omitted, the label is derived
+    from the active ``PIPELINE_MODE`` / ``AUDIO_OUTPUT_BACKEND`` /
+    ``LLM_BACKEND`` so the text reflects the composable pipeline that's
+    actually running.
     """
     if backend is not None:
-        normalized = _normalize_backend_provider(backend)
+        normalized = _normalize_provider_id(backend)
         if normalized != LOCAL_STT_BACKEND:
             return BACKEND_LABEL_BY_PROVIDER[normalized]
         # Fall through to the composable label-from-config path below.
@@ -1372,12 +1331,12 @@ def get_backend_label(backend: str | None = None) -> str:
 def get_available_voices_for_provider(provider_id: str | None = None) -> list[str]:
     """Return the curated voice list for a realtime-handler ``PROVIDER_ID``.
 
-    Renamed from ``get_available_voices_for_backend`` in Phase 4f. The
-    ``provider_id`` argument is one of ``OPENAI_BACKEND``, ``GEMINI_BACKEND``,
-    ``HF_BACKEND``, or ``LOCAL_STT_BACKEND`` — the same set of values that
-    were historically read from ``BACKEND_PROVIDER``.
+    The ``provider_id`` argument is one of ``OPENAI_BACKEND``,
+    ``GEMINI_BACKEND``, ``HF_BACKEND``, or ``LOCAL_STT_BACKEND`` — the same
+    coarse provider strings the realtime handlers carry on their
+    ``PROVIDER_ID`` ClassVar.
     """
-    normalized = get_provider_id() if provider_id is None else _normalize_backend_provider(provider_id)
+    normalized = get_provider_id() if provider_id is None else _normalize_provider_id(provider_id)
     if normalized == GEMINI_BACKEND:
         return list(GEMINI_AVAILABLE_VOICES)
     if normalized == HF_BACKEND:
@@ -1388,10 +1347,9 @@ def get_available_voices_for_provider(provider_id: str | None = None) -> list[st
 def get_default_voice_for_provider(provider_id: str | None = None) -> str:
     """Return the default voice for a realtime-handler ``PROVIDER_ID``.
 
-    Renamed from ``get_default_voice_for_backend`` in Phase 4f. See
-    :func:`get_available_voices_for_provider` for argument semantics.
+    See :func:`get_available_voices_for_provider` for argument semantics.
     """
-    normalized = get_provider_id() if provider_id is None else _normalize_backend_provider(provider_id)
+    normalized = get_provider_id() if provider_id is None else _normalize_provider_id(provider_id)
     return DEFAULT_VOICE_BY_BACKEND[normalized]
 
 

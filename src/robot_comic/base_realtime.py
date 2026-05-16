@@ -91,10 +91,10 @@ class BaseRealtimeHandler(AsyncStreamHandler, ConversationHandler, ABC):
     """Shared realtime stream handler for OpenAI-compatible client APIs."""
 
     # Stable provider identifier carried on every concrete realtime handler.
-    # Drives voice-catalog lookups and OTel ``gen_ai.system`` / ``robot.mode``
-    # attribute emission. Replaces the pre-Phase-4f ``BACKEND_PROVIDER``
-    # ClassVar — the emitted *value* strings (``"openai"``, ``"gemini"``,
-    # ``"huggingface"``, …) are unchanged so dashboards keep working.
+    # Drives voice-catalog lookups and the OTel ``gen_ai.system`` /
+    # ``robot.mode`` attribute emission.  Emitted *value* strings
+    # (``"openai"``, ``"gemini"``, ``"huggingface"``, …) are intentionally
+    # unchanged so observability dashboards keep working unchanged.
     PROVIDER_ID: ClassVar[str]
     SAMPLE_RATE: ClassVar[int]
     REFRESH_CLIENT_ON_RECONNECT: ClassVar[bool]

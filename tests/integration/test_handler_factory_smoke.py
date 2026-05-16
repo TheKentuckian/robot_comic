@@ -19,7 +19,7 @@ hotfixed in #260:
 
 3. **Config-resolution matrix** (catches env-var routing bugs):
    parametrise over the documented matrix in ``docs/audio-backends.md`` plus the
-   legacy ``LOCAL_STT_RESPONSE_BACKEND`` values, asserting that
+   legacy ``response_backend`` values, asserting that
    ``resolve_audio_backends`` returns the expected tuple.  Uses the post-#262
    ``derive_audio_backends`` ``response_backend`` kwarg behaviour.
 
@@ -319,7 +319,7 @@ class TestLifecycleSmoke:
 # 3. Config-resolution matrix
 #
 # Parametrise over the documented matrix in docs/audio-backends.md plus the
-# legacy LOCAL_STT_RESPONSE_BACKEND values.  Uses the post-#262 behaviour:
+# legacy response_backend values.  Uses the post-#262 behaviour:
 # derive_audio_backends takes an optional ``response_backend`` kwarg that maps
 # the legacy local_stt response selector to the canonical AUDIO_OUTPUT_*.
 # ---------------------------------------------------------------------------
@@ -328,7 +328,7 @@ class TestLifecycleSmoke:
 class TestConfigResolutionMatrix:
     """resolve_audio_backends + derive_audio_backends route the env-var matrix correctly."""
 
-    # ----- pure derivation from BACKEND_PROVIDER (no overrides, no response selector)
+    # ----- pure derivation from provider_id (no overrides, no response selector)
 
     @pytest.mark.parametrize(
         "backend_provider, expected",
@@ -343,7 +343,7 @@ class TestConfigResolutionMatrix:
         result = derive_audio_backends(backend_provider)
         assert result == expected, f"derive_audio_backends({backend_provider!r}) → {result}, expected {expected}"
 
-    # ----- post-#262: derive_audio_backends honours LOCAL_STT_RESPONSE_BACKEND
+    # ----- post-#262: derive_audio_backends honours response_backend
 
     @pytest.mark.parametrize(
         "response_backend, expected_output",
@@ -388,7 +388,7 @@ class TestConfigResolutionMatrix:
         # Use a deliberately mismatched provider so we can prove the explicit pair won.
         result = resolve_audio_backends(LOCAL_STT_BACKEND, input_b, output_b)
         assert result == (input_b, output_b), (
-            f"Explicit ({input_b!r}, {output_b!r}) must win over BACKEND_PROVIDER fallback"
+            f"Explicit ({input_b!r}, {output_b!r}) must win over provider_id fallback"
         )
 
     def test_unsupported_pair_falls_back_to_derived(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -410,12 +410,12 @@ class TestConfigResolutionMatrix:
         assert any("Partial" in r.message for r in caplog.records)
 
     def test_no_overrides_returns_derived(self) -> None:
-        """Neither override set → pure BACKEND_PROVIDER derivation."""
+        """Neither override set → pure provider_id derivation."""
         result = resolve_audio_backends(OPENAI_BACKEND, None, None)
         assert result == (AUDIO_INPUT_OPENAI_REALTIME, AUDIO_OUTPUT_OPENAI_REALTIME)
 
     # ----- the cross-product that resolve_audio_backends ends up using in production:
-    # BACKEND_PROVIDER=local_stt with a LOCAL_STT_RESPONSE_BACKEND env, no explicit pair.
+    # provider_id=local_stt with a response_backend env, no explicit pair.
 
     @pytest.mark.parametrize(
         "response_backend, expected_output",

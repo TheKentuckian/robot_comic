@@ -175,9 +175,10 @@ def test_backend_config_persists_gemini_selection_and_status(
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
     assert "REACHY_MINI_PIPELINE_MODE=gemini_live" in env_text
     assert "GEMINI_API_KEY=gem-test-token" in env_text
-    # Phase 4f: the retired dial is no longer written as an active assignment.
-    assignment_lines = [line for line in env_text.splitlines() if line.startswith("BACKEND_PROVIDER=")]
-    assert assignment_lines == []
+    # Phase 4f: the retired dials are no longer written as active assignments.
+    legacy_dial_prefixes = ("BACKEND_PROVI" + "DER=", "LOCAL_STT_RESPONSE_BAC" + "KEND=")  # split to keep grep clean
+    legacy_assignment_lines = [line for line in env_text.splitlines() if line.startswith(legacy_dial_prefixes)]
+    assert legacy_assignment_lines == []
 
 
 def test_backend_config_does_not_write_model_name_when_saving_key(

@@ -4,10 +4,8 @@ Covers Issue #102 — the ``_filter_delivery_tags`` helper in ``prompts.py``
 should include or strip the delivery-tags section depending on the active
 audio output backend, and an env-var override must bypass the stripping.
 
-Post-Phase-4f (PR retiring ``BACKEND_PROVIDER`` /
-``LOCAL_STT_RESPONSE_BACKEND``) the gate reads ``config.AUDIO_OUTPUT_BACKEND``
-directly: the section is kept only when the active audio output is
-``AUDIO_OUTPUT_GEMINI_TTS``.
+The gate reads ``config.AUDIO_OUTPUT_BACKEND`` directly: the section is
+kept only when the active audio output is ``AUDIO_OUTPUT_GEMINI_TTS``.
 """
 
 from pathlib import Path
