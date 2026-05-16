@@ -153,6 +153,15 @@ class GeminiTTSAdapter:
         ``tags`` is accepted for Protocol compliance and silently dropped —
         delivery tags are parsed from the LLM-generated text itself (see
         module docstring "Tag handling — known gap").
+
+        Boot-timeline emit: each frame yields a call to
+        ``telemetry.emit_first_greeting_audio_once`` before the ``yield`` so
+        the composable ``(moonshine, gemini_tts)`` triple lights the monitor's
+        ``first_greeting.tts_first_audio`` row at the same point the legacy
+        ``_dispatch_completed_transcript`` does (``gemini_tts.py``). The
+        helper has a process-level once-guard, so the per-frame call only
+        fires the emit once; subsequent calls short-circuit cheaply. See
+        Lifecycle Hook #3b spec (``docs/superpowers/specs/2026-05-16-lifecycle-hook-3b-gemini-tts-first-greeting.md``).
         """
         del tags  # accepted for Protocol compliance; the adapter parses
         # tags out of the text via extract_delivery_tags below.
@@ -185,6 +194,14 @@ class GeminiTTSAdapter:
             if pcm_bytes is None:
                 continue
             for frame in GeminiTTSResponseHandler._pcm_to_frames(pcm_bytes):
+                # Boot-timeline event (#321 / Lifecycle Hook #3b): the helper
+                # owns the once-per-process dedupe, so calling per frame is
+                # safe and matches the legacy emit site at
+                # ``gemini_tts.py:415``. Imported lazily to mirror the legacy
+                # pattern and keep cold-import cost off this hot loop.
+                from robot_comic import telemetry as _telemetry
+
+                _telemetry.emit_first_greeting_audio_once()
                 yield AudioFrame(samples=frame, sample_rate=GEMINI_TTS_OUTPUT_SAMPLE_RATE)
 
     async def shutdown(self) -> None:

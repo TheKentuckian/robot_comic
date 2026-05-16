@@ -20,6 +20,7 @@ Differences from :mod:`tests.adapters.test_elevenlabs_tts_adapter` /
 
 from __future__ import annotations
 from typing import Any
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -237,6 +238,73 @@ async def test_synthesize_ignores_protocol_tags_arg() -> None:
     # base persona instruction.
     assert instruction is not None
     assert "Delivery cues for this line:" not in instruction
+
+
+# ---------------------------------------------------------------------------
+# synthesize() — boot-timeline emit (Lifecycle Hook #3b, #337 / #321)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_emits_first_greeting_tts_first_audio_on_first_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``GeminiTTSAdapter.synthesize`` must call
+    ``telemetry.emit_first_greeting_audio_once`` on the first PCM frame it
+    yields, so the composable ``(moonshine, gemini_tts)`` triple lights up
+    the monitor's boot-timeline ``first_greeting.tts_first_audio`` row the
+    same way the ElevenLabs and Chatterbox adapters do.
+
+    The helper has a process-level once-guard
+    (``telemetry._FIRST_GREETING_EMITTED``) so per-frame calls are safe; the
+    test only asserts that *at least one* call lands when audio is yielded.
+
+    Pins Lifecycle Hook #3b (#337). PR #374 (Hook #3) flagged this as a
+    follow-up — see
+    ``docs/superpowers/specs/2026-05-16-lifecycle-hook-3b-gemini-tts-first-greeting.md``.
+    """
+    from robot_comic import telemetry
+
+    emit_mock = MagicMock()
+    monkeypatch.setattr(telemetry, "emit_first_greeting_audio_once", emit_mock)
+
+    handler = _StubGeminiTTSHandler(tts_results=[_pcm_bytes(2400)])
+    adapter = GeminiTTSAdapter(handler)  # type: ignore[arg-type]
+
+    out = [frame async for frame in adapter.synthesize("Hello there.")]
+
+    assert len(out) == 1
+    assert emit_mock.call_count >= 1, (
+        "GeminiTTSAdapter.synthesize must call "
+        "telemetry.emit_first_greeting_audio_once at least once on the "
+        "first PCM frame; got 0 calls"
+    )
+
+
+@pytest.mark.asyncio
+async def test_synthesize_emits_first_greeting_helper_remains_invoked_on_subsequent_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second ``synthesize`` call on the same adapter still invokes the
+    helper. The helper itself owns the once-per-process dedupe — the adapter
+    must not short-circuit on its own state."""
+    from robot_comic import telemetry
+
+    emit_mock = MagicMock()
+    monkeypatch.setattr(telemetry, "emit_first_greeting_audio_once", emit_mock)
+
+    handler = _StubGeminiTTSHandler(tts_results=[_pcm_bytes(2400), _pcm_bytes(2400)])
+    adapter = GeminiTTSAdapter(handler)  # type: ignore[arg-type]
+
+    [_ async for _ in adapter.synthesize("First.")]
+    first_call_count = emit_mock.call_count
+    assert first_call_count >= 1
+
+    [_ async for _ in adapter.synthesize("Second.")]
+    assert emit_mock.call_count > first_call_count, (
+        "GeminiTTSAdapter must not add its own dedupe — the once-guard "
+        "lives in telemetry.emit_first_greeting_audio_once itself"
+    )
 
 
 # ---------------------------------------------------------------------------
