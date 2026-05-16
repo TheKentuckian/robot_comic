@@ -49,7 +49,7 @@ local `.venv`. Those commands need updating to match this workflow.
 | Extra | Installs | Required for |
 |---|---|---|
 | `local_stt` | `moonshine-voice` | Local Moonshine STT backend (default) |
-| `faster_whisper_stt` | `faster-whisper`, `silero-vad` | Alternate local STT (Phase 5f, A/B against Moonshine) |
+| `faster_whisper_stt` | `faster-whisper`, `webrtcvad` | Alternate local STT (Phase 5f, A/B against Moonshine; webrtcvad picked over silero-vad in 5f.1 to keep the install under the chassis eMMC budget) |
 | `local_vision` | torch, transformers, accelerate | SmolVLM2 local vision |
 | `yolo_vision` | ultralytics, supervision, opencv | YOLO head tracking |
 

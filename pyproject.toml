@@ -67,9 +67,11 @@ faster_whisper_stt = [
   # scripts (script use is decoupled — `asset_build` keeps its own copy
   # so a faster-whisper bump here doesn't silently break build_welcome_assets.py).
   "faster-whisper>=1.0.0",
-  # silero-vad chunks streaming audio into utterances since faster-whisper
-  # is batch-only. v5+ ships the modernised VADIterator helper.
-  "silero-vad>=5.0.0",
+  # Phase 5f.1: webrtcvad chunks streaming audio into utterances since
+  # faster-whisper is batch-only. Picked over silero-vad because silero-vad
+  # transitively pulls torch (~2 GB), which won't fit on the 14 GB chassis
+  # eMMC. webrtcvad is a ~50 KB pure C extension with no torch / no onnx.
+  "webrtcvad>=2.0.10",
 ]
 otel = [
   # OTLP exporter for remote/SigNoz export (ROBOT_INSTRUMENTATION=remote).
