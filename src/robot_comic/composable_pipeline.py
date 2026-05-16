@@ -61,6 +61,7 @@ import difflib
 import logging
 import collections
 from typing import TYPE_CHECKING, Any, Callable, Awaitable
+from difflib import SequenceMatcher
 
 from opentelemetry import trace
 from opentelemetry import context as otel_context
@@ -155,6 +156,74 @@ def _normalize_for_echo_check(text: str) -> str:
     no_punct = _PUNCT_RE.sub(" ", lowered)
     collapsed = _WS_RE.sub(" ", no_punct)
     return collapsed.strip()
+
+
+# Duplicate-suppression window + similarity threshold (post-5f.2).
+#
+# The legacy mixin (``LocalSTTInputMixin._handle_local_stt_event``,
+# ``local_stt_realtime.py:596``) used a 0.75s window with strict
+# text-equality dedup. That misses Moonshine's "hypothesis-burst" pattern
+# where one user utterance fires multiple ``on_line_completed`` events
+# with slightly-different final hypotheses ("Hey Rickles" / "Hey Rickles."
+# / "Hey Rickles right?"). Each variant is its own asyncio task (see
+# ``adapters/moonshine_listener.py:321`` — every event gets its own
+# ``create_task``); each passes the text-equality check; each runs a
+# full LLM round-trip and TTS span. Caught once during 2026-05-16
+# hardware validation at 16:58 — three ``tts.synthesize`` spans landed
+# within ~1s with response char_counts 96/96/137 (the two 96s being the
+# LLM's deterministic response to two near-identical hypotheses).
+#
+# Fix (Phase 5 follow-up): widen the window to 2.0s and use
+# stdlib :class:`difflib.SequenceMatcher` similarity (>= 0.85) instead
+# of text equality. Window widening covers the case where the LLM
+# round-trip is slow enough that variants land >0.75s apart.
+# Similarity catches the variants without false-positive-ing legitimate
+# distinct user lines (which differ by far more than 15%).
+#
+# Trade-off: a legitimate "Hey Rickles!" repeated emphatically within 2s
+# is suppressed. Acceptable — the comedian persona doesn't need
+# sub-2s-cadence-repeat fidelity, and an open variant-burst is much
+# worse (motors jitter from spurious tool calls, audio overlaps).
+#
+# Operators can revert behaviour with one constant: set
+# ``DEDUP_SIMILARITY_THRESHOLD = 1.0`` for legacy text-equality,
+# ``DEDUP_WINDOW_S = 0.75`` for the legacy window.
+#
+# Rationale + the 16:58 hardware finding are documented in
+# ``docs/superpowers/specs/2026-05-16-phase-5-duplicate-tts-storm-investigation.md``.
+DEDUP_WINDOW_S = 2.0
+DEDUP_SIMILARITY_THRESHOLD = 0.85
+
+
+def _is_near_duplicate(a: str, b: str) -> bool:
+    """Return True iff *a* and *b* look like edit-variants of the same utterance.
+
+    Used by :meth:`ComposablePipeline._on_transcript_completed` to widen
+    the dedup beyond strict text equality so Moonshine's
+    hypothesis-burst pattern is captured.
+
+    Implementation notes:
+
+    - Exact-match short-circuit covers the common case (and the legacy
+      path) without paying for the SequenceMatcher init.
+    - Length pre-filter: ``SequenceMatcher.ratio()`` is upper-bounded by
+      ``2 * matches / (la + lb)`` and ``matches <= min(la, lb)``, so the
+      ratio is bounded by ``2 * min(la, lb) / (la + lb)``. If that
+      upper bound is below the threshold, no string content can push
+      the actual ratio over the bar — skip the O(n*m) ratio call.
+    - Empty-string guard returns False (an empty new transcript already
+      short-circuits at the caller before reaching this function; this
+      is defensive).
+    """
+    if a == b:
+        return True
+    if not a or not b:
+        return False
+    la, lb = len(a), len(b)
+    max_possible_ratio = 2 * min(la, lb) / (la + lb)
+    if max_possible_ratio < DEDUP_SIMILARITY_THRESHOLD:
+        return False
+    return SequenceMatcher(a=a, b=b).ratio() >= DEDUP_SIMILARITY_THRESHOLD
 
 
 class ComposablePipeline:
@@ -495,10 +564,39 @@ class ComposablePipeline:
                     )
                     return
 
-        # Duplicate-suppression window. Mirrors mixin lines 574-578.
+        # Duplicate-suppression window. Originally mirrored the legacy
+        # mixin's 0.75s strict-equality dedup (``local_stt_realtime.py:596``).
+        # Phase-5 follow-up widened the window to ``DEDUP_WINDOW_S`` and
+        # swapped equality for similarity (``DEDUP_SIMILARITY_THRESHOLD``)
+        # to catch Moonshine's hypothesis-burst pattern; see the constants
+        # at module top and the 2026-05-16-phase-5-duplicate-tts-storm
+        # spec for the hardware finding that motivated the change.
+        #
+        # The check + set is synchronous (no ``await``) and therefore
+        # atomic within a single asyncio task — two concurrent
+        # ``_on_transcript_completed`` tasks for the same utterance are
+        # serialised by the event loop's single-tick scheduling, so the
+        # second task sees the first task's cache update and dedups
+        # correctly even though both were dispatched concurrently from
+        # the STT listener's ``call_soon_threadsafe`` hop.
         now = time.perf_counter()
-        if transcript == self._last_completed_transcript and now - self._last_completed_at < 0.75:
-            logger.debug("Ignoring duplicate transcript: %s", transcript)
+        if now - self._last_completed_at < DEDUP_WINDOW_S and _is_near_duplicate(
+            transcript, self._last_completed_transcript
+        ):
+            if transcript == self._last_completed_transcript:
+                # Quiet path — exact-match dedup is the high-volume
+                # legacy case and the journal would drown if we shouted.
+                logger.debug("Ignoring duplicate transcript: %s", transcript)
+            else:
+                # Near-duplicate dedup is rarer and load-bearing for the
+                # hardware story; log at WARNING so journalctl makes the
+                # fix easy to verify on the next on-robot session.
+                logger.warning(
+                    "Suppressing near-duplicate transcript within %.1fs window: prev=%r new=%r",
+                    DEDUP_WINDOW_S,
+                    self._last_completed_transcript,
+                    transcript,
+                )
             return
         self._last_completed_transcript = transcript
         self._last_completed_at = now
