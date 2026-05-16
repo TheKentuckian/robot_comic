@@ -18,7 +18,7 @@ authoritative roadmap; per-sub-phase specs and TDD plans live under
 | 4c.3 | `(moonshine, elevenlabs, gemini)` routing (reuses 4c.2 adapter) | ✅ Done | #364 (commit eb45e14) |
 | 4c.4 | `(moonshine, elevenlabs, gemini-fallback)` routing | ✅ Done | #365 (commit ac1232e) |
 | 4c.5 | `GeminiTTSAdapter` + `GeminiBundledLLMAdapter` + `(moonshine, gemini_tts)` routing | ✅ Done | #366 (commit 808da59) |
-| 4c-tris | `HybridRealtimePipeline` for `LocalSTTOpenAIRealtimeHandler` / `LocalSTTHuggingFaceRealtimeHandler` | ⏸ Pending operator sign-off — memo at `docs/superpowers/specs/2026-05-15-phase-4c-tris-hybrid-realtime-design.md` | — |
+| 4c-tris | `HybridRealtimePipeline` for `LocalSTTOpenAIRealtimeHandler` / `LocalSTTHuggingFaceRealtimeHandler` | ⏭ Skipped (Option B per memo `docs/superpowers/specs/2026-05-15-phase-4c-tris-hybrid-realtime-design.md`) | #369 |
 | 4d | Flip default `FACTORY_PATH=composable` | ⏸ Pending | — |
 | 4e | Delete legacy concrete handlers + the dual-path dial + rewrite tests | ⏸ Pending | — |
 | 4f | Retire `BACKEND_PROVIDER` / `LOCAL_STT_RESPONSE_BACKEND` config dials | ⏸ Pending | — |
@@ -302,22 +302,21 @@ Cutting it is its own mini-refactor.
 
 ## Deferred lifecycle hooks — follow-up PRs between sub-phases
 
-These were deliberately left out of 4a/4b to keep those sub-phases small.
-Each one is a small follow-up PR; the manager can interleave them between
-the main sub-phases or batch them right before 4d (default flip), where
-their absence would actually affect behaviour.
+All five hooks landed before 4d (default flip), so the composable path
+reaches behavioural parity with legacy at the moment the default flips.
 
-| Hook | Where it fires today | New home |
-|------|----------------------|----------|
-| `telemetry.record_llm_duration` | Inside legacy `_call_llm` paths | `LlamaLLMAdapter.chat` / `GeminiLLMAdapter.chat` (wrap timing in the adapter) |
-| Boot-timeline supporting events (#321) | `start_up()` of bundled handlers | `ComposableConversationHandler.start_up()` before delegating to pipeline |
-| `record_joke_history` (`llama_base.py:553-568`) | After LLM response in legacy `_run_response_loop` | `LlamaLLMAdapter.chat` post-call, or as a `ComposablePipeline` hook |
-| `history_trim.trim_history_in_place` | Inside `_call_llm` before each request | Orchestrator-level in `ComposablePipeline._run_llm_loop_and_speak` |
-| `_speaking_until` echo-guard timestamps (`elevenlabs_tts.py:471-473`) | Inside `_stream_tts_to_queue` — already lives on legacy TTS handler | "For free" — adapter delegation preserves it. Confirm with a test; if confirmed, no PR needed. |
+| Hook | Status | PR | Notes |
+|------|--------|----|-------|
+| `_speaking_until` echo-guard (`elevenlabs_tts.py:471-473`) | ✅ Done | #372 | Doc's "for free via adapter delegation" claim was **wrong**: the legacy write site lived in `emit()`, which the composable wrapper bypasses. Real fix moved the derivation into `_enqueue_audio_frame`. Also caught two subclass put-site bypasses (`llama_elevenlabs_tts.py`, `chatterbox_tts.py`). |
+| `telemetry.record_llm_duration` | ✅ Done | #373 | NOT preserved through delegation. Fix wraps timing inside `LlamaLLMAdapter.chat`, `GeminiLLMAdapter.chat`, `GeminiBundledLLMAdapter.chat` (`try/finally` — exception parity with legacy). Bundled-Gemini gets new telemetry the legacy never emitted. |
+| Boot-timeline supporting events (#321) | ✅ Done | #374 | Of #321's four events, only `handler.start_up.complete` was dropped (others preserved via `main.py` emission or adapter delegation). Fix emits in `ComposableConversationHandler.start_up()` before `pipeline.start_up()`. **Follow-up flagged:** `GeminiTTSAdapter` doesn't emit `first_greeting.tts_first_audio`; same bug class, separate test surface, deferred. |
+| `record_joke_history` (`llama_base.py:578-594`, `gemini_tts.py:380-394`) | ✅ Done | #375 | NOT preserved. Orchestrator-level fix in `ComposablePipeline._speak_assistant_text`. New public `joke_history.record_joke_history(text)` helper for testability; legacy sites untouched until 4e. |
+| `history_trim.trim_history_in_place` | ✅ Done | #376 | NOT preserved (doc's hint that delegation might cover it was incorrect — legacy trim lives in `_dispatch_completed_transcript`, not `_call_llm`). Orchestrator-level fix at top of `ComposablePipeline._run_llm_loop_and_speak`. |
 
-**Recommended order:** echo-guard confirmation first (probably no work),
-then telemetry, then boot-timeline events, then joke history, then history
-trim. The last two are the most likely to need ABC / Protocol changes.
+**Lessons learned:** Doc-table "for free via adapter delegation" claims are
+suspect by default. 5/5 hooks required real code changes; 0/5 were
+test-only confirmations. Every future hook briefing should assume a fix is
+needed and verify with a regression test before claiming preservation.
 
 ---
 
