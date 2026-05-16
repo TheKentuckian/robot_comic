@@ -39,15 +39,23 @@ wraps the LLM half of the SAME handler instance, so a single ``genai.Client``
 backs both Protocol surfaces — see ``docs/superpowers/specs/2026-05-15-phase-4c5-gemini-tts-adapter.md``
 Q1 for the design rationale (option (b): two adapters on one handler).
 
-## Tag handling — known gap
+## Tag handling — consume-or-fallback (Phase 5a.2)
 
-The Protocol's ``tags: tuple[str, ...]`` parameter is **accepted and ignored**.
-Today's ``ComposablePipeline._speak_assistant_text`` does not plumb delivery
-tags from ``LLMResponse.metadata`` (the legacy handler embeds them in the
-LLM-generated text instead). The adapter parses tags from the text via
-:func:`extract_delivery_tags`, matching legacy behaviour exactly. Once tag
-plumbing lands (Phase 4 follow-up), the adapter can switch to the Protocol's
-``tags`` parameter as the source of truth.
+The Protocol's ``tags: tuple[str, ...]`` parameter is now honoured with a
+fallback path so the legacy text-embedded markers keep working:
+
+- ``tags`` non-empty → the adapter uses those tags as the per-call delivery
+  cue for every sentence. ``SHORT_PAUSE_TAG`` in the param emits a single
+  leading silence burst (not per-sentence — the param applies to the whole
+  ``synthesize()`` call).
+- ``tags`` empty → fall back to per-sentence
+  :func:`extract_delivery_tags(sentence)`. ``[short pause]`` triggers
+  per-occurrence silence frames — today's behaviour, unchanged.
+
+LLM adapters today leave ``LLMResponse.delivery_tags`` empty (the producer
+side is a separate concern); the fallback path therefore stays the
+production-hot path. Future PRs that surface structured delivery cues from
+the LLM populate ``delivery_tags`` and the consume path activates.
 
 ## ``shutdown()`` is a no-op
 
@@ -60,6 +68,7 @@ adapter doesn't own a queue.
 from __future__ import annotations
 import asyncio
 import logging
+import time
 from typing import Any, Protocol, AsyncIterator
 
 from robot_comic.backends import AudioFrame
@@ -143,6 +152,7 @@ class GeminiTTSAdapter:
         self,
         text: str,
         tags: tuple[str, ...] = (),
+        first_audio_marker: list[float] | None = None,
     ) -> AsyncIterator[AudioFrame]:
         """Stream PCM frames for *text* as :class:`AudioFrame` instances.
 
@@ -150,9 +160,21 @@ class GeminiTTSAdapter:
         ``GeminiTTSResponseHandler._dispatch_completed_transcript`` so the
         wrapper produces the same audio as the legacy handler does today.
 
-        ``tags`` is accepted for Protocol compliance and silently dropped —
-        delivery tags are parsed from the LLM-generated text itself (see
-        module docstring "Tag handling — known gap").
+        Phase 5a.2 — tag handling (consume-or-fallback):
+
+        - When ``tags`` is **empty** (the orchestrator default), the adapter
+          falls back to per-sentence text parsing via
+          :func:`extract_delivery_tags`. ``[short pause]`` triggers a
+          pre-sentence silence frame per occurrence (today's behaviour).
+        - When ``tags`` is **non-empty**, those tags are used as the
+          per-call delivery cue for every sentence's
+          :func:`build_tts_system_instruction`. ``SHORT_PAUSE_TAG`` in the
+          param emits silence **once** at the head of the stream (not
+          per-sentence — the param applies to the whole call).
+
+        Phase 5a.2 — ``first_audio_marker`` (when non-None) receives a
+        single ``time.monotonic()`` append on the first yielded frame so
+        the orchestrator can record per-turn first-audio latency.
 
         Boot-timeline emit: each frame yields a call to
         ``telemetry.emit_first_greeting_audio_once`` before the ``yield`` so
@@ -163,22 +185,33 @@ class GeminiTTSAdapter:
         fires the emit once; subsequent calls short-circuit cheaply. See
         Lifecycle Hook #3b spec (``docs/superpowers/specs/2026-05-16-lifecycle-hook-3b-gemini-tts-first-greeting.md``).
         """
-        del tags  # accepted for Protocol compliance; the adapter parses
-        # tags out of the text via extract_delivery_tags below.
-
         if not text:
             return
 
         base_instruction = load_profile_tts_instruction()
         sentences = split_sentences(text) or [text]
+        # Phase 5a.2 consume-or-fallback: when ``tags`` is non-empty, use it
+        # as the per-call delivery cue and skip per-sentence text parsing.
+        param_tags: list[str] | None = list(tags) if tags else None
+        # When the param drives the cue, ``[short pause]`` emits a single
+        # leading silence burst. The fallback path keeps per-sentence
+        # silence semantics so multi-sentence text with embedded
+        # ``[short pause]`` markers behaves as before.
+        if param_tags is not None and SHORT_PAUSE_TAG in param_tags:
+            for frame in GeminiTTSResponseHandler._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS)):
+                yield AudioFrame(samples=frame, sample_rate=GEMINI_TTS_OUTPUT_SAMPLE_RATE)
+        _marker_appended = False
         for sentence in sentences:
             spoken = strip_gemini_tags(sentence)
             if not spoken:
                 continue
-            sentence_tags = extract_delivery_tags(sentence)
-            if SHORT_PAUSE_TAG in sentence_tags:
-                for frame in GeminiTTSResponseHandler._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS)):
-                    yield AudioFrame(samples=frame, sample_rate=GEMINI_TTS_OUTPUT_SAMPLE_RATE)
+            if param_tags is not None:
+                sentence_tags = param_tags
+            else:
+                sentence_tags = extract_delivery_tags(sentence)
+                if SHORT_PAUSE_TAG in sentence_tags:
+                    for frame in GeminiTTSResponseHandler._pcm_to_frames(_silence_pcm(SHORT_PAUSE_MS)):
+                        yield AudioFrame(samples=frame, sample_rate=GEMINI_TTS_OUTPUT_SAMPLE_RATE)
             instruction = build_tts_system_instruction(base_instruction, sentence_tags)
             try:
                 pcm_bytes = await self._handler._call_tts_with_retry(spoken, system_instruction=instruction)
@@ -202,6 +235,9 @@ class GeminiTTSAdapter:
                 from robot_comic import telemetry as _telemetry
 
                 _telemetry.emit_first_greeting_audio_once()
+                if first_audio_marker is not None and not _marker_appended:
+                    first_audio_marker.append(time.monotonic())
+                    _marker_appended = True
                 yield AudioFrame(samples=frame, sample_rate=GEMINI_TTS_OUTPUT_SAMPLE_RATE)
 
     async def shutdown(self) -> None:
