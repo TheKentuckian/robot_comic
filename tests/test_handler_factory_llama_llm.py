@@ -17,13 +17,26 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from robot_comic import config as cfg_mod
 from robot_comic.config import (
     LLM_BACKEND_LLAMA,
+    FACTORY_PATH_LEGACY,
     AUDIO_INPUT_MOONSHINE,
     AUDIO_OUTPUT_ELEVENLABS,
     PIPELINE_MODE_COMPOSABLE,
 )
 from robot_comic.handler_factory import HandlerFactory
+
+
+@pytest.fixture(autouse=True)
+def _pin_factory_path_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin ``FACTORY_PATH=legacy`` for this module — see test_handler_factory.py.
+
+    Phase 4d (#337) flipped the default to ``composable``; the assertions
+    here target the legacy ``LocalSTTLlamaElevenLabsHandler`` selection,
+    which only runs on the legacy path until 4e deletes it.
+    """
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_LEGACY)
 
 
 @pytest.fixture()
