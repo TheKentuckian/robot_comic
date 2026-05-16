@@ -34,7 +34,13 @@ Source-of-truth plan: `docs/superpowers/specs/2026-05-16-phase-5-exploration.md`
 | 5b | Wire `ComposablePipeline.tool_dispatcher` in factory + `tool.execute` span (was latent prod bug — tool-triggered turns silently dropped on 4 of 5 composable triples) | ✅ Done | #388 (commit a8754d5) |
 | 5c | Voice/personality method redesign (`apply_personality` ABC + wrapper forwarding) | ⏸ Pending operator input |  — |
 | 5d | `ConversationHandler` ABC: shrink (FastRTC-shim only) or collapse | ⏸ Pending **operator decision** (shrink vs collapse) | — |
-| 5e | Factory STT decouple — make new STT backends pluggable cleanly | ⏸ Pending | — |
+| 5e | Factory STT decouple — make new STT backends pluggable cleanly (retire `LocalSTTInputMixin` from composable triples) | ✅ Done (6/6 sub-phases) | — |
+| 5e.1 | Standalone `MoonshineSTTAdapter` + `MoonshineListener` (foundational) | ✅ Done | #405 (commit 847e6ac) |
+| 5e.2 | Migrate `(moonshine, llama, elevenlabs)` off `LocalSTTInputMixin` + land `ComposablePipeline` host-concern wiring | ✅ Done | #407 (commit 03d55e2) |
+| 5e.3 | Migrate `(moonshine, llama, chatterbox)` | ✅ Done | #409 (commit 35d1f7a) |
+| 5e.4 | Migrate `(moonshine, gemini, chatterbox)` | ✅ Done | #411 (commit 8da54c4) |
+| 5e.5 | Migrate `(moonshine, gemini, elevenlabs)` | ✅ Done | #412 (commit c6b3d40) |
+| 5e.6 | Migrate `(moonshine, gemini-bundled, gemini_tts)` + retire legacy `_clear_queue` `_tts_handler` mirror; mark `LocalSTTInputMixin` as hybrid-only (still serves `LocalSTT*RealtimeHandler` hybrids per Phase 4c-tris Option B) | ✅ Done | `claude/phase-5e-6-gemini-tts-decouple-and-cleanup` |
 | 5f | New STT backends (faster-whisper per memo, tracked as issue #387) | ⏸ Pending | — |
 
 ## Post-Phase-4 follow-up PRs (between Phase 4 close and Phase 5 5b)

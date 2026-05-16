@@ -68,7 +68,6 @@ from robot_comic.tools.core_tools import (
     dispatch_tool_call,
     dispatch_tool_call_with_manager,
 )
-from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.gemini_text_handlers import (
     GeminiTextChatterboxResponseHandler,
     GeminiTextElevenLabsResponseHandler,
@@ -115,31 +114,15 @@ _SUPPORTED_MATRIX_DOC = (
 # ---------------------------------------------------------------------------
 # Factory-private mixin host classes.
 #
-# Each one combines :class:`LocalSTTInputMixin` (the Moonshine STT listener
-# the ``MoonshineSTTAdapter`` monkey-patches into) with a surviving
-# ``*ResponseHandler`` base (the LLM + TTS implementation the LLM/TTS
-# adapters delegate into).
+# All retired in Phase 5e (5e.2-5e.6). Every composable triple now
+# constructs the plain :class:`*ResponseHandler` and composes it with a
+# standalone :class:`MoonshineSTTAdapter` + :class:`ComposablePipeline`
+# instead of mixing :class:`LocalSTTInputMixin` over the handler.
 #
-# These replace the deleted ``LocalSTT*Handler`` subclasses retired in
-# Phase 4e of #337. They are not exported — the composable factory builders
-# are their only call site.
-#
-# Each host re-asserts the ``_dispatch_completed_transcript`` MRO shim
-# (``await ResponseHandler._dispatch_completed_transcript(self, transcript)``)
-# so the mixin's OpenAI-realtime default (which expects
-# ``self.connection``) is not picked by MRO lookup. The composable
-# pipeline normally monkey-patches this method via
-# :meth:`MoonshineSTTAdapter.start`, but startup-trigger paths and
-# direct-dispatch tests reach the method before the patch lands; the
-# shim keeps those paths working without surprise.
+# The mixin itself survives in :mod:`robot_comic.local_stt_realtime` for
+# the two ``LocalSTT*RealtimeHandler`` hybrids (Phase 4c-tris Option B
+# "legacy forever"), but is no longer used by any composable triple.
 # ---------------------------------------------------------------------------
-
-
-class _LocalSTTGeminiTTSHost(LocalSTTInputMixin, GeminiTTSResponseHandler):
-    """Composable host: Moonshine STT input + bundled Gemini LLM + Gemini TTS."""
-
-    async def _dispatch_completed_transcript(self, transcript: str) -> None:
-        await GeminiTTSResponseHandler._dispatch_completed_transcript(self, transcript)
 
 
 class HandlerFactory:
@@ -780,21 +763,41 @@ def _build_composable_gemini_elevenlabs(**handler_kwargs: Any) -> Any:
 def _build_composable_gemini_tts(**handler_kwargs: Any) -> Any:
     """Construct the composable (moonshine, gemini-bundled, gemini_tts) pipeline.
 
-    Composes :class:`LocalSTTInputMixin` over
-    :class:`GeminiTTSResponseHandler` via :class:`_LocalSTTGeminiTTSHost`,
-    wraps it with the three Phase 3/4 adapters, composes them into a
-    :class:`ComposablePipeline` seeded with the current session
-    instructions, and returns a :class:`ComposableConversationHandler`
-    whose ``build`` closure re-runs the same construction.
+    Phase 5e.6: the final triple to migrate off
+    :class:`LocalSTTInputMixin`. The handler is now a plain
+    :class:`GeminiTTSResponseHandler` (no mixin shell); STT is a
+    standalone :class:`MoonshineSTTAdapter` with a
+    ``should_drop_frame`` echo-guard closure; the orchestrator-level
+    concerns (turn-span, output_queue publishing, set_listening,
+    pause-controller, welcome gate, name-validation transcript
+    recording) live on :class:`ComposablePipeline` behind the ``deps``
+    and ``welcome_gate`` kwargs.
 
-    Unlike every other composable triple, the LLM and TTS adapters here both
-    wrap the SAME underlying handler instance with a SHARED ``genai.Client``
-    (the bundled Gemini-native pattern). The LLM adapter is
-    :class:`~robot_comic.adapters.gemini_bundled_llm_adapter.GeminiBundledLLMAdapter`
-    (NOT the gemini-text ``GeminiLLMAdapter``) because the handler exposes
-    ``_run_llm_with_tools`` rather than ``_call_llm`` — see the Phase 4c.5
-    spec for the design rationale.
+    Mechanical mirror of :func:`_build_composable_gemini_elevenlabs`
+    (the Phase 5e.5 sibling). The triple-specific substitutions are:
+
+    - LLM adapter: :class:`~robot_comic.adapters.gemini_bundled_llm_adapter.GeminiBundledLLMAdapter`
+      (bundled-Gemini — exposes ``_run_llm_with_tools`` rather than
+      ``_call_llm``; see Phase 4c.5 spec). The LLM and TTS adapters
+      both wrap the SAME underlying handler instance with a SHARED
+      ``genai.Client`` (the bundled Gemini-native pattern).
+    - TTS adapter: :class:`~robot_comic.adapters.gemini_tts_adapter.GeminiTTSAdapter`.
+
+    Echo-guard caveat: :class:`GeminiTTSResponseHandler` does not
+    write ``_speaking_until`` (unlike the ElevenLabs / Chatterbox /
+    Llama bases the other four triples inherit from). The
+    ``should_drop_frame`` closure's
+    ``getattr(host, "_speaking_until", 0.0)`` therefore always returns
+    ``0.0`` → the echo-guard is a no-op for this triple. This matches
+    the pre-5e.6 behaviour: the mixin host inherited the attribute at
+    its default value, so the legacy ``LocalSTTInputMixin.receive``
+    guard at ``local_stt_realtime.py:796-798`` was also a no-op here.
+    The closure is wired uniformly across all five triples to keep
+    the factory builders mechanically identical and avoid a
+    "why-is-this-one-different" footgun later.
     """
+    import time as _time
+
     from robot_comic.prompts import get_session_instructions
     from robot_comic.adapters import (
         GeminiTTSAdapter,
@@ -805,15 +808,29 @@ def _build_composable_gemini_tts(**handler_kwargs: Any) -> Any:
     from robot_comic.composable_conversation_handler import ComposableConversationHandler
 
     def _build() -> ComposableConversationHandler:
-        host = _LocalSTTGeminiTTSHost(**handler_kwargs)
-        stt = MoonshineSTTAdapter(host)
+        # Plain handler — no LocalSTTInputMixin shell. The handler
+        # does not write ``_speaking_until``; getattr default keeps
+        # the closure below a no-op in practice (see docstring).
+        host = GeminiTTSResponseHandler(**handler_kwargs)
+
+        def _should_drop_frame() -> bool:
+            # Drop input frames while TTS is still playing — same
+            # check the legacy ``LocalSTTInputMixin.receive`` ran
+            # inline (``local_stt_realtime.py:796-798``). Documented
+            # no-op for this triple (see docstring).
+            return _time.perf_counter() < getattr(host, "_speaking_until", 0.0)
+
+        stt = MoonshineSTTAdapter(should_drop_frame=_should_drop_frame)
         llm = GeminiBundledLLMAdapter(host)
         tts = GeminiTTSAdapter(host)
         pipeline = ComposablePipeline(
             stt,
             llm,
             tts,
+            tool_dispatcher=_make_tool_dispatcher(host),
             system_prompt=get_session_instructions(),
+            deps=handler_kwargs["deps"],
+            welcome_gate=_maybe_build_welcome_gate(),
         )
         return ComposableConversationHandler(
             pipeline=pipeline,

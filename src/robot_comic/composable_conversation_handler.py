@@ -7,11 +7,15 @@ voice methods route through ``self.pipeline.tts`` (Phase 5c.1) and
 ``apply_personality`` routes through ``self.pipeline.apply_personality``
 (Phase 5c.2).
 
-The wrapper still holds ``self._tts_handler`` for the ``_clear_queue``
-mirroring shim (the ``LocalSTTInputMixin`` listener calls
-``self._clear_queue`` on the legacy host instance for barge-in flushing).
-Phase 5d's ``ConversationHandler`` ABC shrink is the right home for
-that cleanup.
+The wrapper still holds ``self._tts_handler`` (the wrapped
+concrete handler instance the factory composed) so factory tests can
+verify which handler class was picked via
+``isinstance(wrapper._tts_handler, ...)``. Post-Phase-5e.6 nothing in
+the production runtime reads this attribute — the ``_clear_queue``
+double-mirror that previously fanned out onto the
+``LocalSTTInputMixin`` listener on the host shell was retired with
+the last mixin host. Phase 5d's ``ConversationHandler`` ABC shrink
+may revisit the field.
 
 Phase 4a deliberately leaves these lifecycle hooks unwired; each is a
 follow-up PR between 4b and 4d:
@@ -83,35 +87,28 @@ class ComposableConversationHandler(ConversationHandler):
 
     @property
     def _clear_queue(self) -> Callable[[], None] | None:
-        """The queue-flush callback. Mirrors onto the wrapped TTS handler."""
+        """The queue-flush callback. Mirrors onto the pipeline."""
         return self.__clear_queue
 
     @_clear_queue.setter
     def _clear_queue(self, callback: Callable[[], None] | None) -> None:
-        """Mirror the queue-flush callback onto the pipeline AND the host.
+        """Mirror the queue-flush callback onto the pipeline.
 
-        Two readers during the Phase 5e.* transition:
-
-        1. **Pipeline (Phase 5e.2+, migrated triples).**
-           :meth:`ComposablePipeline._on_speech_started` fires the
-           barge-in flush at the start of a new user turn. Migrated
-           triples (currently only ``moonshine + llama + elevenlabs``)
-           rely on this mirror.
-        2. **Legacy ``_tts_handler`` host (un-migrated triples).**
-           :class:`LocalSTTInputMixin` calls ``self._clear_queue`` on the
-           factory-private host instance it is mixed into (e.g.
-           ``_LocalSTTLlamaChatterboxHost``). This mirror retires when
-           the last triple migrates off the mixin (Phase 5e.6).
-
-        Double-mirror is intentional: 5e.2 migrates one triple, the other
-        four still rely on the host path. Cost is one no-op ``setattr``
-        per assignment.
+        :meth:`ComposablePipeline._on_speech_started` fires the
+        barge-in flush at the start of a new user turn for every
+        composable triple. Post-Phase-5e.6 the pipeline is the only
+        live reader — the legacy host mirror onto the wrapped TTS
+        handler shell (which fed the
+        :class:`LocalSTTInputMixin._open_local_stt_stream` barge-in
+        path) was retired when the last mixin host
+        (``_LocalSTTGeminiTTSHost``) was deleted in 5e.6. Every
+        composable triple now constructs a plain
+        ``*ResponseHandler`` (no mixin shell) and reads
+        ``_clear_queue`` off the pipeline.
         """
         self.__clear_queue = callback
         if getattr(self, "pipeline", None) is not None:
             self.pipeline._clear_queue = callback
-        if getattr(self, "_tts_handler", None) is not None:
-            self._tts_handler._clear_queue = callback
 
     def copy(self) -> "ComposableConversationHandler":
         """Build a fresh wrapper + pipeline via the injected factory closure.

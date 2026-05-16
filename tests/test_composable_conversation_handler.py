@@ -378,39 +378,24 @@ async def test_integration_transcript_to_audio_frame() -> None:
     await asyncio.wait_for(start_task, timeout=1.0)
 
 
-def test_clear_queue_assignment_propagates_to_tts_handler() -> None:
-    """LocalStream sets handler._clear_queue on the wrapper; the LocalSTTInputMixin
-    listener reads it off the legacy handler. Forward the assignment so barge-in
-    on the composable path still reaches console.clear_audio_queue.
-
-    Survives until 5e.6 retires the last triple off the mixin host.
-    """
-    wrapper = _make_wrapper()
-
-    def cb() -> None:
-        return None
-
-    wrapper._clear_queue = cb
-    assert wrapper._clear_queue is cb
-    assert wrapper._tts_handler._clear_queue is cb
-
-
 def test_clear_queue_assignment_handles_none() -> None:
     wrapper = _make_wrapper()
     wrapper._clear_queue = lambda: None
     wrapper._clear_queue = None
     assert wrapper._clear_queue is None
-    assert wrapper._tts_handler._clear_queue is None
 
 
-def test_clear_queue_assignment_also_mirrors_onto_pipeline() -> None:
-    """Phase 5e.2: migrated triples read ``_clear_queue`` off the pipeline.
+def test_clear_queue_assignment_mirrors_onto_pipeline() -> None:
+    """Phase 5e.6: the wrapper mirrors ``_clear_queue`` onto the pipeline only.
 
-    The legacy host-mirror is retained for un-migrated triples (5e.3-5e.6
-    each retire one); the pipeline-mirror is needed so the new
-    :meth:`ComposablePipeline._on_speech_started` can fire the barge-in
-    flush on the migrated triple. Both mirrors coexist during the 5e.*
-    transition.
+    Pre-5e.6 the setter double-mirrored the callback onto both the
+    pipeline (for migrated triples) and the wrapped TTS handler shell
+    (for un-migrated triples that still ran the
+    :class:`LocalSTTInputMixin` barge-in path on the host instance).
+    All five composable triples are now migrated (5e.2-5e.6) so the
+    legacy host mirror is gone; only :class:`ComposablePipeline`
+    reads ``_clear_queue`` for barge-in via
+    :meth:`ComposablePipeline._on_speech_started`.
     """
     wrapper = _make_wrapper()
 
@@ -427,6 +412,29 @@ def test_clear_queue_assignment_mirrors_none_onto_pipeline() -> None:
     wrapper._clear_queue = lambda: None
     wrapper._clear_queue = None
     assert wrapper.pipeline._clear_queue is None
+
+
+def test_clear_queue_assignment_does_not_touch_tts_handler() -> None:
+    """Phase 5e.6: the wrapper no longer mirrors onto ``_tts_handler``.
+
+    Pre-5e.6 the setter wrote the callback onto the wrapped TTS
+    handler too, so the :class:`LocalSTTInputMixin` barge-in listener
+    on the host shell could read it. Post-5e.6 every composable
+    triple uses the standalone STT adapter + pipeline path and no
+    longer reads ``_clear_queue`` off the handler — the mirror is
+    dead code. Assert the wrapper leaves the handler attribute
+    untouched.
+    """
+    wrapper = _make_wrapper()
+    # Seed the host attribute to a sentinel; the wrapper must NOT clobber it.
+    sentinel = object()
+    wrapper._tts_handler._clear_queue = sentinel
+
+    def cb() -> None:
+        return None
+
+    wrapper._clear_queue = cb
+    assert wrapper._tts_handler._clear_queue is sentinel
 
 
 def test_output_queue_getter_returns_pipeline_queue() -> None:
