@@ -5,9 +5,11 @@ Subclass of ``BaseLlamaResponseHandler`` that replaces the LLM step
 while inheriting the full tool-dispatch, TTS orchestration, and history-
 management machinery from the base class unchanged.
 
-Concrete subclasses supply ``_synthesize_and_enqueue()`` (TTS half) via an
-additional mixin — exactly as ``LocalSTTChatterboxHandler`` and
-``LocalSTTGeminiElevenLabsHandler`` do.
+Concrete subclasses (the diamond response handlers
+``GeminiTextChatterboxResponseHandler`` /
+``GeminiTextElevenLabsResponseHandler``) supply
+``_synthesize_and_enqueue()`` (TTS half) by mixing in
+``ChatterboxTTSResponseHandler`` or ``ElevenLabsTTSResponseHandler``.
 """
 
 from __future__ import annotations

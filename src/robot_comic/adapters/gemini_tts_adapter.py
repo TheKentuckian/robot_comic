@@ -32,9 +32,8 @@ adapter chunks inline and yields without any streaming-task lifecycle.
 
 ## Bundled-handler pairing
 
-This adapter wraps a :class:`GeminiTTSResponseHandler` (or its
-``LocalSTTGeminiTTSHandler`` subclass) — a class that fuses LLM + TTS over
-one ``genai.Client`` instance. The companion adapter
+This adapter wraps a :class:`GeminiTTSResponseHandler` — a class that
+fuses LLM + TTS over one ``genai.Client`` instance. The companion adapter
 :class:`~robot_comic.adapters.gemini_bundled_llm_adapter.GeminiBundledLLMAdapter`
 wraps the LLM half of the SAME handler instance, so a single ``genai.Client``
 backs both Protocol surfaces — see ``docs/superpowers/specs/2026-05-15-phase-4c5-gemini-tts-adapter.md``
@@ -53,10 +52,9 @@ plumbing lands (Phase 4 follow-up), the adapter can switch to the Protocol's
 ## ``shutdown()`` is a no-op
 
 ``genai.Client`` has no explicit ``aclose`` method as used by
-``GeminiTTSResponseHandler``. The legacy
-``LocalSTTGeminiTTSHandler.shutdown`` drains its own ``output_queue`` —
-not relevant on the adapter side because the adapter doesn't own a queue.
-Phase 4e cleanup may revisit when the bundled legacy is retired.
+``GeminiTTSResponseHandler``. The factory's composable host drains its
+own ``output_queue`` — not relevant on the adapter side because the
+adapter doesn't own a queue.
 """
 
 from __future__ import annotations
@@ -100,8 +98,9 @@ class _GeminiTTSCompatibleHandler(Protocol):
       both ``assert self._client is not None`` internally — declared here so
       mypy / Protocol structural matching sees the attribute.
 
-    Concrete satisfiers today: :class:`GeminiTTSResponseHandler` and
-    :class:`LocalSTTGeminiTTSHandler` (subclass).
+    Concrete satisfier today: :class:`GeminiTTSResponseHandler` (the
+    factory composes :class:`LocalSTTInputMixin` over it for the live
+    pipeline).
 
     Not ``@runtime_checkable`` — we don't use ``isinstance(handler,
     _GeminiTTSCompatibleHandler)`` anywhere; mypy structural matching is

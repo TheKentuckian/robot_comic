@@ -98,10 +98,12 @@ stt = MoonshineSTTAdapter(legacy)
 ...
 ```
 
-The `_dispatch_completed_transcript` MRO-shim override on the deleted
-classes is *not* re-added: `MoonshineSTTAdapter.start()` monkey-patches
-`_dispatch_completed_transcript` to its bridge before any transcript can
-flow, so the shim is never reached on the composable path.
+The `_dispatch_completed_transcript` MRO-shim override **is** re-added
+on each host class because non-adapter call sites (the smoke tests, the
+`_send_startup_trigger` "llm" mode) reach the method before the adapter
+monkey-patch lands. The shim cost is one async stub per host. Without
+it, MRO picks `LocalSTTInputMixin._dispatch_completed_transcript` (an
+OpenAI-realtime path that expects `self.connection`) and raises.
 
 The five private host classes are defined at module scope (above the
 builder functions) so they cooperate with `type.__init__` only once at

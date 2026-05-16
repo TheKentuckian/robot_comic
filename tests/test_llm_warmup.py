@@ -17,12 +17,12 @@ import pytest
 
 
 def _make_handler():
-    """Return a LocalSTTChatterboxHandler with a pre-attached mock HTTP client."""
-    from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
+    """Return a ChatterboxTTSResponseHandler with a pre-attached mock HTTP client."""
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
     from robot_comic.tools.core_tools import ToolDependencies
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
-    handler = LocalSTTChatterboxHandler(deps)
+    handler = ChatterboxTTSResponseHandler(deps)
     handler._http = AsyncMock()
     return handler
 

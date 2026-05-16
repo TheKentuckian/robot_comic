@@ -3,13 +3,15 @@
 Covers four scenarios:
 
 1. ``test_gemini_text_chatterbox_dispatch_produces_pcm_audio``
-   Boots ``GeminiTextChatterboxHandler``, mocks ``_gemini_llm.stream_completion``
-   to return a canned text delta, mocks ``_call_chatterbox_tts`` to return canned
-   PCM, injects a transcript, and asserts ≥1 PCM audio frame reaches the queue.
+   Boots a Moonshine-mixed ``GeminiTextChatterboxResponseHandler``, mocks
+   ``_gemini_llm.stream_completion`` to return a canned text delta, mocks
+   ``_call_chatterbox_tts`` to return canned PCM, injects a transcript,
+   and asserts ≥1 PCM audio frame reaches the queue.
 
 2. ``test_gemini_text_elevenlabs_dispatch_produces_pcm_audio``
-   Same lifecycle but with ``GeminiTextElevenLabsHandler``; TTS is mocked via
-   ``_stream_tts_to_queue`` (the internal ElevenLabs streaming boundary).
+   Same lifecycle but with ``GeminiTextElevenLabsResponseHandler``; TTS
+   is mocked via ``_stream_tts_to_queue`` (the internal ElevenLabs
+   streaming boundary).
 
 3. ``test_gemini_text_tool_call_accumulation``
    Feeds a streamed response with a ``greet`` tool-call split across two chunks.
@@ -82,8 +84,21 @@ def _make_gemini_llm_mock(*deltas: dict[str, Any]) -> MagicMock:
 
 
 def _make_chatterbox_handler(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """Boot a ``GeminiTextChatterboxHandler`` with all hardware and credentials mocked."""
-    from robot_comic.gemini_text_handlers import GeminiTextChatterboxHandler
+    """Boot a Moonshine + Gemini-text + Chatterbox host with hardware mocked.
+
+    Phase 4e (#337) retired the GeminiTextChatterboxHandler concrete class;
+    the composable factory composes LocalSTTInputMixin over
+    GeminiTextChatterboxResponseHandler via a private host. We mirror that
+    shape here so the smoke test still exercises both halves.
+    """
+    from robot_comic.local_stt_realtime import LocalSTTInputMixin
+    from robot_comic.gemini_text_handlers import GeminiTextChatterboxResponseHandler
+
+    class _Host(LocalSTTInputMixin, GeminiTextChatterboxResponseHandler):
+        async def _dispatch_completed_transcript(self, transcript: str) -> None:
+            # Route past LocalSTTInputMixin's OpenAI-realtime default —
+            # mirrors the factory-private host shape.
+            await GeminiTextChatterboxResponseHandler._dispatch_completed_transcript(self, transcript)
 
     monkeypatch.setattr(llama_base_mod, "get_session_instructions", lambda: "Be funny.")
     monkeypatch.setattr(llama_base_mod, "get_active_tool_specs", lambda _: [])
@@ -101,7 +116,7 @@ def _make_chatterbox_handler(monkeypatch: pytest.MonkeyPatch) -> Any:
     )
 
     deps = make_tool_deps()
-    handler = GeminiTextChatterboxHandler(deps, sim_mode=True)
+    handler = _Host(deps, sim_mode=True)
     # Skip _prepare_startup_credentials — wire clients directly.
     import httpx
 

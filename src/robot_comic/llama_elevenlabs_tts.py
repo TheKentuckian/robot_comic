@@ -21,7 +21,6 @@ from robot_comic import telemetry
 from robot_comic.config import (
     ELEVENLABS_DEFAULT_VOICE,
     ELEVENLABS_AVAILABLE_VOICES,
-    LLAMA_ELEVENLABS_TTS_OUTPUT,
     config,
 )
 from robot_comic.gemini_tts import (
@@ -34,7 +33,6 @@ from robot_comic.llama_base import _CHUNK_SAMPLES, _OUTPUT_SAMPLE_RATE, BaseLlam
 from robot_comic.elevenlabs_tts import load_profile_elevenlabs_config as _shared_load_profile_elevenlabs_config
 from robot_comic.tools.core_tools import ToolDependencies
 from robot_comic.elevenlabs_voices import resolve_voice_id_by_name
-from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.chatterbox_tag_translator import strip_gemini_tags
 
 
@@ -354,12 +352,3 @@ class LlamaElevenLabsTTSResponseHandler(BaseLlamaResponseHandler):
         else:
             logger.error("ElevenLabs TTS exhausted %d retries; skipping audio for this turn", _TTS_MAX_RETRIES)
         return False
-
-
-class LocalSTTLlamaElevenLabsHandler(LocalSTTInputMixin, LlamaElevenLabsTTSResponseHandler):
-    """Moonshine STT input + llama-server LLM + ElevenLabs TTS voice output."""
-
-    BACKEND_PROVIDER = LLAMA_ELEVENLABS_TTS_OUTPUT
-
-    async def _dispatch_completed_transcript(self, transcript: str) -> None:
-        await LlamaElevenLabsTTSResponseHandler._dispatch_completed_transcript(self, transcript)

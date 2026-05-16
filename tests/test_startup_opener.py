@@ -116,11 +116,11 @@ def test_bundled_persona_openers_files_exist(persona: str) -> None:
 
 
 def _make_llama_handler() -> Any:
-    from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
+    from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
     from robot_comic.tools.core_tools import ToolDependencies
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
-    handler = LocalSTTChatterboxHandler(deps)
+    handler = ChatterboxTTSResponseHandler(deps)
     handler._http = AsyncMock()
     return handler
 

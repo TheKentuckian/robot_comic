@@ -15,7 +15,6 @@ from typing import Any
 import numpy as np
 
 from robot_comic.config import (
-    CHATTERBOX_OUTPUT,
     LLAMA_CPP_DEFAULT_URL,
     CHATTERBOX_DEFAULT_URL,
     CHATTERBOX_DEFAULT_GAIN,
@@ -31,7 +30,6 @@ from robot_comic.audio_gain import normalize_gain
 from robot_comic.llama_base import _OUTPUT_SAMPLE_RATE, BaseLlamaResponseHandler, split_sentences
 from robot_comic.wake_on_lan import send_magic_packet
 from robot_comic.tools.core_tools import get_active_tool_specs
-from robot_comic.local_stt_realtime import LocalSTTInputMixin
 from robot_comic.chatterbox_voice_clone import load_voice_clone_ref
 from robot_comic.chatterbox_tag_translator import translate
 
@@ -462,13 +460,3 @@ class ChatterboxTTSResponseHandler(BaseLlamaResponseHandler):
         if auto_gain:
             pcm = normalize_gain(pcm, target_dbfs=target_dbfs)
         return pcm.tobytes()
-
-
-class LocalSTTChatterboxHandler(LocalSTTInputMixin, ChatterboxTTSResponseHandler):
-    """Moonshine STT input + Chatterbox TTS voice output."""
-
-    BACKEND_PROVIDER = CHATTERBOX_OUTPUT
-
-    async def _dispatch_completed_transcript(self, transcript: str) -> None:
-        # Route explicitly past LocalSTTInputMixin's OpenAI-specific override.
-        await ChatterboxTTSResponseHandler._dispatch_completed_transcript(self, transcript)

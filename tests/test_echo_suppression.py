@@ -44,9 +44,9 @@ class TestLlamaBaseEchoGuard:
     """Tests for the byte-count echo guard in BaseLlamaResponseHandler.emit()."""
 
     def _make_handler(self):
-        from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
+        from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
 
-        handler = LocalSTTChatterboxHandler(_make_deps())
+        handler = ChatterboxTTSResponseHandler(_make_deps())
         handler._http = AsyncMock()
         return handler
 
@@ -120,9 +120,9 @@ class TestLlamaBaseEchoGuard:
     @pytest.mark.asyncio
     async def test_run_turn_resets_byte_counters(self) -> None:
         """_run_turn() must reset _response_audio_bytes / _response_start_ts."""
-        from robot_comic.chatterbox_tts import LocalSTTChatterboxHandler
+        from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
 
-        handler = LocalSTTChatterboxHandler(_make_deps())
+        handler = ChatterboxTTSResponseHandler(_make_deps())
         handler._http = AsyncMock()
         # Pre-load stale values from a prior turn
         handler._response_audio_bytes = 99999

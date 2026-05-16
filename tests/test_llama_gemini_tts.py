@@ -21,10 +21,10 @@ def _make_deps() -> ToolDependencies:
 
 
 def _make_handler():
-    from robot_comic.llama_gemini_tts import LocalSTTLlamaGeminiTTSHandler
+    from robot_comic.llama_gemini_tts import LlamaGeminiTTSResponseHandler
 
     deps = _make_deps()
-    handler = LocalSTTLlamaGeminiTTSHandler(deps)
+    handler = LlamaGeminiTTSResponseHandler(deps)
     handler._http = AsyncMock()
     handler._client = MagicMock()
     return handler

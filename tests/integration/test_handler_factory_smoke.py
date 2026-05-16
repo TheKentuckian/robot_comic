@@ -78,7 +78,14 @@ _MOONSHINE_OUTPUTS_BRANCHING_ON_LLM = (AUDIO_OUTPUT_CHATTERBOX, AUDIO_OUTPUT_ELE
 
 
 def _expected_handler_name(input_b: str, output_b: str, llm_backend: str) -> str:
-    """Map a (input, output, llm) tuple to the handler class name selected by HandlerFactory."""
+    """Map a (input, output, llm) tuple to the handler class name selected by HandlerFactory.
+
+    Phase 4e (#337) replaced every composable triple's concrete handler with
+    :class:`ComposableConversationHandler`; the bundled-realtime and
+    Moonshine+realtime-output hybrids still return their legacy concrete
+    classes. Tests on the composable triples should additionally inspect
+    ``result._tts_handler`` to confirm the right host was composed.
+    """
     if input_b == AUDIO_INPUT_HF and output_b == AUDIO_OUTPUT_HF:
         return "HuggingFaceRealtimeHandler"
     if input_b == AUDIO_INPUT_OPENAI_REALTIME and output_b == AUDIO_OUTPUT_OPENAI_REALTIME:
@@ -86,25 +93,14 @@ def _expected_handler_name(input_b: str, output_b: str, llm_backend: str) -> str
     if input_b == AUDIO_INPUT_GEMINI_LIVE and output_b == AUDIO_OUTPUT_GEMINI_LIVE:
         return "GeminiLiveHandler"
     if input_b == AUDIO_INPUT_MOONSHINE:
-        if llm_backend == LLM_BACKEND_GEMINI:
-            if output_b == AUDIO_OUTPUT_CHATTERBOX:
-                return "GeminiTextChatterboxHandler"
-            if output_b == AUDIO_OUTPUT_ELEVENLABS:
-                return "GeminiTextElevenLabsHandler"
-            # Gemini TTS falls through to the llama path because it already uses Gemini natively.
-        if output_b == AUDIO_OUTPUT_CHATTERBOX:
-            return "LocalSTTChatterboxHandler"
-        if output_b == AUDIO_OUTPUT_GEMINI_TTS:
-            return "LocalSTTGeminiTTSHandler"
-        if output_b == AUDIO_OUTPUT_ELEVENLABS:
-            # LLM_BACKEND=llama + elevenlabs uses the llama-aware variant.
-            # The Gemini-LLM hardcoded LocalSTTElevenLabsHandler is reserved
-            # for the LLM_BACKEND=gemini fallback branch.
-            return "LocalSTTLlamaElevenLabsHandler"
+        # Hybrids (LocalSTT + realtime output) still return concrete classes.
         if output_b == AUDIO_OUTPUT_OPENAI_REALTIME:
             return "LocalSTTOpenAIRealtimeHandler"
         if output_b == AUDIO_OUTPUT_HF:
             return "LocalSTTHuggingFaceRealtimeHandler"
+        # Composable triples — always wrapped.
+        if output_b in (AUDIO_OUTPUT_CHATTERBOX, AUDIO_OUTPUT_ELEVENLABS, AUDIO_OUTPUT_GEMINI_TTS):
+            return "ComposableConversationHandler"
     raise AssertionError(f"unexpected combo: {input_b!r} → {output_b!r} (llm={llm_backend!r})")
 
 

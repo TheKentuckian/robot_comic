@@ -1,17 +1,24 @@
-"""Concrete Gemini text-LLM + local-TTS handler classes.
+"""Gemini text-LLM + local-TTS diamond response handler classes.
 
-These handlers use the Gemini API for the LLM step and a local TTS backend
-for speech synthesis, making them useful when llama-server is unavailable or
-when higher-quality Gemini reasoning is preferred.
+These response-handler bases use the Gemini API for the LLM step and a
+local TTS backend for speech synthesis, making them useful when
+llama-server is unavailable or when higher-quality Gemini reasoning is
+preferred.
 
 Handler matrix
 --------------
-  Moonshine STT + Chatterbox TTS  → ``GeminiTextChatterboxHandler``
-  Moonshine STT + ElevenLabs TTS  → ``GeminiTextElevenLabsHandler``
+  Gemini text LLM + Chatterbox TTS  → ``GeminiTextChatterboxResponseHandler``
+  Gemini text LLM + ElevenLabs TTS  → ``GeminiTextElevenLabsResponseHandler``
 
-The Gemini TTS combination (Moonshine + Gemini TTS) is already provided by
-``LocalSTTGeminiTTSHandler`` in ``gemini_tts.py``, which uses the Gemini API
-natively for both LLM and TTS — no duplication is needed here.
+The composable factory (``handler_factory.py``) composes
+``LocalSTTInputMixin`` over these bases via private host subclasses; the
+adapters then wrap the composed instance to drive the
+:class:`~robot_comic.composable_pipeline.ComposablePipeline`.
+
+The Gemini TTS combination (Moonshine + bundled Gemini LLM + Gemini TTS)
+lives on :class:`~robot_comic.gemini_tts.GeminiTTSResponseHandler` — no
+diamond is needed there because the Gemini API natively bundles LLM and
+TTS through one client.
 """
 
 from __future__ import annotations
@@ -20,7 +27,6 @@ import logging
 from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
 from robot_comic.elevenlabs_tts import ElevenLabsTTSResponseHandler
 from robot_comic.gemini_text_base import GeminiTextResponseHandler
-from robot_comic.local_stt_realtime import LocalSTTInputMixin
 
 
 logger = logging.getLogger(__name__)
@@ -79,14 +85,6 @@ class GeminiTextChatterboxResponseHandler(GeminiTextResponseHandler, ChatterboxT
             model,
             self.get_current_voice(),
         )
-
-
-class GeminiTextChatterboxHandler(LocalSTTInputMixin, GeminiTextChatterboxResponseHandler):
-    """Moonshine STT input + Chatterbox TTS output + Gemini text LLM."""
-
-    async def _dispatch_completed_transcript(self, transcript: str) -> None:
-        # Route explicitly past LocalSTTInputMixin's OpenAI-specific override.
-        await GeminiTextChatterboxResponseHandler._dispatch_completed_transcript(self, transcript)
 
 
 # ---------------------------------------------------------------------------
@@ -175,11 +173,3 @@ class GeminiTextElevenLabsResponseHandler(GeminiTextResponseHandler, ElevenLabsT
             model,
             self.get_current_voice(),
         )
-
-
-class GeminiTextElevenLabsHandler(LocalSTTInputMixin, GeminiTextElevenLabsResponseHandler):
-    """Moonshine STT input + ElevenLabs TTS output + Gemini text LLM."""
-
-    async def _dispatch_completed_transcript(self, transcript: str) -> None:
-        # Route explicitly past LocalSTTInputMixin's OpenAI-specific override.
-        await GeminiTextElevenLabsResponseHandler._dispatch_completed_transcript(self, transcript)

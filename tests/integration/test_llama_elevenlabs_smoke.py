@@ -1,4 +1,4 @@
-"""End-to-end integration smoke test — LocalSTTLlamaElevenLabsHandler lifecycle.
+"""End-to-end integration smoke test — Moonshine + Llama + ElevenLabs lifecycle.
 
 Boots the handler in sim mode, injects a synthetic transcript through the
 public ``_dispatch_completed_transcript`` entry point, drains the output queue,
@@ -22,7 +22,19 @@ import pytest
 
 import robot_comic.llama_base as llama_base_mod
 from .conftest import drain_queue, make_tool_deps
-from robot_comic.llama_elevenlabs_tts import LocalSTTLlamaElevenLabsHandler
+from robot_comic.local_stt_realtime import LocalSTTInputMixin
+from robot_comic.llama_elevenlabs_tts import LlamaElevenLabsTTSResponseHandler
+
+
+# Phase 4e (#337) retired LocalSTTLlamaElevenLabsHandler. The composable
+# factory composes LocalSTTInputMixin over LlamaElevenLabsTTSResponseHandler
+# via a factory-private host class; we mirror that shape here so the smoke
+# test still exercises both halves end-to-end.
+class _LocalSTTLlamaElevenLabsHost(LocalSTTInputMixin, LlamaElevenLabsTTSResponseHandler):
+    async def _dispatch_completed_transcript(self, transcript: str) -> None:
+        # Route past LocalSTTInputMixin's OpenAI-realtime default —
+        # mirrors the factory-private host shape.
+        await LlamaElevenLabsTTSResponseHandler._dispatch_completed_transcript(self, transcript)
 
 
 # ---------------------------------------------------------------------------
@@ -53,9 +65,9 @@ def _make_sse_stream(lines: list[str]) -> MagicMock:
     return response
 
 
-def _make_handler() -> LocalSTTLlamaElevenLabsHandler:
+def _make_handler() -> _LocalSTTLlamaElevenLabsHost:
     deps = make_tool_deps()
-    handler = LocalSTTLlamaElevenLabsHandler(deps, sim_mode=True)
+    handler = _LocalSTTLlamaElevenLabsHost(deps, sim_mode=True)
     handler._http = AsyncMock()
     return handler
 

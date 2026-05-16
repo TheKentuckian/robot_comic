@@ -1,10 +1,11 @@
 """STT / LLM / TTS backend Protocols — Phase 1 of the pipeline refactor.
 
-Defines the three interfaces that a future ``ConversationHandler`` (Phase 2)
-will compose via dependency injection. Today's handler classes express their
-3-phase pipeline via inheritance — every ``(STT, LLM, TTS)`` triple is a
-distinct class, with the LLM dial baked into the class hierarchy
-(``LocalSTTLlamaElevenLabsHandler`` vs ``LocalSTTGeminiElevenLabsHandler``).
+Defines the three interfaces that the composable conversation handler
+composes via dependency injection. The legacy handler classes expressed
+their 3-phase pipeline via inheritance — every ``(STT, LLM, TTS)``
+triple was a distinct class, with the LLM dial baked into the class
+hierarchy (``LlamaElevenLabsTTSResponseHandler`` vs
+``GeminiTextElevenLabsResponseHandler``).
 
 Once Phase 2 lands, swapping the LLM means swapping one object, not
 introducing a new subclass. These Protocols pin the contract the existing

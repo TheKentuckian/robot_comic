@@ -117,33 +117,50 @@ _SUPPORTED_MATRIX_DOC = (
 # Phase 4e of #337. They are not exported — the composable factory builders
 # are their only call site.
 #
-# The legacy ``_dispatch_completed_transcript`` MRO shim
+# Each host re-asserts the ``_dispatch_completed_transcript`` MRO shim
 # (``await ResponseHandler._dispatch_completed_transcript(self, transcript)``)
-# is *not* re-added: ``MoonshineSTTAdapter.start()`` monkey-patches
-# ``_dispatch_completed_transcript`` to its bridge callback before any
-# transcript can flow, so the mixin's OpenAI-realtime default is never
-# reached on the composable path.
+# so the mixin's OpenAI-realtime default (which expects
+# ``self.connection``) is not picked by MRO lookup. The composable
+# pipeline normally monkey-patches this method via
+# :meth:`MoonshineSTTAdapter.start`, but startup-trigger paths and
+# direct-dispatch tests reach the method before the patch lands; the
+# shim keeps those paths working without surprise.
 # ---------------------------------------------------------------------------
 
 
 class _LocalSTTLlamaElevenLabsHost(LocalSTTInputMixin, LlamaElevenLabsTTSResponseHandler):
     """Composable host: Moonshine STT input + Llama LLM + ElevenLabs TTS."""
 
+    async def _dispatch_completed_transcript(self, transcript: str) -> None:
+        await LlamaElevenLabsTTSResponseHandler._dispatch_completed_transcript(self, transcript)
+
 
 class _LocalSTTLlamaChatterboxHost(LocalSTTInputMixin, ChatterboxTTSResponseHandler):
     """Composable host: Moonshine STT input + Llama LLM + Chatterbox TTS."""
+
+    async def _dispatch_completed_transcript(self, transcript: str) -> None:
+        await ChatterboxTTSResponseHandler._dispatch_completed_transcript(self, transcript)
 
 
 class _LocalSTTGeminiChatterboxHost(LocalSTTInputMixin, GeminiTextChatterboxResponseHandler):
     """Composable host: Moonshine STT input + Gemini text LLM + Chatterbox TTS."""
 
+    async def _dispatch_completed_transcript(self, transcript: str) -> None:
+        await GeminiTextChatterboxResponseHandler._dispatch_completed_transcript(self, transcript)
+
 
 class _LocalSTTGeminiElevenLabsHost(LocalSTTInputMixin, GeminiTextElevenLabsResponseHandler):
     """Composable host: Moonshine STT input + Gemini text LLM + ElevenLabs TTS."""
 
+    async def _dispatch_completed_transcript(self, transcript: str) -> None:
+        await GeminiTextElevenLabsResponseHandler._dispatch_completed_transcript(self, transcript)
+
 
 class _LocalSTTGeminiTTSHost(LocalSTTInputMixin, GeminiTTSResponseHandler):
     """Composable host: Moonshine STT input + bundled Gemini LLM + Gemini TTS."""
+
+    async def _dispatch_completed_transcript(self, transcript: str) -> None:
+        await GeminiTTSResponseHandler._dispatch_completed_transcript(self, transcript)
 
 
 class HandlerFactory:
@@ -318,9 +335,9 @@ class HandlerFactory:
 
             # ------------------------------------------------------------------
             # Moonshine + ElevenLabs with no llama/gemini selector: route via
-            # the gemini-elevenlabs builder. Mirrors the legacy
-            # LocalSTTGeminiElevenLabsHandler fallback (Gemini was hardcoded
-            # in ElevenLabsTTSResponseHandler._prepare_startup_credentials).
+            # the gemini-elevenlabs builder. Mirrors the legacy fallback
+            # (Gemini was hardcoded in
+            # ElevenLabsTTSResponseHandler._prepare_startup_credentials).
             # ------------------------------------------------------------------
             if output_backend == AUDIO_OUTPUT_ELEVENLABS:
                 logger.info(
