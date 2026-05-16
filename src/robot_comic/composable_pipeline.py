@@ -65,6 +65,7 @@ from robot_comic.backends import (
     TTSBackend,
     LLMResponse,
 )
+from robot_comic.joke_history import record_joke_history
 
 
 logger = logging.getLogger(__name__)
@@ -254,6 +255,17 @@ class ComposablePipeline:
         if not text.strip():
             logger.warning("Assistant returned empty text; nothing to speak")
             return
+        # Lifecycle Hook #4 (#337): capture the punchline + topic into joke
+        # history so the next session's system-prompt builder can include
+        # them in the "RECENT JOKES (DO NOT REPEAT)" section. Best-effort —
+        # the helper swallows its own exceptions; the outer ``try`` is
+        # belt-and-braces so a future code change in the helper can't kill
+        # the turn before TTS runs. Legacy parity sites:
+        # llama_base.py:578-594 and gemini_tts.py:380-394.
+        try:
+            await record_joke_history(text)
+        except Exception as exc:  # pragma: no cover — helper is itself defensive
+            logger.debug("record_joke_history raised through to orchestrator: %s", exc)
         self._conversation_history.append({"role": "assistant", "content": text})
         # TODO(phase3): plumb delivery tags from ``response.metadata`` into
         # ``tts.synthesize(text, tags=...)``. The TTS Protocol accepts a
