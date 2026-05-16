@@ -166,6 +166,67 @@ async def test_synthesize_propagates_handler_exception() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Phase 5a.2 — first_audio_marker channel
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_appends_first_audio_marker_on_first_frame() -> None:
+    """Phase 5a.2: the adapter appends a ``time.monotonic()`` timestamp to the
+    caller-supplied ``first_audio_marker`` list on the first yielded frame.
+
+    The orchestrator allocates ``marker: list[float] = []`` per call and
+    can read ``marker[0]`` once iteration begins to record per-turn
+    first-audio latency. Single-shot per call.
+    """
+    frames = [(24000, [1, 2, 3]), (24000, [4, 5, 6]), (24000, [7, 8, 9])]
+    handler = _StubElevenLabsHandler(frames_to_push=frames)
+    adapter = ElevenLabsTTSAdapter(handler)
+
+    marker: list[float] = []
+    async for _ in adapter.synthesize("hi", first_audio_marker=marker):
+        pass
+
+    assert len(marker) == 1, "marker must be appended exactly once"
+    assert isinstance(marker[0], float)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_marker_is_only_appended_once_across_frames() -> None:
+    """Multiple frames in one call → still exactly one marker entry."""
+    frames = [(24000, [i]) for i in range(5)]
+    handler = _StubElevenLabsHandler(frames_to_push=frames)
+    adapter = ElevenLabsTTSAdapter(handler)
+
+    marker: list[float] = []
+    out = [frame async for frame in adapter.synthesize("hi", first_audio_marker=marker)]
+    assert len(out) == 5
+    assert len(marker) == 1
+
+
+@pytest.mark.asyncio
+async def test_synthesize_does_not_touch_marker_when_none() -> None:
+    """``first_audio_marker=None`` (default) → adapter skips the append path."""
+    handler = _StubElevenLabsHandler(frames_to_push=[(24000, [0])])
+    adapter = ElevenLabsTTSAdapter(handler)
+    # No assertion needed beyond "no exception raised" — the test passes
+    # iff the default path doesn't blow up on ``None``.
+    async for _ in adapter.synthesize("hi"):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_synthesize_does_not_append_marker_when_no_frames() -> None:
+    """No frames yielded → marker stays empty."""
+    handler = _StubElevenLabsHandler(frames_to_push=[])
+    adapter = ElevenLabsTTSAdapter(handler)
+    marker: list[float] = []
+    async for _ in adapter.synthesize("hi", first_audio_marker=marker):
+        pass
+    assert marker == []
+
+
+# ---------------------------------------------------------------------------
 # synthesize() — consumer abandonment
 # ---------------------------------------------------------------------------
 

@@ -39,17 +39,22 @@ Broadening from the concrete class to a Protocol pays down the
 variant, and unblocks the Phase 4c.3 routing for
 ``(moonshine, elevenlabs, gemini)`` without a new adapter.
 
-## Known gap
+## First-audio marker (Phase 5a.2)
 
-The legacy ``_stream_tts_to_queue`` accepts a ``first_audio_marker:
-list[float] | None`` parameter for echo-guard / first-audio-latency
-telemetry. The adapter doesn't surface it — Protocol-level ``synthesize``
-has no analogous channel yet. Phase 4 will plumb it through
-:class:`LLMResponse.metadata` alongside the ``tags`` work, at which point
-the adapter can forward both.
+The Protocol-level ``synthesize(first_audio_marker=...)`` channel is wired:
+on the first yielded frame the adapter appends ``time.monotonic()`` to
+the caller-supplied list. This is **orthogonal** to the legacy
+``_stream_tts_to_queue(first_audio_marker=...)`` parameter — that one is
+a caller-prefilled start ts the callee uses for a delta calc against
+``telemetry.record_tts_first_audio``; the new Protocol channel is an
+empty list the callee fills with a fresh wallclock read so the
+orchestrator can observe first-audio latency without subscribing to
+internal telemetry events. The legacy channel still fires from
+``_stream_tts_to_queue`` for ElevenLabs-specific dashboards.
 """
 
 from __future__ import annotations
+import time
 import asyncio
 import logging
 from typing import Any, Protocol, AsyncIterator
@@ -114,17 +119,27 @@ class ElevenLabsTTSAdapter:
         self,
         text: str,
         tags: tuple[str, ...] = (),
+        first_audio_marker: list[float] | None = None,
     ) -> AsyncIterator[AudioFrame]:
         """Stream PCM frames for *text* as :class:`AudioFrame` instances.
 
         Substitutes the handler's ``output_queue`` for the call's duration so
         the legacy push-to-queue code path becomes a yielding generator
         without any changes to ``_stream_tts_to_queue`` itself.
+
+        Phase 5a.2: ``first_audio_marker`` (when non-None) receives a single
+        ``time.monotonic()`` append on the first yielded frame so the
+        orchestrator can record per-turn first-audio latency. Orthogonal to
+        the legacy ``_stream_tts_to_queue(first_audio_marker=...)`` channel
+        — that one is a caller-prefilled start ts the callee uses for a
+        delta calc; this one is an empty list the callee fills with a
+        fresh wallclock read.
         """
         temp_queue: asyncio.Queue[Any] = asyncio.Queue()
         original_queue = self._handler.output_queue
         self._handler.output_queue = temp_queue
         tags_list = list(tags) if tags else None
+        _marker_appended = False
 
         async def _stream_and_signal() -> None:
             try:
@@ -144,6 +159,9 @@ class ElevenLabsTTSAdapter:
                 if item is _STREAM_DONE:
                     break
                 sample_rate, frame = item
+                if first_audio_marker is not None and not _marker_appended:
+                    first_audio_marker.append(time.monotonic())
+                    _marker_appended = True
                 yield AudioFrame(samples=frame, sample_rate=sample_rate)
             # Propagate any error from the streaming task.
             await task
