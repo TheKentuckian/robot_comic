@@ -16,17 +16,26 @@ from robot_comic.composable_pipeline import ComposablePipeline
 
 
 class _ProgrammableSTT:
-    """STT mock that holds the bound callback so tests can fire transcripts."""
+    """STT mock that holds the bound callbacks so tests can fire events."""
 
     def __init__(self) -> None:
         self.on_completed = None
+        self.on_partial = None
+        self.on_speech_started = None
         self.audio_frames: list[AudioFrame] = []
         self.stopped = False
         self.started = False
 
-    async def start(self, on_completed) -> None:
+    async def start(
+        self,
+        on_completed,
+        on_partial=None,
+        on_speech_started=None,
+    ) -> None:
         self.started = True
         self.on_completed = on_completed
+        self.on_partial = on_partial
+        self.on_speech_started = on_speech_started
 
     async def feed_audio(self, frame: AudioFrame) -> None:
         self.audio_frames.append(frame)
@@ -1040,3 +1049,371 @@ async def test_apply_personality_orders_history_reset_before_tts_reset_and_resee
     assert pipeline.conversation_history == [
         {"role": "system", "content": "FRESH-MARKER"},
     ]
+
+
+# ---------------------------------------------------------------------------
+# Phase 5e.2 — STT host concerns landed on ComposablePipeline
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_deps(
+    *,
+    head_wobbler: Any = None,
+    pause_controller: Any = None,
+    recent_user_transcripts: list[str] | None = None,
+) -> Any:
+    """Return a SimpleNamespace standing in for ``ToolDependencies``.
+
+    The pipeline only reads ``movement_manager.set_listening``,
+    ``head_wobbler.reset``, ``pause_controller.handle_transcript``, and
+    ``recent_user_transcripts``; a SimpleNamespace with the relevant
+    attributes is enough.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    return SimpleNamespace(
+        movement_manager=MagicMock(),
+        head_wobbler=head_wobbler,
+        pause_controller=pause_controller,
+        recent_user_transcripts=recent_user_transcripts if recent_user_transcripts is not None else [],
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_up_subscribes_partial_and_speech_started_callbacks() -> None:
+    """The pipeline wires all three STT callbacks through ``stt.start``."""
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([])
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    assert stt.on_completed is not None
+    assert stt.on_partial is not None
+    assert stt.on_speech_started is not None
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_speech_started_callback_opens_turn_span() -> None:
+    """``_on_speech_started`` opens a root ``turn`` span + child ``stt.infer`` span."""
+    stt = _ProgrammableSTT()
+    pipeline = ComposablePipeline(stt=stt, llm=_ScriptedLLM([]), tts=_RecordingTTS())
+
+    assert pipeline._turn_span is None
+    assert pipeline._stt_infer_span is None
+
+    await pipeline._on_speech_started()
+
+    assert pipeline._turn_span is not None
+    assert pipeline._stt_infer_span is not None
+
+
+@pytest.mark.asyncio
+async def test_speech_started_callback_calls_set_listening_true_when_deps_provided() -> None:
+    deps = _make_mock_deps()
+    pipeline = ComposablePipeline(
+        stt=_ProgrammableSTT(), llm=_ScriptedLLM([]), tts=_RecordingTTS(), deps=deps
+    )
+
+    await pipeline._on_speech_started()
+
+    deps.movement_manager.set_listening.assert_called_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_speech_started_callback_calls_head_wobbler_reset_when_provided() -> None:
+    from unittest.mock import MagicMock
+
+    head_wobbler = MagicMock()
+    deps = _make_mock_deps(head_wobbler=head_wobbler)
+    pipeline = ComposablePipeline(
+        stt=_ProgrammableSTT(), llm=_ScriptedLLM([]), tts=_RecordingTTS(), deps=deps
+    )
+
+    await pipeline._on_speech_started()
+
+    head_wobbler.reset.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_speech_started_callback_calls_clear_queue_when_set() -> None:
+    from unittest.mock import MagicMock
+
+    clear_cb = MagicMock()
+    pipeline = ComposablePipeline(stt=_ProgrammableSTT(), llm=_ScriptedLLM([]), tts=_RecordingTTS())
+    pipeline._clear_queue = clear_cb
+
+    await pipeline._on_speech_started()
+
+    clear_cb.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_speech_started_callback_no_deps_does_not_raise() -> None:
+    """When ``deps=None`` the callback opens the span but skips movement/wobbler."""
+    pipeline = ComposablePipeline(
+        stt=_ProgrammableSTT(), llm=_ScriptedLLM([]), tts=_RecordingTTS()
+    )
+
+    await pipeline._on_speech_started()  # must not raise
+
+    assert pipeline._turn_span is not None  # span opened
+    # No deps means no movement/wobbler calls to assert; the test passes
+    # if no exception was raised.
+
+
+@pytest.mark.asyncio
+async def test_partial_callback_publishes_user_partial_to_output_queue() -> None:
+    from fastrtc import AdditionalOutputs
+
+    pipeline = ComposablePipeline(stt=_ProgrammableSTT(), llm=_ScriptedLLM([]), tts=_RecordingTTS())
+
+    await pipeline._on_partial_transcript("hello rob")
+
+    item = pipeline.output_queue.get_nowait()
+    assert isinstance(item, AdditionalOutputs)
+    assert item.args[0] == {"role": "user_partial", "content": "hello rob"}
+
+
+@pytest.mark.asyncio
+async def test_partial_callback_does_not_publish_empty_string() -> None:
+    pipeline = ComposablePipeline(stt=_ProgrammableSTT(), llm=_ScriptedLLM([]), tts=_RecordingTTS())
+
+    await pipeline._on_partial_transcript("")
+
+    assert pipeline.output_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_completed_callback_publishes_user_to_output_queue_when_deps_provided() -> None:
+    from fastrtc import AdditionalOutputs
+
+    deps = _make_mock_deps()
+    pipeline = ComposablePipeline(
+        stt=_ProgrammableSTT(),
+        llm=_ScriptedLLM([LLMResponse(text="reply")]),
+        tts=_RecordingTTS(),
+        deps=deps,
+    )
+
+    await pipeline._on_transcript_completed("hi there")
+
+    # First item on the queue is the user-role transcript marker; the TTS
+    # frame follows.
+    item = pipeline.output_queue.get_nowait()
+    assert isinstance(item, AdditionalOutputs)
+    assert item.args[0] == {"role": "user", "content": "hi there"}
+
+
+@pytest.mark.asyncio
+async def test_completed_callback_records_user_transcript_when_deps_provided() -> None:
+    deps = _make_mock_deps()
+    pipeline = ComposablePipeline(
+        stt=_ProgrammableSTT(),
+        llm=_ScriptedLLM([LLMResponse(text="reply")]),
+        tts=_RecordingTTS(),
+        deps=deps,
+    )
+
+    await pipeline._on_transcript_completed("hello robot")
+
+    assert "hello robot" in deps.recent_user_transcripts
+
+
+@pytest.mark.asyncio
+async def test_completed_callback_calls_set_listening_false_when_deps_provided() -> None:
+    deps = _make_mock_deps()
+    pipeline = ComposablePipeline(
+        stt=_ProgrammableSTT(),
+        llm=_ScriptedLLM([LLMResponse(text="reply")]),
+        tts=_RecordingTTS(),
+        deps=deps,
+    )
+
+    await pipeline._on_transcript_completed("hi")
+
+    deps.movement_manager.set_listening.assert_called_with(False)
+
+
+@pytest.mark.asyncio
+async def test_completed_callback_suppresses_duplicate_within_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mirror of mixin's 0.75s duplicate-suppression window.
+
+    Pins the perf-counter window to a deterministic sequence so the
+    test is independent of test-runner wallclock delays (e.g.
+    pytest-xdist worker overhead, joke-history file I/O on the first
+    LLM round-trip).
+    """
+    deps = _make_mock_deps()
+    pipeline = ComposablePipeline(
+        stt=_ProgrammableSTT(),
+        llm=_ScriptedLLM([LLMResponse(text="r1"), LLMResponse(text="r2")]),
+        tts=_RecordingTTS(),
+        deps=deps,
+    )
+
+    # First call sets the dedup baseline at t=100.0; second call at
+    # t=100.1 is well inside the 0.75s window and must be dropped.
+    # We also intercept the post-LLM perf_counter reads (in
+    # telemetry.record_stt timing) by stamping a stable sequence.
+    times = iter([100.0, 100.0, 100.05, 100.1, 100.1, 100.15])
+
+    def _fake_perf_counter() -> float:
+        try:
+            return next(times)
+        except StopIteration:
+            return 100.2
+
+    monkeypatch.setattr(
+        "robot_comic.composable_pipeline.time.perf_counter", _fake_perf_counter
+    )
+
+    await pipeline._on_transcript_completed("repeat me")
+    # Immediate duplicate within the 0.75s window must be ignored.
+    await pipeline._on_transcript_completed("repeat me")
+
+    user_items = []
+    while not pipeline.output_queue.empty():
+        item = pipeline.output_queue.get_nowait()
+        from fastrtc import AdditionalOutputs as AO
+
+        if isinstance(item, AO) and item.args[0].get("role") == "user":
+            user_items.append(item)
+    assert len(user_items) == 1, "duplicate completion within 0.75s window must be dropped"
+
+
+@pytest.mark.asyncio
+async def test_completed_callback_pause_controller_handled_drops_transcript() -> None:
+    from unittest.mock import MagicMock
+    from robot_comic.pause import TranscriptDisposition
+
+    pause = MagicMock()
+    pause.handle_transcript.return_value = TranscriptDisposition.HANDLED
+    deps = _make_mock_deps(pause_controller=pause)
+
+    llm = _ScriptedLLM([])  # exhausted — would error if dispatch happens
+    pipeline = ComposablePipeline(
+        stt=_ProgrammableSTT(), llm=llm, tts=_RecordingTTS(), deps=deps
+    )
+
+    await pipeline._on_transcript_completed("pause please")
+
+    pause.handle_transcript.assert_called_once_with("pause please")
+    # LLM must not have been invoked since pause handled the transcript.
+    assert llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_completed_callback_pause_controller_dispatch_proceeds() -> None:
+    from unittest.mock import MagicMock
+    from robot_comic.pause import TranscriptDisposition
+
+    pause = MagicMock()
+    pause.handle_transcript.return_value = TranscriptDisposition.DISPATCH
+    deps = _make_mock_deps(pause_controller=pause)
+
+    pipeline = ComposablePipeline(
+        stt=_ProgrammableSTT(),
+        llm=_ScriptedLLM([LLMResponse(text="ok")]),
+        tts=_RecordingTTS(),
+        deps=deps,
+    )
+
+    await pipeline._on_transcript_completed("normal speech")
+
+    pause.handle_transcript.assert_called_once_with("normal speech")
+    # Pipeline proceeded to LLM dispatch since pause returned DISPATCH.
+    assert pipeline.conversation_history[-1]["role"] == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_completed_callback_welcome_gate_waiting_drops_on_no_match() -> None:
+    from robot_comic.welcome_gate import WelcomeGate
+
+    gate = WelcomeGate(["rickles"])
+    deps = _make_mock_deps()
+    llm = _ScriptedLLM([])  # exhausted — drop must prevent dispatch
+    pipeline = ComposablePipeline(
+        stt=_ProgrammableSTT(),
+        llm=llm,
+        tts=_RecordingTTS(),
+        deps=deps,
+        welcome_gate=gate,
+    )
+
+    await pipeline._on_transcript_completed("hello world")
+
+    # Gate still WAITING since "rickles" not heard.
+    from robot_comic.welcome_gate import GateState
+
+    assert gate.state is GateState.WAITING
+    assert llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_completed_callback_welcome_gate_waiting_opens_on_match_and_dispatches() -> None:
+    from robot_comic.welcome_gate import GateState, WelcomeGate
+
+    gate = WelcomeGate(["rickles"])
+    deps = _make_mock_deps()
+    pipeline = ComposablePipeline(
+        stt=_ProgrammableSTT(),
+        llm=_ScriptedLLM([LLMResponse(text="hey kid")]),
+        tts=_RecordingTTS(),
+        deps=deps,
+        welcome_gate=gate,
+    )
+
+    await pipeline._on_transcript_completed("hey rickles")
+
+    assert gate.state is GateState.GATED
+    # LLM did run (gate just opened on the matching transcript).
+    assert pipeline.conversation_history[-1]["role"] == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_completed_callback_welcome_gate_gated_dispatches_immediately() -> None:
+    from robot_comic.welcome_gate import GateState, WelcomeGate
+
+    gate = WelcomeGate(["rickles"])
+    gate.state = GateState.GATED  # pre-opened
+    deps = _make_mock_deps()
+    pipeline = ComposablePipeline(
+        stt=_ProgrammableSTT(),
+        llm=_ScriptedLLM([LLMResponse(text="reply")]),
+        tts=_RecordingTTS(),
+        deps=deps,
+        welcome_gate=gate,
+    )
+
+    await pipeline._on_transcript_completed("anything")
+
+    assert pipeline.conversation_history[-1]["role"] == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_speech_started_no_op_for_legacy_pipeline_without_callbacks() -> None:
+    """A pipeline constructed without ``deps`` still wires the callbacks safely.
+
+    Pre-5e.2 callers (host-coupled triples) don't pass ``deps`` to the
+    pipeline; the mixin handles speech-start/partial on the host. The
+    pipeline must not crash when its own callbacks fire in that mode.
+    """
+    pipeline = ComposablePipeline(
+        stt=_ProgrammableSTT(), llm=_ScriptedLLM([]), tts=_RecordingTTS()
+    )
+    # All three callbacks must be safe no-ops with no deps / no gate.
+    await pipeline._on_speech_started()
+    await pipeline._on_partial_transcript("partial")
+    # Completed without deps/gate falls through to the LLM loop; provide one
+    # response so the loop doesn't exhaust.
+    pipeline.llm = _ScriptedLLM([LLMResponse(text="ok")])
+    await pipeline._on_transcript_completed("hi")
