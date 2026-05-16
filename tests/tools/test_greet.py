@@ -118,6 +118,43 @@ async def test_scan_no_face_after_full_sweep(Greet):
     assert result == {"no_subject": True}
 
 
+# ── scan: sweep disabled (kill-switch) — terminal no_subject ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_scan_sweep_disabled_returns_terminal_no_subject(Greet, monkeypatch: pytest.MonkeyPatch):
+    """With REACHY_MINI_GREET_SWEEP_DISABLED set, no_subject must be self-describing.
+
+    Hardware validation 2026-05-16 showed Gemini retrying ``greet action=scan``
+    up to 4 times per turn because the bare ``{"no_subject": True}`` return
+    looked retryable. With the sweep kill-switch on, the outcome is fixed by
+    configuration — the tool must tell the LLM not to retry.
+    """
+    monkeypatch.setenv("REACHY_MINI_GREET_SWEEP_DISABLED", "1")
+    monkeypatch.setenv("REACHY_MINI_GREET_SCAN_WAIT_S", "0.0")
+
+    deps = make_deps()
+    with (
+        patch("don_rickles_greet.MP_AVAILABLE", True),
+        patch("don_rickles_greet._detect_face_with_scores", return_value=(False, [])),
+    ):
+        result = await Greet()(deps, action="scan")
+
+    # Backwards-compat: the original ``no_subject: True`` shape is preserved
+    # so persona prompts that read this key keep working.
+    assert result.get("no_subject") is True
+    # New fields that defuse the retry loop:
+    assert result.get("sweep_disabled") is True
+    assert result.get("retry_hint") == "do_not_retry"
+    note = result.get("note", "")
+    assert isinstance(note, str) and note, "note must be a non-empty string"
+    # The note should mention the configuration cause and explicitly tell
+    # the LLM not to retry, so any backend reading the JSON-serialised
+    # tool result picks the message up in natural language.
+    assert "REACHY_MINI_GREET_SWEEP_DISABLED" in note
+    assert "do not retry" in note.lower()
+
+
 # ── scan: MediaPipe unavailable (fail-open) ───────────────────────────────────
 
 

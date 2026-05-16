@@ -103,7 +103,10 @@ async def test_scan_emits_debug_detection_list_even_when_empty(
     ):
         result = await Greet()._scan(deps)
 
-    assert result == {"no_subject": True}
+    # Sweep-disabled path returns an enriched ``no_subject`` dict with a
+    # ``retry_hint`` etc.; only the ``no_subject`` flag is load-bearing for
+    # this diagnostic test.
+    assert result.get("no_subject") is True
     debug_msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
     detection_lines = [m for m in debug_msgs if "mediapipe detections" in m]
     assert detection_lines, f"No detection DEBUG log found in: {debug_msgs}"
@@ -138,7 +141,9 @@ async def test_scan_emits_info_summary_on_no_subject(
     ):
         result = await Greet()._scan(deps)
 
-    assert result == {"no_subject": True}
+    # Sweep-disabled path: only assert the ``no_subject`` flag — the rest
+    # of the dict is asserted in tests/tools/test_greet.py.
+    assert result.get("no_subject") is True
     info_msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
     summary_lines = [m for m in info_msgs if "no_subject" in m and "frame_shape=" in m]
     assert summary_lines, f"No no_subject INFO summary found in: {info_msgs}"
@@ -241,7 +246,8 @@ async def test_scan_logs_when_poll_frame_is_none(
     caplog.set_level(logging.DEBUG, logger="robot_comic.tools.greet")
     result = await Greet()._scan(deps)
 
-    assert result == {"no_subject": True}
+    # Sweep-disabled path: only assert the ``no_subject`` flag.
+    assert result.get("no_subject") is True
     debug_msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
     poll_none_lines = [m for m in debug_msgs if "returned None" in m and "during poll" in m]
     assert poll_none_lines, f"No poll-None DEBUG log found in: {debug_msgs}"

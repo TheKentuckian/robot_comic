@@ -332,7 +332,10 @@ class Greet(Tool):
         # cowling on at least one unit (tracked in #264). Default off so this
         # is opt-in via env until the proper velocity-clamped path lands.
         if os.environ.get("REACHY_MINI_GREET_SWEEP_DISABLED", "").lower() in ("1", "true", "yes"):
-            logger.info("greet: sweep disabled by REACHY_MINI_GREET_SWEEP_DISABLED; returning no_subject")
+            logger.info(
+                "greet: sweep disabled by REACHY_MINI_GREET_SWEEP_DISABLED; "
+                "returning terminal no_subject (do_not_retry)"
+            )
             self._log_no_subject_summary(
                 last_shape,
                 last_mean,
@@ -340,7 +343,28 @@ class Greet(Tool):
                 last_highest_confidence,
                 deps,
             )
-            return {"no_subject": True}
+            # Terminal return — the outcome is fixed by configuration, not a
+            # transient miss. Hardware validation 2026-05-16 caught the
+            # Gemini-Don-Rickles persona looping ``greet action=scan`` four
+            # times in one turn (~5s each) because the bare
+            # ``{"no_subject": True}`` looked retryable. The added fields
+            # (``sweep_disabled``, ``retry_hint``, ``note``) make the
+            # result self-describing for any LLM backend — current Gemini,
+            # future Llama / Hermes — without per-persona prompt tuning.
+            # The legacy ``no_subject: True`` key is preserved so existing
+            # persona prompts that read it keep working.
+            return {
+                "no_subject": True,
+                "sweep_disabled": True,
+                "retry_hint": "do_not_retry",
+                "note": (
+                    "Head sweep is disabled by configuration "
+                    "(REACHY_MINI_GREET_SWEEP_DISABLED). The scan only "
+                    "checked the head-on view and saw nobody. Calling "
+                    "greet again this turn will produce the same result "
+                    "— do not retry. Improvise as if the room is empty."
+                ),
+            }
 
         for direction in SWEEP_POSITIONS:
             move_result = await MoveHead()(deps, direction=direction)
