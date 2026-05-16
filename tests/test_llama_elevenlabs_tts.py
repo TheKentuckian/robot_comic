@@ -409,3 +409,45 @@ async def test_synthesize_applies_tags_before_streaming(monkeypatch: pytest.Monk
     text, tags = captured_calls[0]
     assert text == "Zoom in!"
     assert "fast" in tags
+
+
+# ---------------------------------------------------------------------------
+# Phase 5e.2 — _prepare_startup_credentials idempotency guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_prepare_startup_credentials_is_idempotent() -> None:
+    """Second call must NOT rebuild ``self._http`` / re-fetch the model name.
+
+    Pre-5e.2 the idempotency guard lived on
+    :class:`LocalSTTInputMixin._prepare_startup_credentials` (the host
+    shell wraps the handler's prepare). Post-5e.2 the migrated triple's
+    factory constructs a plain handler — no shell — and the LLM and TTS
+    adapters each call ``handler._prepare_startup_credentials`` once.
+    Without a per-handler guard the second call leaks an extra
+    ``httpx.AsyncClient`` instance.
+    """
+    from robot_comic.llama_elevenlabs_tts import LlamaElevenLabsTTSResponseHandler
+
+    handler = LlamaElevenLabsTTSResponseHandler(_make_deps())
+
+    fetch_calls = 0
+
+    async def _fake_fetch(self):  # type: ignore[no-untyped-def]
+        nonlocal fetch_calls
+        fetch_calls += 1
+        return "llama-cpp"
+
+    handler._fetch_llm_model_name = _fake_fetch.__get__(handler)  # type: ignore[method-assign]
+    handler.tool_manager = MagicMock()
+
+    await handler._prepare_startup_credentials()
+    first_http = handler._http
+    assert first_http is not None
+    assert fetch_calls == 1
+
+    await handler._prepare_startup_credentials()
+    # Same client instance; no leak. Fetch not re-run.
+    assert handler._http is first_http
+    assert fetch_calls == 1
