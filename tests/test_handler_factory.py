@@ -13,9 +13,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from robot_comic import config as cfg_mod
 from robot_comic.config import (
     AUDIO_INPUT_HF,
     AUDIO_OUTPUT_HF,
+    FACTORY_PATH_LEGACY,
     AUDIO_INPUT_MOONSHINE,
     AUDIO_INPUT_BACKEND_ENV,
     AUDIO_INPUT_GEMINI_LIVE,
@@ -28,6 +30,19 @@ from robot_comic.config import (
     AUDIO_OUTPUT_OPENAI_REALTIME,
 )
 from robot_comic.handler_factory import HandlerFactory
+
+
+@pytest.fixture(autouse=True)
+def _pin_factory_path_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin ``FACTORY_PATH=legacy`` for this module.
+
+    Phase 4d (#337) flipped the default to ``composable``. The tests in
+    this file pin the legacy concrete-handler dispatch matrix and stay
+    pinned to ``legacy`` until those handlers are deleted in 4e — at
+    which point this whole module is rewritten/retired. The composable
+    branches are covered by ``test_handler_factory_factory_path.py``.
+    """
+    monkeypatch.setattr(cfg_mod.config, "FACTORY_PATH", FACTORY_PATH_LEGACY)
 
 
 # ---------------------------------------------------------------------------
