@@ -6,9 +6,18 @@ import json
 import math
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from typing import Any
 from unittest.mock import patch
 
-from robot_comic.joke_history import _DECAY_TAU_DAYS, JokeHistory, last_sentence_of, default_history_path
+import pytest
+
+from robot_comic.joke_history import (
+    _DECAY_TAU_DAYS,
+    JokeHistory,
+    last_sentence_of,
+    default_history_path,
+    record_joke_history,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -378,3 +387,264 @@ def test_format_for_prompt_decay_n_limits_output(tmp_path: Path) -> None:
     # Count bullet lines
     bullets = [line for line in result.splitlines() if line.startswith("- ")]
     assert len(bullets) == 2
+
+
+# ---------------------------------------------------------------------------
+# record_joke_history — Lifecycle Hook #4 (#337)
+# ---------------------------------------------------------------------------
+
+
+class _FakeConfig:
+    """Stand-in for the config singleton used by record_joke_history."""
+
+    JOKE_HISTORY_ENABLED: bool = True
+    REACHY_MINI_CUSTOM_PROFILE: str = "rickles"
+
+
+def _install_fake_config(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> _FakeConfig:
+    """Install a fake config so record_joke_history reads predictable values.
+
+    The helper imports ``config`` locally to avoid a module-load cycle, so
+    we have to patch the source module attribute rather than the helper's
+    reference.
+    """
+    from robot_comic import config as cfg_mod
+
+    fake = _FakeConfig()
+    for k, v in overrides.items():
+        setattr(fake, k, v)
+    monkeypatch.setattr(cfg_mod, "config", fake)
+    return fake
+
+
+class _RecordingAdd:
+    """Replacement for JokeHistory(...).add — records every call."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    def __call__(self, *, path: Path) -> "_RecordingJokeHistory":
+        return _RecordingJokeHistory(self.calls)
+
+
+class _RecordingJokeHistory:
+    """Stand-in JokeHistory whose ``add`` records to a shared list."""
+
+    def __init__(self, calls: list[tuple[str, str, str]]) -> None:
+        self._calls = calls
+
+    def add(self, punchline: str, topic: str = "", persona: str = "") -> None:
+        self._calls.append((punchline, topic, persona))
+
+
+@pytest.mark.asyncio
+async def test_record_joke_history_disabled_skips_extraction_and_add(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When ``JOKE_HISTORY_ENABLED=False`` the helper is a no-op."""
+    from robot_comic import joke_history as mod
+
+    _install_fake_config(monkeypatch, JOKE_HISTORY_ENABLED=False)
+
+    extract_calls: list[str] = []
+
+    async def _no_extract(text: str, http: Any, *, llama_url: str = "") -> dict[str, Any] | None:
+        extract_calls.append(text)
+        return {"punchline": "ignored", "topic": "x"}
+
+    monkeypatch.setattr(mod, "extract_punchline_via_llm", _no_extract)
+
+    add_calls: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(mod, "JokeHistory", _RecordingAdd())
+
+    await mod.record_joke_history("That's the joke!")
+
+    assert extract_calls == []
+    assert add_calls == []
+
+
+@pytest.mark.asyncio
+async def test_record_joke_history_empty_text_skips_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty / whitespace-only text never triggers extraction."""
+    from robot_comic import joke_history as mod
+
+    _install_fake_config(monkeypatch)
+
+    extract_calls: list[str] = []
+
+    async def _no_extract(text: str, http: Any, *, llama_url: str = "") -> dict[str, Any] | None:
+        extract_calls.append(text)
+        return None
+
+    monkeypatch.setattr(mod, "extract_punchline_via_llm", _no_extract)
+
+    await mod.record_joke_history("")
+    await mod.record_joke_history("   ")
+
+    assert extract_calls == []
+
+
+@pytest.mark.asyncio
+async def test_record_joke_history_success_path_calls_add(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-empty punchline goes through ``JokeHistory.add`` with correct args."""
+    from robot_comic import joke_history as mod
+
+    _install_fake_config(monkeypatch, REACHY_MINI_CUSTOM_PROFILE="rickles")
+
+    async def _extract(text: str, http: Any, *, llama_url: str = "") -> dict[str, Any] | None:
+        return {"punchline": "You look like a hockey puck.", "topic": "appearance"}
+
+    monkeypatch.setattr(mod, "extract_punchline_via_llm", _extract)
+
+    add_calls: list[tuple[str, str, str]] = []
+
+    class _FakeJH:
+        def __init__(self, path: Path) -> None:
+            self._path = path
+
+        def add(self, punchline: str, topic: str = "", persona: str = "") -> None:
+            add_calls.append((punchline, topic, persona))
+
+    monkeypatch.setattr(mod, "JokeHistory", _FakeJH)
+
+    await mod.record_joke_history("Long assistant text ending in a punchline.")
+
+    assert add_calls == [("You look like a hockey puck.", "appearance", "rickles")]
+
+
+@pytest.mark.asyncio
+async def test_record_joke_history_none_punchline_skips_add(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When extraction reports the text is setup/banter, no add fires."""
+    from robot_comic import joke_history as mod
+
+    _install_fake_config(monkeypatch)
+
+    async def _extract(text: str, http: Any, *, llama_url: str = "") -> dict[str, Any] | None:
+        return {"punchline": None, "topic": ""}
+
+    monkeypatch.setattr(mod, "extract_punchline_via_llm", _extract)
+
+    add_calls: list[tuple[str, str, str]] = []
+
+    class _FakeJH:
+        def __init__(self, path: Path) -> None:
+            pass
+
+        def add(self, punchline: str, topic: str = "", persona: str = "") -> None:
+            add_calls.append((punchline, topic, persona))
+
+    monkeypatch.setattr(mod, "JokeHistory", _FakeJH)
+
+    await mod.record_joke_history("Setup line with no punch.")
+
+    assert add_calls == []
+
+
+@pytest.mark.asyncio
+async def test_record_joke_history_extraction_exception_swallowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Extraction raising must not propagate — joke history is best-effort."""
+    from robot_comic import joke_history as mod
+
+    _install_fake_config(monkeypatch)
+
+    async def _broken_extract(text: str, http: Any, *, llama_url: str = "") -> dict[str, Any] | None:
+        raise RuntimeError("upstream blew up")
+
+    monkeypatch.setattr(mod, "extract_punchline_via_llm", _broken_extract)
+
+    # If it raises, this test fails — pytest catches the exception out of band.
+    await mod.record_joke_history("anything")
+
+
+@pytest.mark.asyncio
+async def test_record_joke_history_add_exception_swallowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JokeHistory.add raising must not propagate."""
+    from robot_comic import joke_history as mod
+
+    _install_fake_config(monkeypatch)
+
+    async def _extract(text: str, http: Any, *, llama_url: str = "") -> dict[str, Any] | None:
+        return {"punchline": "boom", "topic": ""}
+
+    monkeypatch.setattr(mod, "extract_punchline_via_llm", _extract)
+
+    class _BoomJH:
+        def __init__(self, path: Path) -> None:
+            pass
+
+        def add(self, punchline: str, topic: str = "", persona: str = "") -> None:
+            raise OSError("disk full")
+
+    monkeypatch.setattr(mod, "JokeHistory", _BoomJH)
+
+    await mod.record_joke_history("anything")
+
+
+@pytest.mark.asyncio
+async def test_record_joke_history_persona_defaults_to_config_custom_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When persona arg is omitted, helper reads ``config.REACHY_MINI_CUSTOM_PROFILE``."""
+    from robot_comic import joke_history as mod
+
+    _install_fake_config(monkeypatch, REACHY_MINI_CUSTOM_PROFILE="hicks")
+
+    async def _extract(text: str, http: Any, *, llama_url: str = "") -> dict[str, Any] | None:
+        return {"punchline": "p", "topic": "t"}
+
+    monkeypatch.setattr(mod, "extract_punchline_via_llm", _extract)
+
+    add_calls: list[tuple[str, str, str]] = []
+
+    class _FakeJH:
+        def __init__(self, path: Path) -> None:
+            pass
+
+        def add(self, punchline: str, topic: str = "", persona: str = "") -> None:
+            add_calls.append((punchline, topic, persona))
+
+    monkeypatch.setattr(mod, "JokeHistory", _FakeJH)
+
+    await mod.record_joke_history("text")
+
+    assert add_calls == [("p", "t", "hicks")]
+
+
+@pytest.mark.asyncio
+async def test_record_joke_history_explicit_persona_overrides_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit persona kwarg wins over the config default."""
+    from robot_comic import joke_history as mod
+
+    _install_fake_config(monkeypatch, REACHY_MINI_CUSTOM_PROFILE="default")
+
+    async def _extract(text: str, http: Any, *, llama_url: str = "") -> dict[str, Any] | None:
+        return {"punchline": "p", "topic": ""}
+
+    monkeypatch.setattr(mod, "extract_punchline_via_llm", _extract)
+
+    add_calls: list[tuple[str, str, str]] = []
+
+    class _FakeJH:
+        def __init__(self, path: Path) -> None:
+            pass
+
+        def add(self, punchline: str, topic: str = "", persona: str = "") -> None:
+            add_calls.append((punchline, topic, persona))
+
+    monkeypatch.setattr(mod, "JokeHistory", _FakeJH)
+
+    await mod.record_joke_history("text", persona="explicit")
+
+    assert add_calls == [("p", "", "explicit")]
