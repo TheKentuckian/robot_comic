@@ -479,6 +479,203 @@ async def test_standalone_start_failure_clears_callback_for_retry(
 
 
 # ---------------------------------------------------------------------------
+# Standalone mode partial / speech-started routing (Phase 5e.2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_standalone_start_invokes_on_partial_for_partial_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``on_partial`` fires for partial events with non-empty text."""
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter()
+    partials: list[str] = []
+
+    async def _on_completed(_t: str) -> None: ...
+
+    async def _on_partial(t: str) -> None:
+        partials.append(t)
+
+    await adapter.start(_on_completed, on_partial=_on_partial)
+    await stub.fire_event("partial", "hello ro")
+    await stub.fire_event("partial", "hello robot")
+
+    assert partials == ["hello ro", "hello robot"]
+
+
+@pytest.mark.asyncio
+async def test_standalone_start_invokes_on_speech_started_for_started_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``on_speech_started`` fires once per ``started`` event."""
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter()
+    started_calls = 0
+
+    async def _on_completed(_t: str) -> None: ...
+
+    async def _on_speech_started() -> None:
+        nonlocal started_calls
+        started_calls += 1
+
+    await adapter.start(_on_completed, on_speech_started=_on_speech_started)
+    await stub.fire_event("started", "")
+    await stub.fire_event("started", "")
+
+    assert started_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_standalone_start_does_not_invoke_partial_for_completed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A completed event must NOT fire ``on_partial``."""
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter()
+    partials: list[str] = []
+
+    async def _on_completed(_t: str) -> None: ...
+
+    async def _on_partial(t: str) -> None:
+        partials.append(t)
+
+    await adapter.start(_on_completed, on_partial=_on_partial)
+    await stub.fire_event("completed", "done")
+    assert partials == []
+
+
+@pytest.mark.asyncio
+async def test_standalone_start_does_not_invoke_speech_started_for_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Partial events must NOT fire ``on_speech_started``."""
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter()
+    started_calls = 0
+
+    async def _on_completed(_t: str) -> None: ...
+
+    async def _on_speech_started() -> None:
+        nonlocal started_calls
+        started_calls += 1
+
+    await adapter.start(_on_completed, on_speech_started=_on_speech_started)
+    await stub.fire_event("partial", "in progress")
+    assert started_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_standalone_start_with_no_partial_callback_does_not_crash_on_partial_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backwards-compat: omitting ``on_partial`` must drop partial events safely."""
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter()
+
+    async def _on_completed(_t: str) -> None: ...
+
+    await adapter.start(_on_completed)
+    # Must not raise — adapter silently drops the partial.
+    await stub.fire_event("partial", "hello")
+    await stub.fire_event("started", "")
+
+
+@pytest.mark.asyncio
+async def test_standalone_partial_callback_drops_empty_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty partial transcripts (Moonshine fires these at first VAD) are dropped."""
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter()
+    partials: list[str] = []
+
+    async def _on_completed(_t: str) -> None: ...
+
+    async def _on_partial(t: str) -> None:
+        partials.append(t)
+
+    await adapter.start(_on_completed, on_partial=_on_partial)
+    await stub.fire_event("partial", "")
+    assert partials == []
+
+
+# ---------------------------------------------------------------------------
+# should_drop_frame callback (Phase 5e.2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_standalone_should_drop_frame_when_callback_returns_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``feed_audio`` does NOT forward when ``should_drop_frame`` is truthy."""
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter(should_drop_frame=lambda: True)
+
+    async def _on_completed(_t: str) -> None: ...
+
+    await adapter.start(_on_completed)
+    samples = np.zeros(160, dtype=np.int16)
+    await adapter.feed_audio(AudioFrame(samples=samples, sample_rate=16000))
+
+    assert stub.fed_frames == []
+
+
+@pytest.mark.asyncio
+async def test_standalone_should_drop_frame_when_callback_returns_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``feed_audio`` forwards when ``should_drop_frame`` is falsy."""
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter(should_drop_frame=lambda: False)
+
+    async def _on_completed(_t: str) -> None: ...
+
+    await adapter.start(_on_completed)
+    samples = np.zeros(160, dtype=np.int16)
+    await adapter.feed_audio(AudioFrame(samples=samples, sample_rate=16000))
+
+    assert len(stub.fed_frames) == 1
+
+
+@pytest.mark.asyncio
+async def test_standalone_should_drop_frame_default_none_forwards_every_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without a ``should_drop_frame`` callback every frame is forwarded."""
+    stub = _install_stub_listener(monkeypatch)
+    adapter = MoonshineSTTAdapter()  # no should_drop_frame
+
+    async def _on_completed(_t: str) -> None: ...
+
+    await adapter.start(_on_completed)
+    samples = np.zeros(160, dtype=np.int16)
+    await adapter.feed_audio(AudioFrame(samples=samples, sample_rate=16000))
+    await adapter.feed_audio(AudioFrame(samples=samples, sample_rate=16000))
+
+    assert len(stub.fed_frames) == 2
+
+
+@pytest.mark.asyncio
+async def test_host_coupled_mode_ignores_should_drop_frame_callback() -> None:
+    """``should_drop_frame`` only applies in standalone mode; host-coupled
+    forwarding still goes through the host's ``receive`` (which has its own
+    echo-guard in :class:`LocalSTTInputMixin`)."""
+    handler = _StubMoonshineHandler()
+    # The callback says "drop everything" — host-coupled must ignore it.
+    adapter = MoonshineSTTAdapter(handler, should_drop_frame=lambda: True)
+
+    async def _cb(_t: str) -> None: ...
+
+    await adapter.start(_cb)
+    samples = np.array([1, 2, 3], dtype=np.int16)
+    await adapter.feed_audio(AudioFrame(samples=samples, sample_rate=16000))
+
+    assert len(handler.received_frames) == 1
+
+
+# ---------------------------------------------------------------------------
 # Backwards-compat: the host-coupled shape is unchanged.
 # ---------------------------------------------------------------------------
 
