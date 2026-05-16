@@ -1441,7 +1441,7 @@ async def test_completed_callback_calls_set_listening_false_when_deps_provided()
 async def test_completed_callback_suppresses_duplicate_within_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Mirror of mixin's 0.75s duplicate-suppression window.
+    """Exact-match duplicate suppression within the dedup window.
 
     Pins the perf-counter window to a deterministic sequence so the
     test is independent of test-runner wallclock delays (e.g.
@@ -1457,7 +1457,7 @@ async def test_completed_callback_suppresses_duplicate_within_window(
     )
 
     # First call sets the dedup baseline at t=100.0; second call at
-    # t=100.1 is well inside the 0.75s window and must be dropped.
+    # t=100.1 is well inside the ``DEDUP_WINDOW_S`` and must be dropped.
     # We also intercept the post-LLM perf_counter reads (in
     # telemetry.record_stt timing) by stamping a stable sequence.
     times = iter([100.0, 100.0, 100.05, 100.1, 100.1, 100.15])
@@ -1471,7 +1471,7 @@ async def test_completed_callback_suppresses_duplicate_within_window(
     monkeypatch.setattr("robot_comic.composable_pipeline.time.perf_counter", _fake_perf_counter)
 
     await pipeline._on_transcript_completed("repeat me")
-    # Immediate duplicate within the 0.75s window must be ignored.
+    # Immediate duplicate within the dedup window must be ignored.
     await pipeline._on_transcript_completed("repeat me")
 
     user_items = []
@@ -1481,7 +1481,172 @@ async def test_completed_callback_suppresses_duplicate_within_window(
 
         if isinstance(item, AO) and item.args[0].get("role") == "user":
             user_items.append(item)
-    assert len(user_items) == 1, "duplicate completion within 0.75s window must be dropped"
+    assert len(user_items) == 1, "duplicate completion within dedup window must be dropped"
+
+
+# ---------------------------------------------------------------------------
+# Near-duplicate (similarity) dedup — duplicate-tts-storm fix
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_near_duplicate_trailing_punctuation_suppressed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two transcripts that differ only by trailing punctuation collapse to one LLM call.
+
+    The 2026-05-16 16:58 hardware storm fingerprint: Moonshine fires
+    two near-identical hypotheses for the same utterance. With strict
+    text-equality dedup, both reach the LLM (which returns identical
+    responses → two ``tts.synthesize`` spans of equal char_count).
+    """
+    deps = _make_mock_deps()
+    llm = _ScriptedLLM([LLMResponse(text="r1"), LLMResponse(text="r2")])
+    pipeline = ComposablePipeline(stt=_ProgrammableSTT(), llm=llm, tts=_RecordingTTS(), deps=deps)
+
+    times = iter([100.0, 100.0, 100.05, 100.1, 100.1, 100.15])
+
+    def _fake_perf_counter() -> float:
+        try:
+            return next(times)
+        except StopIteration:
+            return 100.2
+
+    monkeypatch.setattr("robot_comic.composable_pipeline.time.perf_counter", _fake_perf_counter)
+
+    await pipeline._on_transcript_completed("Hey Rickles")
+    await pipeline._on_transcript_completed("Hey Rickles.")
+
+    assert len(llm.calls) == 1, "near-duplicate within dedup window must collapse to one LLM call"
+
+
+@pytest.mark.asyncio
+async def test_near_duplicate_extra_trailing_word_suppressed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A late-arriving hypothesis with one extra trailing word is still suppressed."""
+    deps = _make_mock_deps()
+    llm = _ScriptedLLM([LLMResponse(text="r1"), LLMResponse(text="r2")])
+    pipeline = ComposablePipeline(stt=_ProgrammableSTT(), llm=llm, tts=_RecordingTTS(), deps=deps)
+
+    times = iter([100.0, 100.0, 100.05, 100.4, 100.4, 100.45])
+
+    def _fake_perf_counter() -> float:
+        try:
+            return next(times)
+        except StopIteration:
+            return 100.5
+
+    monkeypatch.setattr("robot_comic.composable_pipeline.time.perf_counter", _fake_perf_counter)
+
+    await pipeline._on_transcript_completed("how are you doing today")
+    await pipeline._on_transcript_completed("how are you doing today buddy")
+
+    assert len(llm.calls) == 1, "near-duplicate with extra trailing word must be suppressed"
+
+
+@pytest.mark.asyncio
+async def test_distinct_transcripts_within_window_both_dispatched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Genuinely different transcripts within the window must both dispatch.
+
+    Guards against over-aggressive similarity dedup: a fast user
+    follow-up like "wait, no" → "do the dance" must not collapse.
+    """
+    deps = _make_mock_deps()
+    llm = _ScriptedLLM([LLMResponse(text="r1"), LLMResponse(text="r2")])
+    pipeline = ComposablePipeline(stt=_ProgrammableSTT(), llm=llm, tts=_RecordingTTS(), deps=deps)
+
+    times = iter([100.0, 100.0, 100.05, 100.5, 100.5, 100.55])
+
+    def _fake_perf_counter() -> float:
+        try:
+            return next(times)
+        except StopIteration:
+            return 100.6
+
+    monkeypatch.setattr("robot_comic.composable_pipeline.time.perf_counter", _fake_perf_counter)
+
+    await pipeline._on_transcript_completed("hello there friend")
+    await pipeline._on_transcript_completed("do the dance please")
+
+    assert len(llm.calls) == 2, "distinct transcripts within window must both dispatch"
+
+
+@pytest.mark.asyncio
+async def test_near_duplicate_outside_window_both_dispatched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Near-duplicates separated by more than the dedup window both dispatch.
+
+    Operator may legitimately repeat themselves a few seconds later;
+    the similarity dedup is window-bounded, not unconditional.
+    """
+    deps = _make_mock_deps()
+    llm = _ScriptedLLM([LLMResponse(text="r1"), LLMResponse(text="r2")])
+    pipeline = ComposablePipeline(stt=_ProgrammableSTT(), llm=llm, tts=_RecordingTTS(), deps=deps)
+
+    # Each _on_transcript_completed currently consumes ~2 perf_counter
+    # reads on the deps-non-None path (one at the dedup line, one inside
+    # the deps closure block). Second call's *first* read (= ``now``)
+    # must land at t=105.0 to fall outside the 2.0s DEDUP_WINDOW_S.
+    times = iter([100.0, 100.0, 105.0, 105.0])
+
+    def _fake_perf_counter() -> float:
+        try:
+            return next(times)
+        except StopIteration:
+            return 105.1
+
+    monkeypatch.setattr("robot_comic.composable_pipeline.time.perf_counter", _fake_perf_counter)
+
+    await pipeline._on_transcript_completed("Hey Rickles")
+    await pipeline._on_transcript_completed("Hey Rickles.")
+
+    assert len(llm.calls) == 2, "near-duplicate outside dedup window must both dispatch"
+
+
+@pytest.mark.asyncio
+async def test_near_duplicate_logs_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Near-duplicate dedup hits log at WARNING; exact-match stays DEBUG.
+
+    Hardware operators need WARNING-level visibility to confirm the
+    fix is firing on the next on-robot session; exact-match is the
+    high-volume legacy case and would drown the journal at WARNING.
+    """
+    import logging
+
+    deps = _make_mock_deps()
+    llm = _ScriptedLLM([LLMResponse(text="r1"), LLMResponse(text="r2"), LLMResponse(text="r3")])
+    pipeline = ComposablePipeline(stt=_ProgrammableSTT(), llm=llm, tts=_RecordingTTS(), deps=deps)
+
+    times = iter([100.0, 100.0, 100.05, 100.1, 100.1, 100.15, 100.2, 100.2, 100.25])
+
+    def _fake_perf_counter() -> float:
+        try:
+            return next(times)
+        except StopIteration:
+            return 100.3
+
+    monkeypatch.setattr("robot_comic.composable_pipeline.time.perf_counter", _fake_perf_counter)
+
+    with caplog.at_level(logging.DEBUG, logger="robot_comic.composable_pipeline"):
+        await pipeline._on_transcript_completed("Hey Rickles")
+        # Exact-match — DEBUG only.
+        await pipeline._on_transcript_completed("Hey Rickles")
+        # Near-duplicate (trailing punctuation) — WARNING.
+        await pipeline._on_transcript_completed("Hey Rickles.")
+
+    exact_drops = [r for r in caplog.records if "Ignoring duplicate transcript" in r.getMessage()]
+    near_drops = [r for r in caplog.records if "Suppressing near-duplicate transcript" in r.getMessage()]
+    assert len(exact_drops) == 1
+    assert exact_drops[0].levelno == logging.DEBUG
+    assert len(near_drops) == 1
+    assert near_drops[0].levelno == logging.WARNING
 
 
 @pytest.mark.asyncio
