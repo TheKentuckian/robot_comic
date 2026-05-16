@@ -725,9 +725,7 @@ async def test_evicted_assistant_text_no_longer_blocks() -> None:
     ]
     assistant_lines = distinct_phrases[: maxlen + 1]
     final_response = LLMResponse(text="acknowledged")
-    llm = _ScriptedLLM(
-        [LLMResponse(text=line) for line in assistant_lines] + [final_response]
-    )
+    llm = _ScriptedLLM([LLMResponse(text=line) for line in assistant_lines] + [final_response])
     stt = _ProgrammableSTT()
     tts = _RecordingTTS()
     pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
@@ -758,10 +756,7 @@ def test_normalize_for_echo_check_strips_punctuation_and_case() -> None:
     # Apostrophe inside a word becomes a space, which is fine — both
     # sides of the similarity comparison get the same treatment so the
     # ratio remains high.
-    assert (
-        _normalize_for_echo_check("Okay, well I didn't vote for you!")
-        == "okay well i didn t vote for you"
-    )
+    assert _normalize_for_echo_check("Okay, well I didn't vote for you!") == "okay well i didn t vote for you"
     assert _normalize_for_echo_check("  Multiple   spaces\there\n") == "multiple spaces here"
     assert _normalize_for_echo_check("") == ""
     assert _normalize_for_echo_check("...") == ""

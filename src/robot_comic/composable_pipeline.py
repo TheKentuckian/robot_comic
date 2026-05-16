@@ -231,9 +231,7 @@ class ComposablePipeline:
 
         # Phase 5f.3 — ring buffer of recent assistant utterances
         # (normalized) for content-similarity echo filtering.
-        self._recent_assistant_texts: collections.deque[str] = collections.deque(
-            maxlen=ECHO_HISTORY_MAXLEN
-        )
+        self._recent_assistant_texts: collections.deque[str] = collections.deque(maxlen=ECHO_HISTORY_MAXLEN)
 
         self._conversation_history: list[dict[str, Any]] = []
         if system_prompt:
