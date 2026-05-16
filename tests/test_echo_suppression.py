@@ -255,10 +255,13 @@ class TestElevenLabsTTSEchoGuard:
 class TestEchoGuardCooldownEnvVar:
     """REACHY_MINI_ECHO_COOLDOWN_MS controls the safety margin."""
 
-    def test_default_cooldown_is_300ms(self) -> None:
+    def test_default_cooldown_is_800ms(self) -> None:
+        # Phase 5f.2 (2026-05-16): raised from 300 → 800 to cover chassis
+        # room-acoustic reverb tail under the faster-whisper STT backend.
+        # See docs/superpowers/specs/2026-05-16-phase-5f-2-echo-cascade-fix.md.
         from robot_comic.config import DEFAULT_ECHO_COOLDOWN_MS
 
-        assert DEFAULT_ECHO_COOLDOWN_MS == 300
+        assert DEFAULT_ECHO_COOLDOWN_MS == 800
 
     def test_env_var_overrides_cooldown(self) -> None:
         from robot_comic.config import config, refresh_runtime_config_from_env

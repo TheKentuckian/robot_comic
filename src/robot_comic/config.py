@@ -430,9 +430,15 @@ DEFAULT_MAX_HISTORY_TURNS = 20
 
 # Echo-guard cooldown added on top of the byte-count-derived playback deadline.
 # Lower than the old 500ms queue-size estimate because the byte-count is more
-# accurate; 300ms covers device-buffer and scheduling jitter.
+# accurate. Phase 5f.2 (2026-05-16 hardware finding): raised from 300 → 800
+# to swallow room-acoustic reverb tail in the chassis enclosure under the
+# faster-whisper STT backend; the old 300ms covered device-buffer + scheduling
+# jitter but not physical decay, so reverb leaked past the guard and webrtcvad
+# + whisper hallucinated echo-driven turns ("You", "Thank you") that
+# interrupted the assistant. Operators who need tighter barge-in can set
+# ``REACHY_MINI_ECHO_COOLDOWN_MS=300`` to restore the old behaviour.
 ECHO_COOLDOWN_MS_ENV = "REACHY_MINI_ECHO_COOLDOWN_MS"
-DEFAULT_ECHO_COOLDOWN_MS = 300
+DEFAULT_ECHO_COOLDOWN_MS = 800
 
 logger = logging.getLogger(__name__)
 
