@@ -41,7 +41,7 @@ Source-of-truth plan: `docs/superpowers/specs/2026-05-16-phase-5-exploration.md`
 | 5e.4 | Migrate `(moonshine, gemini, chatterbox)` | ✅ Done | #411 (commit 8da54c4) |
 | 5e.5 | Migrate `(moonshine, gemini, elevenlabs)` | ✅ Done | #412 (commit c6b3d40) |
 | 5e.6 | Migrate `(moonshine, gemini-bundled, gemini_tts)` + retire legacy `_clear_queue` `_tts_handler` mirror; mark `LocalSTTInputMixin` as hybrid-only (still serves `LocalSTT*RealtimeHandler` hybrids per Phase 4c-tris Option B) | ✅ Done | `claude/phase-5e-6-gemini-tts-decouple-and-cleanup` |
-| 5f | New STT backends (faster-whisper per memo, tracked as issue #387) | ⏸ Pending | — |
+| 5f | `FasterWhisperSTTAdapter` (closes #387) — alternate to Moonshine; A/B via `AUDIO_INPUT_BACKEND=faster_whisper` + `[faster_whisper_stt]` extra | ✅ Done | `claude/phase-5f-faster-whisper-stt-adapter` |
 
 ## Post-Phase-4 follow-up PRs (between Phase 4 close and Phase 5 5b)
 

@@ -61,6 +61,16 @@ mediapipe_vision = [
 local_stt = [
   "moonshine-voice>=0.0.46",
 ]
+faster_whisper_stt = [
+  # Phase 5f: faster-whisper STT as alternate to Moonshine. See issue #387.
+  # Same faster-whisper version asset_build pulls in for the build-time
+  # scripts (script use is decoupled — `asset_build` keeps its own copy
+  # so a faster-whisper bump here doesn't silently break build_welcome_assets.py).
+  "faster-whisper>=1.0.0",
+  # silero-vad chunks streaming audio into utterances since faster-whisper
+  # is batch-only. v5+ ships the modernised VADIterator helper.
+  "silero-vad>=5.0.0",
+]
 otel = [
   # OTLP exporter for remote/SigNoz export (ROBOT_INSTRUMENTATION=remote).
   # Requires protobuf>=5 which conflicts with mediapipe<5; install separately

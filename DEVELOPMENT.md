@@ -48,7 +48,8 @@ local `.venv`. Those commands need updating to match this workflow.
 
 | Extra | Installs | Required for |
 |---|---|---|
-| `local_stt` | `moonshine-voice` | Local Moonshine STT backend |
+| `local_stt` | `moonshine-voice` | Local Moonshine STT backend (default) |
+| `faster_whisper_stt` | `faster-whisper`, `silero-vad` | Alternate local STT (Phase 5f, A/B against Moonshine) |
 | `local_vision` | torch, transformers, accelerate | SmolVLM2 local vision |
 | `yolo_vision` | ultralytics, supervision, opencv | YOLO head tracking |
 
@@ -56,6 +57,28 @@ local `.venv`. Those commands need updating to match this workflow.
 `BACKEND_PROVIDER=local_stt` (the on-robot default). The autostart launcher
 (`/usr/local/bin/reachy-app-autostart.py`) runs with `/venvs/apps_venv/bin/python`,
 so any extras needed at runtime must be installed into that venv.
+
+### Switching STT backend (Moonshine vs faster-whisper)
+
+The composable triples support either Moonshine or faster-whisper as the
+on-robot STT (Phase 5f / issue #387). Default is Moonshine. To A/B against
+faster-whisper:
+
+```bash
+uv pip install -e .[faster_whisper_stt]
+export REACHY_MINI_AUDIO_INPUT_BACKEND=faster_whisper
+export REACHY_MINI_AUDIO_OUTPUT_BACKEND=chatterbox   # or elevenlabs / gemini_tts
+python -m robot_comic.main
+```
+
+Revert by unsetting `REACHY_MINI_AUDIO_INPUT_BACKEND` (defaults to
+`moonshine`) or setting it back to `moonshine` explicitly. Both STT
+backends live side-by-side; this is the operator A/B window before
+deciding which is the long-term default.
+
+`faster_whisper` is not yet paired with the realtime-output hybrids
+(`openai_realtime_output`, `hf_output`) — those still require
+`AUDIO_INPUT_BACKEND=moonshine`.
 
 ## Shared venv and version alignment
 

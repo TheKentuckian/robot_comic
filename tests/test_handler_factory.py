@@ -34,6 +34,7 @@ from robot_comic.config import (
     AUDIO_OUTPUT_GEMINI_TTS,
     AUDIO_OUTPUT_BACKEND_ENV,
     AUDIO_OUTPUT_GEMINI_LIVE,
+    AUDIO_INPUT_FASTER_WHISPER,
     AUDIO_INPUT_OPENAI_REALTIME,
     AUDIO_OUTPUT_OPENAI_REALTIME,
 )
@@ -459,6 +460,139 @@ class TestHandlerFactoryComposableCombinations:
 
 
 # ---------------------------------------------------------------------------
+# Phase 5f — faster-whisper STT alternate
+# ---------------------------------------------------------------------------
+
+
+class TestHandlerFactoryFasterWhisperCombinations:
+    """``AUDIO_INPUT_BACKEND=faster_whisper`` swaps the STT adapter only.
+
+    All five composable triples share the same routing matrix; the only
+    triple-specific difference is the LLM + TTS adapter pair.
+    :func:`_build_stt_adapter` is the swap-point. We smoke-test one
+    representative triple per output backend plus a regression that
+    Moonshine still works.
+    """
+
+    def test_faster_whisper_chatterbox_llama_routes_to_composable(self, mock_deps: MagicMock) -> None:
+        from robot_comic.chatterbox_tts import ChatterboxTTSResponseHandler
+
+        with patch("robot_comic.handler_factory.config") as mock_cfg:
+            mock_cfg.LLM_BACKEND = "llama"
+            mock_cfg.WELCOME_GATE_ENABLED = False
+            result = HandlerFactory.build(
+                AUDIO_INPUT_FASTER_WHISPER,
+                AUDIO_OUTPUT_CHATTERBOX,
+                mock_deps,
+            )
+
+        assert isinstance(result, ComposableConversationHandler)
+        assert isinstance(result._tts_handler, ChatterboxTTSResponseHandler)
+
+    def test_faster_whisper_chatterbox_uses_faster_whisper_adapter(self, mock_deps: MagicMock) -> None:
+        """The factory wires ``FasterWhisperSTTAdapter`` not ``MoonshineSTTAdapter``."""
+        from robot_comic.adapters import FasterWhisperSTTAdapter
+
+        with patch("robot_comic.handler_factory.config") as mock_cfg:
+            mock_cfg.LLM_BACKEND = "llama"
+            mock_cfg.WELCOME_GATE_ENABLED = False
+            result = HandlerFactory.build(
+                AUDIO_INPUT_FASTER_WHISPER,
+                AUDIO_OUTPUT_CHATTERBOX,
+                mock_deps,
+            )
+
+        assert isinstance(result.pipeline.stt, FasterWhisperSTTAdapter)
+
+    def test_faster_whisper_chatterbox_wires_should_drop_frame_callback(self, mock_deps: MagicMock) -> None:
+        """The echo-guard closure is wired uniformly across STT backends."""
+        with patch("robot_comic.handler_factory.config") as mock_cfg:
+            mock_cfg.LLM_BACKEND = "llama"
+            mock_cfg.WELCOME_GATE_ENABLED = False
+            result = HandlerFactory.build(
+                AUDIO_INPUT_FASTER_WHISPER,
+                AUDIO_OUTPUT_CHATTERBOX,
+                mock_deps,
+            )
+
+        stt_adapter = result.pipeline.stt
+        assert stt_adapter._should_drop_frame is not None
+        # Closure consults host._speaking_until; default 0.0 → falsy.
+        assert stt_adapter._should_drop_frame() is False
+
+    def test_faster_whisper_chatterbox_passes_deps_to_pipeline(self, mock_deps: MagicMock) -> None:
+        with patch("robot_comic.handler_factory.config") as mock_cfg:
+            mock_cfg.LLM_BACKEND = "llama"
+            mock_cfg.WELCOME_GATE_ENABLED = False
+            result = HandlerFactory.build(
+                AUDIO_INPUT_FASTER_WHISPER,
+                AUDIO_OUTPUT_CHATTERBOX,
+                mock_deps,
+            )
+
+        assert result.pipeline.deps is mock_deps
+
+    def test_faster_whisper_elevenlabs_uses_faster_whisper_adapter(self, mock_deps: MagicMock) -> None:
+        from robot_comic.adapters import FasterWhisperSTTAdapter
+
+        with patch("robot_comic.handler_factory.config") as mock_cfg:
+            mock_cfg.LLM_BACKEND = "llama"
+            mock_cfg.WELCOME_GATE_ENABLED = False
+            result = HandlerFactory.build(
+                AUDIO_INPUT_FASTER_WHISPER,
+                AUDIO_OUTPUT_ELEVENLABS,
+                mock_deps,
+            )
+
+        assert isinstance(result.pipeline.stt, FasterWhisperSTTAdapter)
+
+    def test_faster_whisper_gemini_tts_uses_faster_whisper_adapter(self, mock_deps: MagicMock) -> None:
+        from robot_comic.adapters import FasterWhisperSTTAdapter
+
+        with patch("robot_comic.handler_factory.config") as mock_cfg:
+            mock_cfg.LLM_BACKEND = "llama"
+            mock_cfg.WELCOME_GATE_ENABLED = False
+            result = HandlerFactory.build(
+                AUDIO_INPUT_FASTER_WHISPER,
+                AUDIO_OUTPUT_GEMINI_TTS,
+                mock_deps,
+            )
+
+        assert isinstance(result.pipeline.stt, FasterWhisperSTTAdapter)
+
+    def test_faster_whisper_chatterbox_gemini_uses_faster_whisper_adapter(self, mock_deps: MagicMock) -> None:
+        """Verifies the gemini-LLM branch also goes through ``_build_stt_adapter``."""
+        from robot_comic.adapters import FasterWhisperSTTAdapter
+
+        with patch("robot_comic.handler_factory.config") as mock_cfg:
+            mock_cfg.LLM_BACKEND = "gemini"
+            mock_cfg.WELCOME_GATE_ENABLED = False
+            result = HandlerFactory.build(
+                AUDIO_INPUT_FASTER_WHISPER,
+                AUDIO_OUTPUT_CHATTERBOX,
+                mock_deps,
+            )
+
+        assert isinstance(result.pipeline.stt, FasterWhisperSTTAdapter)
+
+    def test_moonshine_chatterbox_still_uses_moonshine_adapter(self, mock_deps: MagicMock) -> None:
+        """Regression: adding faster-whisper must not break the existing Moonshine path."""
+        from robot_comic.adapters import MoonshineSTTAdapter, FasterWhisperSTTAdapter
+
+        with patch("robot_comic.handler_factory.config") as mock_cfg:
+            mock_cfg.LLM_BACKEND = "llama"
+            mock_cfg.WELCOME_GATE_ENABLED = False
+            result = HandlerFactory.build(
+                AUDIO_INPUT_MOONSHINE,
+                AUDIO_OUTPUT_CHATTERBOX,
+                mock_deps,
+            )
+
+        assert isinstance(result.pipeline.stt, MoonshineSTTAdapter)
+        assert not isinstance(result.pipeline.stt, FasterWhisperSTTAdapter)
+
+
+# ---------------------------------------------------------------------------
 # Unsupported combinations
 # ---------------------------------------------------------------------------
 
@@ -474,6 +608,10 @@ class TestHandlerFactoryUnsupportedCombinations:
             (AUDIO_INPUT_OPENAI_REALTIME, AUDIO_OUTPUT_CHATTERBOX),
             (AUDIO_INPUT_HF, AUDIO_OUTPUT_CHATTERBOX),
             (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_GEMINI_LIVE),
+            # Phase 5f: faster-whisper does NOT pair with realtime-output
+            # hybrids (those use LocalSTTInputMixin directly).
+            (AUDIO_INPUT_FASTER_WHISPER, AUDIO_OUTPUT_OPENAI_REALTIME),
+            (AUDIO_INPUT_FASTER_WHISPER, AUDIO_OUTPUT_HF),
         ],
     )
     def test_unsupported_raises_not_implemented(

@@ -231,12 +231,14 @@ _GEMINI_LLM_MODEL_DEFAULT = "gemini-2.5-flash"
 
 # Input (STT) backend identifiers
 AUDIO_INPUT_MOONSHINE = "moonshine"
+AUDIO_INPUT_FASTER_WHISPER = "faster_whisper"
 AUDIO_INPUT_OPENAI_REALTIME = "openai_realtime_input"
 AUDIO_INPUT_GEMINI_LIVE = "gemini_live_input"
 AUDIO_INPUT_HF = "hf_input"
 
 AUDIO_INPUT_CHOICES: tuple[str, ...] = (
     AUDIO_INPUT_MOONSHINE,
+    AUDIO_INPUT_FASTER_WHISPER,
     AUDIO_INPUT_OPENAI_REALTIME,
     AUDIO_INPUT_GEMINI_LIVE,
     AUDIO_INPUT_HF,
@@ -384,6 +386,12 @@ _SUPPORTED_AUDIO_COMBINATIONS: frozenset[tuple[str, str]] = frozenset(
         (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_ELEVENLABS),
         (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_OPENAI_REALTIME),
         (AUDIO_INPUT_MOONSHINE, AUDIO_OUTPUT_HF),
+        # Composable faster-whisper STT + composable TTS outputs (Phase 5f).
+        # No realtime-output hybrids — those still use LocalSTTInputMixin
+        # (Phase 4c-tris Option B "legacy forever").
+        (AUDIO_INPUT_FASTER_WHISPER, AUDIO_OUTPUT_CHATTERBOX),
+        (AUDIO_INPUT_FASTER_WHISPER, AUDIO_OUTPUT_GEMINI_TTS),
+        (AUDIO_INPUT_FASTER_WHISPER, AUDIO_OUTPUT_ELEVENLABS),
     }
 )
 
