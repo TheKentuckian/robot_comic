@@ -1,9 +1,14 @@
 """Tests for the 3-column STT/LLM/TTS pipeline picker route changes (#245).
 
 Server-side only (no headless browser). Tests cover:
-- POST /backend_config with llm_backend persists both output and LLM env vars.
+- POST /backend_config with llm_backend persists both audio output and LLM env vars.
 - Unsupported combination (Gemini LLM + OpenAI Realtime output) → 400.
 - Back-compat: POST without llm_backend defaults to "llama".
+
+Phase 4f reshapes the POST payload to send ``pipeline_mode`` +
+``audio_input_backend`` + ``audio_output_backend`` instead of the legacy
+``backend`` / ``local_stt_response_backend`` fields.  The assertions
+follow accordingly.
 """
 
 from __future__ import annotations
@@ -16,8 +21,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from robot_comic.config import (
+    AUDIO_OUTPUT_HF,
     LLM_BACKEND_LLAMA,
     LLM_BACKEND_GEMINI,
+    AUDIO_INPUT_MOONSHINE,
+    AUDIO_OUTPUT_CHATTERBOX,
+    AUDIO_OUTPUT_ELEVENLABS,
+    PIPELINE_MODE_COMPOSABLE,
+    AUDIO_OUTPUT_OPENAI_REALTIME,
     config,
 )
 from robot_comic.console import LocalStream
@@ -32,13 +43,17 @@ def _make_client(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    backend_provider: str = "local_stt",
+    pipeline_mode: str = PIPELINE_MODE_COMPOSABLE,
+    audio_input_backend: str = AUDIO_INPUT_MOONSHINE,
+    audio_output_backend: str = AUDIO_OUTPUT_OPENAI_REALTIME,
     openai_api_key: str = "sk-test",
     gemini_api_key: str = "AIza-test",
     elevenlabs_api_key: str = "el-test",
     llm_backend: str = LLM_BACKEND_LLAMA,
 ) -> TestClient:
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", backend_provider)
+    monkeypatch.setattr(config, "PIPELINE_MODE", pipeline_mode)
+    monkeypatch.setattr(config, "AUDIO_INPUT_BACKEND", audio_input_backend)
+    monkeypatch.setattr(config, "AUDIO_OUTPUT_BACKEND", audio_output_backend)
     monkeypatch.setattr(config, "OPENAI_API_KEY", openai_api_key)
     monkeypatch.setattr(config, "GEMINI_API_KEY", gemini_api_key)
     monkeypatch.setattr(config, "ELEVENLABS_API_KEY", elevenlabs_api_key)
@@ -47,7 +62,6 @@ def _make_client(
     monkeypatch.setattr(config, "LOCAL_STT_LANGUAGE", "en")
     monkeypatch.setattr(config, "LOCAL_STT_MODEL", "tiny_streaming")
     monkeypatch.setattr(config, "LOCAL_STT_UPDATE_INTERVAL", 0.35)
-    monkeypatch.setenv("BACKEND_PROVIDER", backend_provider)
     monkeypatch.setenv("OPENAI_API_KEY", openai_api_key)
 
     app = FastAPI()
@@ -72,8 +86,9 @@ def test_post_chatterbox_with_gemini_llm_persists_both(
     resp = client.post(
         "/backend_config",
         json={
-            "backend": "local_stt",
-            "local_stt_response_backend": "chatterbox",
+            "pipeline_mode": PIPELINE_MODE_COMPOSABLE,
+            "audio_input_backend": AUDIO_INPUT_MOONSHINE,
+            "audio_output_backend": AUDIO_OUTPUT_CHATTERBOX,
             "llm_backend": LLM_BACKEND_GEMINI,
             "local_stt_cache_dir": "./cache/moonshine_voice",
             "local_stt_language": "en",
@@ -86,7 +101,7 @@ def test_post_chatterbox_with_gemini_llm_persists_both(
     assert data["ok"] is True
 
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
-    assert "LOCAL_STT_RESPONSE_BACKEND=chatterbox" in env_text
+    assert f"REACHY_MINI_AUDIO_OUTPUT_BACKEND={AUDIO_OUTPUT_CHATTERBOX}" in env_text
     assert f"REACHY_MINI_LLM_BACKEND={LLM_BACKEND_GEMINI}" in env_text
 
 
@@ -100,8 +115,9 @@ def test_post_elevenlabs_with_gemini_llm_persists_both(
     resp = client.post(
         "/backend_config",
         json={
-            "backend": "local_stt",
-            "local_stt_response_backend": "elevenlabs",
+            "pipeline_mode": PIPELINE_MODE_COMPOSABLE,
+            "audio_input_backend": AUDIO_INPUT_MOONSHINE,
+            "audio_output_backend": AUDIO_OUTPUT_ELEVENLABS,
             "llm_backend": LLM_BACKEND_GEMINI,
             "local_stt_cache_dir": "./cache/moonshine_voice",
             "local_stt_language": "en",
@@ -114,7 +130,7 @@ def test_post_elevenlabs_with_gemini_llm_persists_both(
     assert data["ok"] is True
 
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
-    assert "LOCAL_STT_RESPONSE_BACKEND=elevenlabs" in env_text
+    assert f"REACHY_MINI_AUDIO_OUTPUT_BACKEND={AUDIO_OUTPUT_ELEVENLABS}" in env_text
     assert f"REACHY_MINI_LLM_BACKEND={LLM_BACKEND_GEMINI}" in env_text
 
 
@@ -128,9 +144,10 @@ def test_post_unsupported_gemini_llm_plus_openai_realtime_returns_400(
     resp = client.post(
         "/backend_config",
         json={
-            "backend": "local_stt",
+            "pipeline_mode": PIPELINE_MODE_COMPOSABLE,
+            "audio_input_backend": AUDIO_INPUT_MOONSHINE,
+            "audio_output_backend": AUDIO_OUTPUT_OPENAI_REALTIME,
             "api_key": "sk-test",
-            "local_stt_response_backend": "openai",
             "llm_backend": LLM_BACKEND_GEMINI,
             "local_stt_cache_dir": "./cache/moonshine_voice",
             "local_stt_language": "en",
@@ -155,11 +172,12 @@ def test_post_unsupported_gemini_llm_plus_hf_realtime_returns_400(
     resp = client.post(
         "/backend_config",
         json={
-            "backend": "local_stt",
+            "pipeline_mode": PIPELINE_MODE_COMPOSABLE,
+            "audio_input_backend": AUDIO_INPUT_MOONSHINE,
+            "audio_output_backend": AUDIO_OUTPUT_HF,
             "hf_mode": "local",
             "hf_host": "localhost",
             "hf_port": 8765,
-            "local_stt_response_backend": "huggingface",
             "llm_backend": LLM_BACKEND_GEMINI,
             "local_stt_cache_dir": "./cache/moonshine_voice",
             "local_stt_language": "en",
@@ -182,9 +200,10 @@ def test_post_without_llm_backend_defaults_to_llama(
     resp = client.post(
         "/backend_config",
         json={
-            "backend": "local_stt",
+            "pipeline_mode": PIPELINE_MODE_COMPOSABLE,
+            "audio_input_backend": AUDIO_INPUT_MOONSHINE,
+            "audio_output_backend": AUDIO_OUTPUT_OPENAI_REALTIME,
             "api_key": "sk-test",
-            "local_stt_response_backend": "openai",
             # llm_backend intentionally omitted
             "local_stt_cache_dir": "./cache/moonshine_voice",
             "local_stt_language": "en",
@@ -213,3 +232,41 @@ def test_status_payload_includes_llm_backend(
     data = resp.json()
     assert "llm_backend" in data
     assert data["llm_backend"] == LLM_BACKEND_GEMINI
+
+
+def test_status_payload_drops_legacy_backend_provider_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 4f: status no longer emits the retired dial fields."""
+    client = _make_client(tmp_path, monkeypatch)
+
+    resp = client.get("/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "backend_provider" not in data
+    assert "local_stt_response_backend" not in data
+    assert "local_stt_response_backend_choices" not in data
+    assert data["pipeline_mode"] == PIPELINE_MODE_COMPOSABLE
+    assert data["audio_input_backend"] == AUDIO_INPUT_MOONSHINE
+    assert data["audio_output_backend"] == AUDIO_OUTPUT_OPENAI_REALTIME
+
+
+def test_post_rejects_missing_pipeline_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty pipeline_mode field must be rejected — no implicit fallback."""
+    client = _make_client(tmp_path, monkeypatch)
+
+    resp = client.post(
+        "/backend_config",
+        json={
+            "pipeline_mode": "",
+            "audio_input_backend": AUDIO_INPUT_MOONSHINE,
+            "audio_output_backend": AUDIO_OUTPUT_OPENAI_REALTIME,
+            "api_key": "sk-test",
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json().get("error") == "invalid_pipeline_mode"

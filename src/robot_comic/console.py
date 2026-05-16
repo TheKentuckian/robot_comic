@@ -25,39 +25,49 @@ from robot_comic.config import (
     GEMINI_BACKEND,
     LOCKED_PROFILE,
     OPENAI_BACKEND,
+    AUDIO_OUTPUT_HF,
     LLM_BACKEND_ENV,
-    CHATTERBOX_OUTPUT,
-    ELEVENLABS_OUTPUT,
-    GEMINI_TTS_OUTPUT,
     LLM_BACKEND_LLAMA,
     LOCAL_STT_BACKEND,
+    PIPELINE_MODE_ENV,
     CHATTERBOX_URL_ENV,
     LLM_BACKEND_GEMINI,
+    AUDIO_INPUT_CHOICES,
     LOCAL_STT_MODEL_ENV,
+    AUDIO_OUTPUT_CHOICES,
     CHATTERBOX_VOICE_ENV,
+    AUDIO_INPUT_MOONSHINE,
+    PIPELINE_MODE_CHOICES,
     CHATTERBOX_DEFAULT_URL,
     HF_REALTIME_WS_URL_ENV,
     LOCAL_STT_LANGUAGE_ENV,
     LOCAL_STT_PROVIDER_ENV,
+    AUDIO_INPUT_BACKEND_ENV,
+    AUDIO_OUTPUT_CHATTERBOX,
+    AUDIO_OUTPUT_ELEVENLABS,
+    AUDIO_OUTPUT_GEMINI_TTS,
     LOCAL_STT_CACHE_DIR_ENV,
     LOCAL_STT_MODEL_CHOICES,
+    AUDIO_OUTPUT_BACKEND_ENV,
     CHATTERBOX_DEFAULT_VOICE,
     HF_LOCAL_CONNECTION_MODE,
+    PIPELINE_MODE_COMPOSABLE,
+    PIPELINE_MODE_GEMINI_LIVE,
+    PIPELINE_MODE_HF_REALTIME,
     AUDIO_CAPTURE_PATH_ALSA_RW,
     HF_DEPLOYED_CONNECTION_MODE,
-    LLAMA_ELEVENLABS_TTS_OUTPUT,
+    AUDIO_OUTPUT_OPENAI_REALTIME,
     LOCAL_STT_UPDATE_INTERVAL_ENV,
-    LOCAL_STT_RESPONSE_BACKEND_ENV,
+    PIPELINE_MODE_OPENAI_REALTIME,
     HF_REALTIME_CONNECTION_MODE_ENV,
-    LOCAL_STT_RESPONSE_BACKEND_CHOICES,
     config,
-    get_backend_choice,
+    get_provider_id,
     get_hf_session_url,
     get_hf_direct_ws_url,
     build_hf_direct_ws_url,
     has_hf_realtime_target,
     parse_hf_direct_target,
-    get_model_name_for_backend,
+    provider_id_from_pipeline,
     get_hf_connection_selection,
     refresh_runtime_config_from_env,
 )
@@ -267,7 +277,15 @@ class LocalStream:
         self._movement_manager = movement_manager
         self._settings_initialized = False
         self._asyncio_loop = None
-        self._active_backend_name = get_backend_choice()
+        # Snapshot of the active pipeline at handler-construction time.  Compared
+        # against the live values in ``_status_payload`` to flag
+        # ``requires_restart`` whenever the operator's saved selection no longer
+        # matches what's running.  Pre-Phase-4f this was a single string
+        # (``get_backend_choice()``); post-4f it's a pair so we catch composable-
+        # vs-bundled flips that resolve to the same ``provider_id``.
+        self._active_backend_name = get_provider_id()
+        self._active_pipeline_mode = getattr(config, "PIPELINE_MODE", PIPELINE_MODE_COMPOSABLE)
+        self._active_audio_output_backend = getattr(config, "AUDIO_OUTPUT_BACKEND", AUDIO_OUTPUT_OPENAI_REALTIME)
         # Dedup state for the role=user_partial INFO log. Many STT backends
         # emit the same partial transcript repeatedly while waiting for the
         # next token; we demote identical consecutive partials to DEBUG so
@@ -321,43 +339,52 @@ class LocalStream:
         """Return whether a runtime credential value is present."""
         return bool(value and str(value).strip())
 
-    def _has_required_key(self, backend: str) -> bool:
-        """Return whether the requested backend has its required credential."""
-        if backend == GEMINI_BACKEND:
+    def _has_required_key(self, provider_id: str) -> bool:
+        """Return whether the configured pipeline has its required credential.
+
+        ``provider_id`` is one of ``OPENAI_BACKEND``, ``GEMINI_BACKEND``,
+        ``HF_BACKEND``, ``LOCAL_STT_BACKEND``. For the composable LOCAL_STT
+        pipeline the answer depends on the currently configured
+        ``AUDIO_OUTPUT_BACKEND`` + ``LLM_BACKEND`` (the latter only matters
+        when the chosen TTS adapter needs its own LLM credentials, e.g.
+        ElevenLabs paired with Gemini).
+        """
+        if provider_id == GEMINI_BACKEND:
             return self._has_key(config.GEMINI_API_KEY)
-        if backend == HF_BACKEND:
+        if provider_id == HF_BACKEND:
             return has_hf_realtime_target()
-        if backend == LOCAL_STT_BACKEND:
-            response_backend = getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
-            if response_backend == HF_BACKEND:
+        if provider_id == LOCAL_STT_BACKEND:
+            audio_output = getattr(config, "AUDIO_OUTPUT_BACKEND", AUDIO_OUTPUT_OPENAI_REALTIME)
+            llm_backend = getattr(config, "LLM_BACKEND", LLM_BACKEND_LLAMA)
+            if audio_output == AUDIO_OUTPUT_HF:
                 return has_hf_realtime_target()
-            if response_backend == GEMINI_TTS_OUTPUT:
+            if audio_output == AUDIO_OUTPUT_GEMINI_TTS:
                 return self._has_key(config.GEMINI_API_KEY)
-            if response_backend == ELEVENLABS_OUTPUT:
+            if audio_output == AUDIO_OUTPUT_ELEVENLABS:
+                # ElevenLabs + Gemini LLM needs both ElevenLabs + Gemini keys;
+                # ElevenLabs + llama only needs the ElevenLabs key.
+                if llm_backend == LLM_BACKEND_GEMINI:
+                    return self._has_key(config.ELEVENLABS_API_KEY) and self._has_key(config.GEMINI_API_KEY)
                 return self._has_key(config.ELEVENLABS_API_KEY)
-            if response_backend == LLAMA_ELEVENLABS_TTS_OUTPUT:
-                return self._has_key(config.ELEVENLABS_API_KEY)
-            if response_backend == CHATTERBOX_OUTPUT:
+            if audio_output == AUDIO_OUTPUT_CHATTERBOX:
                 return True  # no API key needed; server URL has a usable default
             return self._has_key(config.OPENAI_API_KEY)
         return self._has_key(config.OPENAI_API_KEY)
 
     @staticmethod
-    def _requirement_name(backend: str) -> str:
-        """Return the env var users need for a backend, if any."""
-        if backend == GEMINI_BACKEND:
+    def _requirement_name(provider_id: str) -> str:
+        """Return the env var users need for a pipeline, if any."""
+        if provider_id == GEMINI_BACKEND:
             return "GEMINI_API_KEY"
-        if backend == HF_BACKEND:
+        if provider_id == HF_BACKEND:
             return HF_REALTIME_WS_URL_ENV
-        if backend == LOCAL_STT_BACKEND:
-            response_backend = getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
-            if response_backend == HF_BACKEND:
+        if provider_id == LOCAL_STT_BACKEND:
+            audio_output = getattr(config, "AUDIO_OUTPUT_BACKEND", AUDIO_OUTPUT_OPENAI_REALTIME)
+            if audio_output == AUDIO_OUTPUT_HF:
                 return HF_REALTIME_WS_URL_ENV
-            if response_backend == GEMINI_TTS_OUTPUT:
+            if audio_output == AUDIO_OUTPUT_GEMINI_TTS:
                 return "GEMINI_API_KEY"
-            if response_backend == ELEVENLABS_OUTPUT:
-                return "ELEVENLABS_API_KEY"
-            if response_backend == LLAMA_ELEVENLABS_TTS_OUTPUT:
+            if audio_output == AUDIO_OUTPUT_ELEVENLABS:
                 return "ELEVENLABS_API_KEY"
             return "OPENAI_API_KEY"
         return "OPENAI_API_KEY"
@@ -470,7 +497,6 @@ class LocalStream:
     def _persist_local_stt_settings(
         self,
         *,
-        response_backend: str,
         cache_dir: str,
         language: str,
         model: str,
@@ -479,10 +505,14 @@ class LocalStream:
         chatterbox_voice: Optional[str] = None,
         llm_backend: Optional[str] = None,
     ) -> None:
-        """Persist local STT settings to environment and instance `.env`."""
+        """Persist local STT settings to environment and instance `.env`.
+
+        Moonshine-specific knobs only.  The audio output backend (and the
+        provider's required credentials) are persisted separately by
+        :meth:`_persist_pipeline_choice`.
+        """
         values: dict[str, str] = {
             LOCAL_STT_PROVIDER_ENV: "moonshine",
-            LOCAL_STT_RESPONSE_BACKEND_ENV: response_backend,
             LOCAL_STT_CACHE_DIR_ENV: cache_dir,
             LOCAL_STT_LANGUAGE_ENV: language,
             LOCAL_STT_MODEL_ENV: model,
@@ -497,25 +527,34 @@ class LocalStream:
             values[CHATTERBOX_VOICE_ENV] = chatterbox_voice
         self._persist_env_values(values)
 
-    def _persist_backend_choice(self, backend: str) -> None:
-        """Persist the selected backend without clobbering explicit model overrides."""
-        current_backend = get_backend_choice()
-        current_model_name = (os.getenv("MODEL_NAME") or "").strip()
-        updates = {"BACKEND_PROVIDER": backend}
-        if backend in {HF_BACKEND, LOCAL_STT_BACKEND}:
-            self._persist_env_values(updates)
-            try:
-                os.environ.pop("MODEL_NAME", None)
-            except Exception:
-                pass
-            self._remove_persisted_env_values(("MODEL_NAME",))
-            refresh_runtime_config_from_env()
-            return
+    def _persist_pipeline_choice(
+        self,
+        pipeline_mode: str,
+        audio_input_backend: Optional[str],
+        audio_output_backend: Optional[str],
+    ) -> None:
+        """Persist a pipeline selection into the instance `.env`.
 
-        if current_model_name and current_model_name != get_model_name_for_backend(current_backend):
-            updates["MODEL_NAME"] = current_model_name
+        Replaces the pre-Phase-4f ``_persist_backend_choice``: writes
+        ``REACHY_MINI_PIPELINE_MODE`` plus (for the composable pipeline)
+        ``REACHY_MINI_AUDIO_INPUT_BACKEND`` / ``REACHY_MINI_AUDIO_OUTPUT_BACKEND``
+        instead of the retired ``BACKEND_PROVIDER`` / ``MODEL_NAME`` dials.
+        """
+        updates: dict[str, str] = {PIPELINE_MODE_ENV: pipeline_mode}
+        if pipeline_mode == PIPELINE_MODE_COMPOSABLE:
+            if audio_input_backend:
+                updates[AUDIO_INPUT_BACKEND_ENV] = audio_input_backend
+            if audio_output_backend:
+                updates[AUDIO_OUTPUT_BACKEND_ENV] = audio_output_backend
         else:
-            updates["MODEL_NAME"] = get_model_name_for_backend(backend)
+            # Bundled modes ignore the audio dials.  Drop any leftover overrides
+            # so the bundled handler isn't accidentally re-routed on next reload.
+            self._remove_persisted_env_values((AUDIO_INPUT_BACKEND_ENV, AUDIO_OUTPUT_BACKEND_ENV))
+            for env_name in (AUDIO_INPUT_BACKEND_ENV, AUDIO_OUTPUT_BACKEND_ENV):
+                try:
+                    os.environ.pop(env_name, None)
+                except Exception:
+                    pass
         self._persist_env_values(updates)
 
     def _persist_personality(self, profile: Optional[str], voice_override: Optional[str] = None) -> None:
@@ -624,12 +663,15 @@ class LocalStream:
             openai_api_key: str
 
         class BackendPayload(BaseModel):
-            backend: str
+            # Phase 4f: ``backend`` / ``local_stt_response_backend`` are gone.
+            # The picker now sends the canonical pipeline dials directly.
+            pipeline_mode: str
+            audio_input_backend: Optional[str] = None
+            audio_output_backend: Optional[str] = None
             api_key: Optional[str] = None
             hf_mode: Optional[str] = None
             hf_host: Optional[str] = None
             hf_port: Optional[int] = None
-            local_stt_response_backend: Optional[str] = None
             local_stt_cache_dir: Optional[str] = None
             local_stt_language: Optional[str] = None
             local_stt_model: Optional[str] = None
@@ -642,7 +684,7 @@ class LocalStream:
             llm_backend: Optional[str] = None
 
         def _status_payload() -> dict[str, object]:
-            backend_provider = get_backend_choice()
+            provider_id = get_provider_id()
             active_backend = self._active_backend()
             has_openai_key = self._has_required_key(OPENAI_BACKEND)
             has_gemini_key = self._has_required_key(GEMINI_BACKEND)
@@ -661,10 +703,25 @@ class LocalStream:
             can_proceed_with_local_stt = has_local_stt_key
             can_proceed_with_chatterbox = True  # no API key required
             can_proceed = self._has_required_key(active_backend)
-            requires_restart = backend_provider != active_backend
+            current_pipeline_mode = getattr(config, "PIPELINE_MODE", PIPELINE_MODE_COMPOSABLE)
+            current_audio_output = getattr(config, "AUDIO_OUTPUT_BACKEND", AUDIO_OUTPUT_OPENAI_REALTIME)
+            requires_restart = (
+                provider_id != active_backend
+                or current_pipeline_mode != self._active_pipeline_mode
+                or current_audio_output != self._active_audio_output_backend
+            )
             return {
+                # Pipeline-mode-first contract (Phase 4f). The legacy
+                # ``backend_provider`` / ``local_stt_response_backend`` fields
+                # have been removed; clients now read ``pipeline_mode`` +
+                # ``audio_input_backend`` + ``audio_output_backend`` directly.
                 "active_backend": active_backend,
-                "backend_provider": backend_provider,
+                "pipeline_mode": getattr(config, "PIPELINE_MODE", PIPELINE_MODE_COMPOSABLE),
+                "pipeline_mode_choices": list(PIPELINE_MODE_CHOICES),
+                "audio_input_backend": getattr(config, "AUDIO_INPUT_BACKEND", AUDIO_INPUT_MOONSHINE),
+                "audio_input_backend_choices": list(AUDIO_INPUT_CHOICES),
+                "audio_output_backend": getattr(config, "AUDIO_OUTPUT_BACKEND", AUDIO_OUTPUT_OPENAI_REALTIME),
+                "audio_output_backend_choices": list(AUDIO_OUTPUT_CHOICES),
                 "has_key": can_proceed,
                 "has_openai_key": has_openai_key,
                 "has_gemini_key": has_gemini_key,
@@ -676,8 +733,6 @@ class LocalStream:
                 "hf_direct_host": hf_direct_host,
                 "hf_direct_port": hf_direct_port,
                 "local_stt_provider": getattr(config, "LOCAL_STT_PROVIDER", "moonshine"),
-                "local_stt_response_backend": getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND),
-                "local_stt_response_backend_choices": list(LOCAL_STT_RESPONSE_BACKEND_CHOICES),
                 "llm_backend": getattr(config, "LLM_BACKEND", LLM_BACKEND_LLAMA),
                 "local_stt_cache_dir": getattr(config, "LOCAL_STT_CACHE_DIR", "./cache/moonshine_voice"),
                 "local_stt_language": getattr(config, "LOCAL_STT_LANGUAGE", "en"),
@@ -805,54 +860,71 @@ class LocalStream:
 
         @self._settings_app.post("/backend_config")
         def _set_backend(payload: BackendPayload) -> JSONResponse:
-            backend = payload.backend.strip().lower()
-            if backend not in {OPENAI_BACKEND, GEMINI_BACKEND, HF_BACKEND, LOCAL_STT_BACKEND}:
-                return JSONResponse({"ok": False, "error": "invalid_backend"}, status_code=400)
+            # Phase 4f: the picker sends ``pipeline_mode`` +
+            # ``audio_input_backend`` + ``audio_output_backend`` directly.
+            pipeline_mode = (payload.pipeline_mode or "").strip().lower()
+            if pipeline_mode not in PIPELINE_MODE_CHOICES:
+                return JSONResponse({"ok": False, "error": "invalid_pipeline_mode"}, status_code=400)
+
+            # For bundled modes the audio dials are ignored.  For composable
+            # we need a valid (input, output) pair.
+            audio_input_backend: Optional[str] = None
+            audio_output_backend: Optional[str] = None
+            if pipeline_mode == PIPELINE_MODE_COMPOSABLE:
+                audio_input_backend = (payload.audio_input_backend or "").strip().lower() or AUDIO_INPUT_MOONSHINE
+                audio_output_backend = (payload.audio_output_backend or "").strip().lower()
+                if not audio_output_backend:
+                    audio_output_backend = getattr(config, "AUDIO_OUTPUT_BACKEND", AUDIO_OUTPUT_OPENAI_REALTIME)
+                if audio_input_backend not in AUDIO_INPUT_CHOICES:
+                    return JSONResponse({"ok": False, "error": "invalid_audio_input_backend"}, status_code=400)
+                if audio_output_backend not in AUDIO_OUTPUT_CHOICES:
+                    return JSONResponse({"ok": False, "error": "invalid_audio_output_backend"}, status_code=400)
+
+            # Effective provider_id for credential routing.
+            provider_id = provider_id_from_pipeline(pipeline_mode, audio_output_backend or "")
 
             api_key = (payload.api_key or "").strip()
-            if backend == GEMINI_BACKEND and not api_key and not self._has_required_key(GEMINI_BACKEND):
+            if provider_id == GEMINI_BACKEND and not api_key and not self._has_key(config.GEMINI_API_KEY):
                 return JSONResponse({"ok": False, "error": "empty_key"}, status_code=400)
-
-            local_stt_response_backend = (
-                str(
-                    payload.local_stt_response_backend or getattr(config, "LOCAL_STT_RESPONSE_BACKEND", OPENAI_BACKEND)
-                )
-                .strip()
-                .lower()
-            )
-            if backend == LOCAL_STT_BACKEND and local_stt_response_backend not in LOCAL_STT_RESPONSE_BACKEND_CHOICES:
-                return JSONResponse({"ok": False, "error": "invalid_local_stt_response_backend"}, status_code=400)
 
             # LLM backend axis from the 3-column pipeline picker (#245).
             # Defaults to "llama" for back-compat when field is absent.
             _llm_backend_raw = (payload.llm_backend or "").strip().lower() or LLM_BACKEND_LLAMA
-            if backend == LOCAL_STT_BACKEND and _llm_backend_raw not in {LLM_BACKEND_LLAMA, LLM_BACKEND_GEMINI}:
+            if pipeline_mode == PIPELINE_MODE_COMPOSABLE and _llm_backend_raw not in {
+                LLM_BACKEND_LLAMA,
+                LLM_BACKEND_GEMINI,
+            }:
                 return JSONResponse({"ok": False, "error": "invalid_llm_backend"}, status_code=400)
-            # Validate (output, llm) combination.
-            # Bundled handlers (openai realtime, huggingface realtime) bundle their
-            # own LLM — they cannot be combined with an explicit LLM backend (gemini).
-            # Gemini Flash TTS also implies Gemini for LLM, so it's redundant with
-            # the gemini LLM axis.
-            _GEMINI_LLM_UNSUPPORTED_OUTPUTS = {GEMINI_TTS_OUTPUT, OPENAI_BACKEND, HF_BACKEND}
+
+            # Validate (output, llm) combination on the composable path.
+            # Bundled output adapters (openai_realtime_output / hf_output) and
+            # gemini_tts ship their own LLM and cannot be paired with the
+            # gemini text-LLM axis.
+            _GEMINI_LLM_UNSUPPORTED_OUTPUTS = {
+                AUDIO_OUTPUT_GEMINI_TTS,
+                AUDIO_OUTPUT_OPENAI_REALTIME,
+                AUDIO_OUTPUT_HF,
+            }
             if (
-                backend == LOCAL_STT_BACKEND
+                pipeline_mode == PIPELINE_MODE_COMPOSABLE
                 and _llm_backend_raw == LLM_BACKEND_GEMINI
-                and local_stt_response_backend in _GEMINI_LLM_UNSUPPORTED_OUTPUTS
+                and audio_output_backend in _GEMINI_LLM_UNSUPPORTED_OUTPUTS
             ):
                 return JSONResponse(
                     {"ok": False, "error": "unsupported_pipeline_combination"},
                     status_code=400,
                 )
+
             if (
-                backend == LOCAL_STT_BACKEND
-                and local_stt_response_backend == OPENAI_BACKEND
+                pipeline_mode == PIPELINE_MODE_COMPOSABLE
+                and audio_output_backend == AUDIO_OUTPUT_OPENAI_REALTIME
                 and not api_key
                 and not self._has_key(config.OPENAI_API_KEY)
             ):
                 return JSONResponse({"ok": False, "error": "empty_key"}, status_code=400)
             if (
-                backend == LOCAL_STT_BACKEND
-                and local_stt_response_backend == GEMINI_TTS_OUTPUT
+                pipeline_mode == PIPELINE_MODE_COMPOSABLE
+                and audio_output_backend == AUDIO_OUTPUT_GEMINI_TTS
                 and not api_key
                 and not self._has_key(config.GEMINI_API_KEY)
             ):
@@ -862,30 +934,35 @@ class LocalStream:
             elevenlabs_key_val = (payload.elevenlabs_api_key or "").strip()
             elevenlabs_voice_val = (payload.elevenlabs_voice or "").strip()
             if (
-                backend == LOCAL_STT_BACKEND
-                and local_stt_response_backend in (ELEVENLABS_OUTPUT, LLAMA_ELEVENLABS_TTS_OUTPUT)
+                pipeline_mode == PIPELINE_MODE_COMPOSABLE
+                and audio_output_backend == AUDIO_OUTPUT_ELEVENLABS
                 and not elevenlabs_key_val
                 and not self._has_key(config.ELEVENLABS_API_KEY)
             ):
                 return JSONResponse({"ok": False, "error": "empty_key"}, status_code=400)
 
-            if backend == OPENAI_BACKEND and api_key:
+            if pipeline_mode == PIPELINE_MODE_OPENAI_REALTIME and api_key:
                 self._persist_api_key(api_key)
-            if backend == LOCAL_STT_BACKEND and local_stt_response_backend == OPENAI_BACKEND and api_key:
-                self._persist_api_key(api_key)
-            if backend == GEMINI_BACKEND and api_key:
-                self._persist_gemini_api_key(api_key)
-            if backend == LOCAL_STT_BACKEND and local_stt_response_backend == GEMINI_TTS_OUTPUT and api_key:
-                self._persist_gemini_api_key(api_key)
-            if backend == LOCAL_STT_BACKEND and local_stt_response_backend in (
-                ELEVENLABS_OUTPUT,
-                LLAMA_ELEVENLABS_TTS_OUTPUT,
+            if (
+                pipeline_mode == PIPELINE_MODE_COMPOSABLE
+                and audio_output_backend == AUDIO_OUTPUT_OPENAI_REALTIME
+                and api_key
             ):
+                self._persist_api_key(api_key)
+            if pipeline_mode == PIPELINE_MODE_GEMINI_LIVE and api_key:
+                self._persist_gemini_api_key(api_key)
+            if (
+                pipeline_mode == PIPELINE_MODE_COMPOSABLE
+                and audio_output_backend == AUDIO_OUTPUT_GEMINI_TTS
+                and api_key
+            ):
+                self._persist_gemini_api_key(api_key)
+            if pipeline_mode == PIPELINE_MODE_COMPOSABLE and audio_output_backend == AUDIO_OUTPUT_ELEVENLABS:
                 if elevenlabs_key_val:
                     self._persist_elevenlabs_api_key(elevenlabs_key_val)
                 if elevenlabs_voice_val:
                     self._persist_elevenlabs_voice(elevenlabs_voice_val)
-            if backend == LOCAL_STT_BACKEND:
+            if pipeline_mode == PIPELINE_MODE_COMPOSABLE and audio_input_backend == AUDIO_INPUT_MOONSHINE:
                 cache_dir = (
                     payload.local_stt_cache_dir
                     or getattr(config, "LOCAL_STT_CACHE_DIR", "./cache/moonshine_voice")
@@ -922,16 +999,17 @@ class LocalStream:
                 chatterbox_url_val = (payload.chatterbox_url or "").strip() or None
                 chatterbox_voice_val = (payload.chatterbox_voice or "").strip() or None
                 self._persist_local_stt_settings(
-                    response_backend=local_stt_response_backend,
                     cache_dir=cache_dir,
                     language=language.lower(),
                     model=model,
                     update_interval=update_interval,
-                    chatterbox_url=chatterbox_url_val if local_stt_response_backend == CHATTERBOX_OUTPUT else None,
-                    chatterbox_voice=chatterbox_voice_val if local_stt_response_backend == CHATTERBOX_OUTPUT else None,
+                    chatterbox_url=chatterbox_url_val if audio_output_backend == AUDIO_OUTPUT_CHATTERBOX else None,
+                    chatterbox_voice=chatterbox_voice_val if audio_output_backend == AUDIO_OUTPUT_CHATTERBOX else None,
                     llm_backend=_llm_backend_raw,
                 )
-            if backend == HF_BACKEND or (backend == LOCAL_STT_BACKEND and local_stt_response_backend == HF_BACKEND):
+            if pipeline_mode == PIPELINE_MODE_HF_REALTIME or (
+                pipeline_mode == PIPELINE_MODE_COMPOSABLE and audio_output_backend == AUDIO_OUTPUT_HF
+            ):
                 hf_selection = get_hf_connection_selection()
                 hf_mode = (payload.hf_mode or hf_selection.mode).strip().lower()
                 if hf_mode == HF_LOCAL_CONNECTION_MODE:
@@ -954,11 +1032,11 @@ class LocalStream:
                 else:
                     return JSONResponse({"ok": False, "error": "invalid_hf_mode"}, status_code=400)
 
-            self._persist_backend_choice(backend)
+            self._persist_pipeline_choice(pipeline_mode, audio_input_backend, audio_output_backend)
             payload_data = _status_payload()
-            message = "Backend saved."
+            message = "Pipeline saved."
             if payload_data["requires_restart"]:
-                message = "Backend saved. Restart Robot Comic from the desktop app to apply it."
+                message = "Pipeline saved. Restart Robot Comic from the desktop app to apply it."
             return JSONResponse(
                 {
                     "ok": True,

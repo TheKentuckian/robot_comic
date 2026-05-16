@@ -200,9 +200,7 @@ def test_filter_elevenlabs_output_strips_section() -> None:
 
 def test_filter_force_override_keeps_section_on_chatterbox() -> None:
     """REACHY_MINI_FORCE_DELIVERY_TAGS=1 bypasses stripping on Chatterbox."""
-    fake = _make_fake_config(
-        audio_output_backend=AUDIO_OUTPUT_CHATTERBOX, force_delivery_tags=True
-    )
+    fake = _make_fake_config(audio_output_backend=AUDIO_OUTPUT_CHATTERBOX, force_delivery_tags=True)
     with patch("robot_comic.prompts.config", fake):
         result = _filter_delivery_tags(_SAMPLE_INSTRUCTIONS)
     assert _SECTION_HEADER in result
@@ -210,9 +208,7 @@ def test_filter_force_override_keeps_section_on_chatterbox() -> None:
 
 def test_filter_force_override_keeps_section_on_hf() -> None:
     """REACHY_MINI_FORCE_DELIVERY_TAGS=1 bypasses stripping on HuggingFace."""
-    fake = _make_fake_config(
-        audio_output_backend=AUDIO_OUTPUT_HF, force_delivery_tags=True
-    )
+    fake = _make_fake_config(audio_output_backend=AUDIO_OUTPUT_HF, force_delivery_tags=True)
     with patch("robot_comic.prompts.config", fake):
         result = _filter_delivery_tags(_SAMPLE_INSTRUCTIONS)
     assert _SECTION_HEADER in result
@@ -220,9 +216,7 @@ def test_filter_force_override_keeps_section_on_hf() -> None:
 
 def test_filter_force_false_does_not_keep_section_on_chatterbox() -> None:
     """FORCE_DELIVERY_TAGS=False still strips on Chatterbox."""
-    fake = _make_fake_config(
-        audio_output_backend=AUDIO_OUTPUT_CHATTERBOX, force_delivery_tags=False
-    )
+    fake = _make_fake_config(audio_output_backend=AUDIO_OUTPUT_CHATTERBOX, force_delivery_tags=False)
     with patch("robot_comic.prompts.config", fake):
         result = _filter_delivery_tags(_SAMPLE_INSTRUCTIONS)
     assert _SECTION_HEADER not in result
@@ -276,9 +270,7 @@ def test_get_session_instructions_gemini_tts_keeps_section(tmp_path: Path) -> No
 def test_get_session_instructions_force_override_keeps_section_on_hf(tmp_path: Path) -> None:
     """get_session_instructions() respects FORCE_DELIVERY_TAGS on HuggingFace."""
     profiles_root = _write_test_profile(tmp_path)
-    fake_cfg = _make_fake_config(
-        audio_output_backend=AUDIO_OUTPUT_HF, force_delivery_tags=True
-    )
+    fake_cfg = _make_fake_config(audio_output_backend=AUDIO_OUTPUT_HF, force_delivery_tags=True)
     fake_cfg.REACHY_MINI_CUSTOM_PROFILE = "test_persona"  # type: ignore[attr-defined]
     fake_cfg.PROFILES_DIRECTORY = profiles_root  # type: ignore[attr-defined]
     with patch("robot_comic.prompts.config", fake_cfg):
@@ -296,9 +288,7 @@ def test_get_session_instructions_force_override_keeps_section_on_hf(tmp_path: P
         AUDIO_OUTPUT_ELEVENLABS,
     ],
 )
-def test_get_session_instructions_non_tts_outputs_strip(
-    audio_output_backend: str, tmp_path: Path
-) -> None:
+def test_get_session_instructions_non_tts_outputs_strip(audio_output_backend: str, tmp_path: Path) -> None:
     """All non-Gemini-TTS outputs strip the delivery-tags section."""
     profiles_root = _write_test_profile(tmp_path)
     fake_cfg = _make_fake_config(audio_output_backend=audio_output_backend)

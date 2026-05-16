@@ -33,6 +33,17 @@ def _restore_config_object():
 
 
 def _reload_config(monkeypatch, env: dict):
+    # Strip leftover audio-pipeline env vars from prior tests in the suite —
+    # ``_persist_env_values`` in console.py mutates ``os.environ`` directly,
+    # which pytest's monkeypatch fixture does NOT auto-rollback.
+    for stale in (
+        "REACHY_MINI_PIPELINE_MODE",
+        "REACHY_MINI_AUDIO_INPUT_BACKEND",
+        "REACHY_MINI_AUDIO_OUTPUT_BACKEND",
+        "REACHY_MINI_LLM_BACKEND",
+    ):
+        if stale not in env:
+            monkeypatch.delenv(stale, raising=False)
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     import robot_comic.config as cfg_mod

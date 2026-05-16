@@ -129,13 +129,12 @@ def test_backend_config_persists_gemini_selection_and_status(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Settings API should persist Gemini backend choice and token."""
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
-    monkeypatch.setattr(config, "MODEL_NAME", "gpt-realtime")
+    """Settings API should persist Gemini pipeline choice and token."""
+    monkeypatch.setattr(config, "PIPELINE_MODE", "openai_realtime")
+    monkeypatch.setattr(config, "AUDIO_INPUT_BACKEND", "openai_realtime_input")
+    monkeypatch.setattr(config, "AUDIO_OUTPUT_BACKEND", "openai_realtime_output")
     monkeypatch.setattr(config, "OPENAI_API_KEY", None)
     monkeypatch.setattr(config, "GEMINI_API_KEY", None)
-    monkeypatch.setenv("BACKEND_PROVIDER", "openai")
-    monkeypatch.setenv("MODEL_NAME", "gpt-realtime")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
@@ -148,13 +147,13 @@ def test_backend_config_persists_gemini_selection_and_status(
 
     response = client.post(
         "/backend_config",
-        json={"backend": "gemini", "api_key": "gem-test-token"},
+        json={"pipeline_mode": "gemini_live", "api_key": "gem-test-token"},
     )
 
     assert response.status_code == 200
     data = response.json()
     assert data["ok"] is True
-    assert data["backend_provider"] == "gemini"
+    assert data["pipeline_mode"] == "gemini_live"
     assert data["active_backend"] == "openai"
     assert data["has_gemini_key"] is True
     assert data["has_key"] is False
@@ -166,7 +165,7 @@ def test_backend_config_persists_gemini_selection_and_status(
     status = client.get("/status")
     assert status.status_code == 200
     status_data = status.json()
-    assert status_data["backend_provider"] == "gemini"
+    assert status_data["pipeline_mode"] == "gemini_live"
     assert status_data["active_backend"] == "openai"
     assert status_data["has_gemini_key"] is True
     assert status_data["can_proceed"] is False
@@ -174,25 +173,26 @@ def test_backend_config_persists_gemini_selection_and_status(
     assert status_data["can_proceed_with_gemini"] is True
 
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
-    assert "BACKEND_PROVIDER=gemini" in env_text
-    assert "MODEL_NAME=gemini-3.1-flash-live-preview" in env_text
+    assert "REACHY_MINI_PIPELINE_MODE=gemini_live" in env_text
     assert "GEMINI_API_KEY=gem-test-token" in env_text
+    # Phase 4f: the retired dial is no longer written as an active assignment.
+    assignment_lines = [line for line in env_text.splitlines() if line.startswith("BACKEND_PROVIDER=")]
+    assert assignment_lines == []
 
 
-def test_backend_config_preserves_explicit_model_override_when_saving_key(
+def test_backend_config_does_not_write_model_name_when_saving_key(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Saving credentials should not reset a custom model override."""
-    custom_model = "gpt-4o-realtime-preview-2025-06-03"
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
-    monkeypatch.setattr(config, "MODEL_NAME", custom_model)
+    """Phase 4f: ``_persist_pipeline_choice`` no longer manages ``MODEL_NAME``."""
+    monkeypatch.setattr(config, "PIPELINE_MODE", "openai_realtime")
+    monkeypatch.setattr(config, "AUDIO_INPUT_BACKEND", "openai_realtime_input")
+    monkeypatch.setattr(config, "AUDIO_OUTPUT_BACKEND", "openai_realtime_output")
     monkeypatch.setattr(config, "OPENAI_API_KEY", None)
     monkeypatch.setattr(config, "GEMINI_API_KEY", None)
-    monkeypatch.setenv("BACKEND_PROVIDER", "openai")
-    monkeypatch.setenv("MODEL_NAME", custom_model)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("MODEL_NAME", raising=False)
 
     app = FastAPI()
     robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
@@ -202,7 +202,7 @@ def test_backend_config_preserves_explicit_model_override_when_saving_key(
     client = TestClient(app)
     response = client.post(
         "/backend_config",
-        json={"backend": "openai", "api_key": "openai-test-key"},
+        json={"pipeline_mode": "openai_realtime", "api_key": "openai-test-key"},
     )
 
     assert response.status_code == 200
@@ -211,29 +211,28 @@ def test_backend_config_preserves_explicit_model_override_when_saving_key(
     assert data["can_proceed"] is True
     assert data["can_proceed_with_openai"] is True
     assert data["can_proceed_with_gemini"] is False
-    assert config.MODEL_NAME == custom_model
 
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
-    assert "BACKEND_PROVIDER=openai" in env_text
-    assert f"MODEL_NAME={custom_model}" in env_text
-    assert "MODEL_NAME=gpt-realtime" not in env_text
+    assert "REACHY_MINI_PIPELINE_MODE=openai_realtime" in env_text
     assert "OPENAI_API_KEY=openai-test-key" in env_text
+    # The pipeline-save path never writes a MODEL_NAME assignment in the new world.
+    model_assignment_lines = [line for line in env_text.splitlines() if line.startswith("MODEL_NAME=")]
+    assert model_assignment_lines == []
 
 
 def test_backend_config_persists_local_stt_selection_and_status(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Settings API should persist local STT options and reuse OpenAI credentials."""
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
-    monkeypatch.setattr(config, "MODEL_NAME", "gpt-realtime")
+    """Settings API should persist composable-pipeline options and reuse OpenAI credentials."""
+    monkeypatch.setattr(config, "PIPELINE_MODE", "openai_realtime")
+    monkeypatch.setattr(config, "AUDIO_INPUT_BACKEND", "openai_realtime_input")
+    monkeypatch.setattr(config, "AUDIO_OUTPUT_BACKEND", "openai_realtime_output")
     monkeypatch.setattr(config, "OPENAI_API_KEY", None)
     monkeypatch.setattr(config, "LOCAL_STT_CACHE_DIR", "./cache/moonshine_voice")
     monkeypatch.setattr(config, "LOCAL_STT_LANGUAGE", "en")
     monkeypatch.setattr(config, "LOCAL_STT_MODEL", "tiny_streaming")
     monkeypatch.setattr(config, "LOCAL_STT_UPDATE_INTERVAL", 0.35)
-    monkeypatch.setenv("BACKEND_PROVIDER", "openai")
-    monkeypatch.setenv("MODEL_NAME", "gpt-realtime")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     app = FastAPI()
@@ -245,9 +244,10 @@ def test_backend_config_persists_local_stt_selection_and_status(
     response = client.post(
         "/backend_config",
         json={
-            "backend": "local_stt",
+            "pipeline_mode": "composable",
+            "audio_input_backend": "moonshine",
+            "audio_output_backend": "openai_realtime_output",
             "api_key": "openai-test-key",
-            "local_stt_response_backend": "openai",
             "local_stt_cache_dir": "./cache/moonshine_voice",
             "local_stt_language": "en",
             "local_stt_model": "small_streaming",
@@ -258,11 +258,12 @@ def test_backend_config_persists_local_stt_selection_and_status(
     assert response.status_code == 200
     data = response.json()
     assert data["ok"] is True
-    assert data["backend_provider"] == "local_stt"
+    assert data["pipeline_mode"] == "composable"
+    assert data["audio_input_backend"] == "moonshine"
+    assert data["audio_output_backend"] == "openai_realtime_output"
     assert data["active_backend"] == "openai"
     assert data["has_local_stt_key"] is True
     assert data["can_proceed_with_local_stt"] is True
-    assert data["local_stt_response_backend"] == "openai"
     assert data["local_stt_cache_dir"] == "./cache/moonshine_voice"
     assert data["local_stt_language"] == "en"
     assert data["local_stt_model"] == "small_streaming"
@@ -270,16 +271,15 @@ def test_backend_config_persists_local_stt_selection_and_status(
     assert data["requires_restart"] is True
 
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
-    env_lines = env_text.splitlines()
-    assert "BACKEND_PROVIDER=local_stt" in env_text
+    assert "REACHY_MINI_PIPELINE_MODE=composable" in env_text
+    assert "REACHY_MINI_AUDIO_INPUT_BACKEND=moonshine" in env_text
+    assert "REACHY_MINI_AUDIO_OUTPUT_BACKEND=openai_realtime_output" in env_text
     assert "OPENAI_API_KEY=openai-test-key" in env_text
     assert "LOCAL_STT_PROVIDER=moonshine" in env_text
-    assert "LOCAL_STT_RESPONSE_BACKEND=openai" in env_text
     assert "LOCAL_STT_CACHE_DIR=./cache/moonshine_voice" in env_text
     assert "LOCAL_STT_LANGUAGE=en" in env_text
     assert "LOCAL_STT_MODEL=small_streaming" in env_text
     assert "LOCAL_STT_UPDATE_INTERVAL=0.50" in env_text
-    assert not any(line.startswith("MODEL_NAME=") for line in env_lines)
 
 
 def test_backend_config_rejects_invalid_local_stt_update_interval(
@@ -287,7 +287,9 @@ def test_backend_config_rejects_invalid_local_stt_update_interval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Settings API should reject local STT update intervals that would hurt UX."""
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "local_stt")
+    monkeypatch.setattr(config, "PIPELINE_MODE", "composable")
+    monkeypatch.setattr(config, "AUDIO_INPUT_BACKEND", "moonshine")
+    monkeypatch.setattr(config, "AUDIO_OUTPUT_BACKEND", "chatterbox")
     monkeypatch.setattr(config, "OPENAI_API_KEY", "openai-test-key")
 
     app = FastAPI()
@@ -299,7 +301,9 @@ def test_backend_config_rejects_invalid_local_stt_update_interval(
     response = client.post(
         "/backend_config",
         json={
-            "backend": "local_stt",
+            "pipeline_mode": "composable",
+            "audio_input_backend": "moonshine",
+            "audio_output_backend": "chatterbox",
             "local_stt_model": "tiny_streaming",
             "local_stt_update_interval": 9.0,
         },
@@ -314,13 +318,12 @@ def test_backend_config_persists_local_hf_selection_and_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Settings API should persist a direct Hugging Face websocket target."""
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
-    monkeypatch.setattr(config, "MODEL_NAME", "gpt-realtime")
+    monkeypatch.setattr(config, "PIPELINE_MODE", "openai_realtime")
+    monkeypatch.setattr(config, "AUDIO_INPUT_BACKEND", "openai_realtime_input")
+    monkeypatch.setattr(config, "AUDIO_OUTPUT_BACKEND", "openai_realtime_output")
     monkeypatch.setattr(config, "HF_REALTIME_CONNECTION_MODE", "deployed")
     monkeypatch.setattr(config, "HF_REALTIME_SESSION_URL", None)
     monkeypatch.setattr(config, "HF_REALTIME_WS_URL", None)
-    monkeypatch.setenv("BACKEND_PROVIDER", "openai")
-    monkeypatch.setenv("MODEL_NAME", "gpt-realtime")
     monkeypatch.delenv("HF_REALTIME_CONNECTION_MODE", raising=False)
     monkeypatch.delenv("HF_REALTIME_SESSION_URL", raising=False)
     monkeypatch.delenv("HF_REALTIME_WS_URL", raising=False)
@@ -334,7 +337,7 @@ def test_backend_config_persists_local_hf_selection_and_status(
     response = client.post(
         "/backend_config",
         json={
-            "backend": "huggingface",
+            "pipeline_mode": "hf_realtime",
             "hf_mode": "local",
             "hf_host": "localhost",
             "hf_port": 8765,
@@ -344,7 +347,7 @@ def test_backend_config_persists_local_hf_selection_and_status(
     assert response.status_code == 200
     data = response.json()
     assert data["ok"] is True
-    assert data["backend_provider"] == "huggingface"
+    assert data["pipeline_mode"] == "hf_realtime"
     assert data["active_backend"] == "openai"
     assert data["has_hf_ws_url"] is True
     assert data["has_hf_connection"] is True
@@ -354,11 +357,9 @@ def test_backend_config_persists_local_hf_selection_and_status(
     assert data["requires_restart"] is True
 
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
-    env_lines = env_text.splitlines()
-    assert "BACKEND_PROVIDER=huggingface" in env_text
+    assert "REACHY_MINI_PIPELINE_MODE=hf_realtime" in env_text
     assert "HF_REALTIME_CONNECTION_MODE=local" in env_text
     assert "HF_REALTIME_WS_URL=ws://localhost:8765/v1/realtime" in env_text
-    assert not any(line.startswith("MODEL_NAME=") for line in env_lines)
 
 
 def test_backend_config_persists_deployed_mode_without_clearing_local_hf_ws_url(
@@ -368,19 +369,18 @@ def test_backend_config_persists_deployed_mode_without_clearing_local_hf_ws_url(
     """Saving deployed mode should make env selection explicit and remove stale allocator URLs."""
     env_path = tmp_path / ".env"
     env_path.write_text(
-        "BACKEND_PROVIDER=huggingface\n"
+        "REACHY_MINI_PIPELINE_MODE=hf_realtime\n"
         "HF_REALTIME_SESSION_URL=https://lb.example.test/session\n"
         "HF_REALTIME_WS_URL=ws://localhost:8765/v1/realtime\n",
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "huggingface")
-    monkeypatch.setattr(config, "MODEL_NAME", "gpt-realtime")
+    monkeypatch.setattr(config, "PIPELINE_MODE", "hf_realtime")
+    monkeypatch.setattr(config, "AUDIO_INPUT_BACKEND", "hf_input")
+    monkeypatch.setattr(config, "AUDIO_OUTPUT_BACKEND", "hf_output")
     monkeypatch.setattr(config, "HF_REALTIME_CONNECTION_MODE", "deployed")
     monkeypatch.setattr(config, "HF_REALTIME_SESSION_URL", "https://lb.example.test/session")
     monkeypatch.setattr(config, "HF_REALTIME_WS_URL", "ws://localhost:8765/v1/realtime")
-    monkeypatch.setenv("BACKEND_PROVIDER", "huggingface")
-    monkeypatch.setenv("MODEL_NAME", "gpt-realtime")
     monkeypatch.delenv("HF_REALTIME_CONNECTION_MODE", raising=False)
     monkeypatch.setenv("HF_REALTIME_SESSION_URL", "https://lb.example.test/session")
     monkeypatch.setenv("HF_REALTIME_WS_URL", "ws://localhost:8765/v1/realtime")
@@ -394,7 +394,7 @@ def test_backend_config_persists_deployed_mode_without_clearing_local_hf_ws_url(
     response = client.post(
         "/backend_config",
         json={
-            "backend": "huggingface",
+            "pipeline_mode": "hf_realtime",
             "hf_mode": "deployed",
         },
     )
@@ -419,20 +419,18 @@ def test_backend_config_switches_to_saved_local_hf_connection_without_payload_ta
     """Switching back to a saved local Hugging Face backend should reuse the persisted target."""
     env_path = tmp_path / ".env"
     env_path.write_text(
-        "BACKEND_PROVIDER=openai\n"
-        "MODEL_NAME=gpt-realtime\n"
+        "REACHY_MINI_PIPELINE_MODE=openai_realtime\n"
         "HF_REALTIME_CONNECTION_MODE=local\n"
         "HF_REALTIME_WS_URL=ws://192.168.1.42:8766/v1/realtime\n",
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
-    monkeypatch.setattr(config, "MODEL_NAME", "gpt-realtime")
+    monkeypatch.setattr(config, "PIPELINE_MODE", "openai_realtime")
+    monkeypatch.setattr(config, "AUDIO_INPUT_BACKEND", "openai_realtime_input")
+    monkeypatch.setattr(config, "AUDIO_OUTPUT_BACKEND", "openai_realtime_output")
     monkeypatch.setattr(config, "HF_REALTIME_CONNECTION_MODE", "local")
     monkeypatch.setattr(config, "HF_REALTIME_SESSION_URL", None)
     monkeypatch.setattr(config, "HF_REALTIME_WS_URL", "ws://192.168.1.42:8766/v1/realtime")
-    monkeypatch.setenv("BACKEND_PROVIDER", "openai")
-    monkeypatch.setenv("MODEL_NAME", "gpt-realtime")
     monkeypatch.setenv("HF_REALTIME_CONNECTION_MODE", "local")
     monkeypatch.setenv("HF_REALTIME_WS_URL", "ws://192.168.1.42:8766/v1/realtime")
 
@@ -444,19 +442,19 @@ def test_backend_config_switches_to_saved_local_hf_connection_without_payload_ta
     client = TestClient(app)
     response = client.post(
         "/backend_config",
-        json={"backend": "huggingface"},
+        json={"pipeline_mode": "hf_realtime"},
     )
 
     assert response.status_code == 200
     data = response.json()
     assert data["ok"] is True
-    assert data["backend_provider"] == "huggingface"
+    assert data["pipeline_mode"] == "hf_realtime"
     assert data["hf_connection_mode"] == "local"
     assert data["hf_direct_host"] == "192.168.1.42"
     assert data["hf_direct_port"] == 8766
 
     env_text = env_path.read_text(encoding="utf-8")
-    assert "BACKEND_PROVIDER=huggingface" in env_text
+    assert "REACHY_MINI_PIPELINE_MODE=hf_realtime" in env_text
     assert "HF_REALTIME_CONNECTION_MODE=local" in env_text
     assert "HF_REALTIME_WS_URL=ws://192.168.1.42:8766/v1/realtime" in env_text
 
@@ -466,7 +464,9 @@ def test_backend_config_rejects_invalid_hf_port_zero(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Settings API should reject invalid local Hugging Face ports from direct callers."""
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "huggingface")
+    monkeypatch.setattr(config, "PIPELINE_MODE", "hf_realtime")
+    monkeypatch.setattr(config, "AUDIO_INPUT_BACKEND", "hf_input")
+    monkeypatch.setattr(config, "AUDIO_OUTPUT_BACKEND", "hf_output")
     monkeypatch.setattr(config, "HF_REALTIME_CONNECTION_MODE", "deployed")
     monkeypatch.setattr(config, "HF_REALTIME_SESSION_URL", None)
     monkeypatch.setattr(config, "HF_REALTIME_WS_URL", None)
@@ -480,7 +480,7 @@ def test_backend_config_rejects_invalid_hf_port_zero(
     response = client.post(
         "/backend_config",
         json={
-            "backend": "huggingface",
+            "pipeline_mode": "hf_realtime",
             "hf_mode": "local",
             "hf_host": "localhost",
             "hf_port": 0,
@@ -496,7 +496,9 @@ def test_status_reports_direct_hf_ws_url_as_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Settings API should treat a direct Hugging Face websocket as a valid configuration."""
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "huggingface")
+    monkeypatch.setattr(config, "PIPELINE_MODE", "hf_realtime")
+    monkeypatch.setattr(config, "AUDIO_INPUT_BACKEND", "hf_input")
+    monkeypatch.setattr(config, "AUDIO_OUTPUT_BACKEND", "hf_output")
     monkeypatch.setattr(config, "HF_REALTIME_CONNECTION_MODE", "local")
     monkeypatch.setattr(config, "HF_REALTIME_SESSION_URL", None)
     monkeypatch.setattr(config, "HF_REALTIME_WS_URL", "ws://127.0.0.1:8765/v1/realtime")
@@ -511,7 +513,8 @@ def test_status_reports_direct_hf_ws_url_as_ready(
 
     assert response.status_code == 200
     data = response.json()
-    assert data["backend_provider"] == "huggingface"
+    assert data["pipeline_mode"] == "hf_realtime"
+    assert data["active_backend"] == "huggingface"
     assert data["has_hf_session_url"] is False
     assert data["has_hf_ws_url"] is True
     assert data["has_hf_connection"] is True
@@ -582,7 +585,9 @@ def test_headless_personality_routes_return_gemini_voices_when_backend_selected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Headless personality UI should expose Gemini voices when Gemini is selected."""
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "gemini")
+    monkeypatch.setattr(config, "PIPELINE_MODE", "gemini_live")
+    monkeypatch.setattr(config, "AUDIO_INPUT_BACKEND", "gemini_live_input")
+    monkeypatch.setattr(config, "AUDIO_OUTPUT_BACKEND", "gemini_live_output")
     monkeypatch.setattr(config, "MODEL_NAME", "gemini-3.1-flash-live-preview")
 
     app = FastAPI()
@@ -729,9 +734,10 @@ def test_local_stream_launch_waits_for_manual_openai_key_without_download(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """OpenAI startup should wait for settings input instead of claiming a bundled key."""
-    monkeypatch.setattr(config, "BACKEND_PROVIDER", "openai")
+    monkeypatch.setattr(config, "PIPELINE_MODE", "openai_realtime")
+    monkeypatch.setattr(config, "AUDIO_INPUT_BACKEND", "openai_realtime_input")
+    monkeypatch.setattr(config, "AUDIO_OUTPUT_BACKEND", "openai_realtime_output")
     monkeypatch.setattr(config, "OPENAI_API_KEY", None)
-    monkeypatch.setenv("BACKEND_PROVIDER", "openai")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     fake_client_ctor = MagicMock(side_effect=AssertionError("launch() should not try to download an OpenAI key"))
