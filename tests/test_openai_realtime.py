@@ -1247,7 +1247,10 @@ async def test_openai_excludes_head_tracking_when_no_head_tracker(monkeypatch: A
     monkeypatch.setattr(rt_mod, "get_session_instructions", lambda: "test")
     monkeypatch.setattr(rt_mod, "get_session_voice", lambda default=None: "alloy")
 
-    # mock ALL_TOOL_SPECS to include at least head_tracking and one other tool, to verify that only head_tracking is excluded, not all tools
+    # mock ALL_TOOL_SPECS to include at least head_tracking and one other tool, to verify that only head_tracking is excluded, not all tools.
+    # Also force _TOOLS_INITIALIZED=True so _initialize_tools() (called by get_active_tool_specs) becomes a no-op and does not
+    # overwrite the patched ALL_TOOL_SPECS with the real tool registry.
+    monkeypatch.setattr(ct_mod, "_TOOLS_INITIALIZED", True)
     monkeypatch.setattr(
         ct_mod,
         "ALL_TOOL_SPECS",
