@@ -88,13 +88,20 @@ class _MockTTS:
         self.shutdown_called = False
         self.last_text: str | None = None
         self.last_tags: tuple[str, ...] | None = None
+        self.last_marker_ref: list[float] | None = None
 
     async def prepare(self) -> None:
         self.prepared = True
 
-    async def synthesize(self, text: str, tags: tuple[str, ...] = ()) -> AsyncIterator[AudioFrame]:
+    async def synthesize(
+        self,
+        text: str,
+        tags: tuple[str, ...] = (),
+        first_audio_marker: list[float] | None = None,
+    ) -> AsyncIterator[AudioFrame]:
         self.last_text = text
         self.last_tags = tags
+        self.last_marker_ref = first_audio_marker
         yield AudioFrame(samples=[0] * 480, sample_rate=24000)
 
     async def shutdown(self) -> None:
@@ -263,3 +270,27 @@ def test_audio_frame_carries_samples_and_rate() -> None:
     af = AudioFrame(samples=[1, 2, 3], sample_rate=16000)
     assert af.samples == [1, 2, 3]
     assert af.sample_rate == 16000
+
+
+# ---------------------------------------------------------------------------
+# Phase 5a.2 — first_audio_marker channel on TTSBackend
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tts_protocol_synthesize_accepts_first_audio_marker_kwarg() -> None:
+    """Phase 5a.2: ``TTSBackend.synthesize`` accepts a ``first_audio_marker``
+    list. Adapters that opt in to populating it append ``time.monotonic()``
+    on the first yielded frame; orchestrators that want the timestamp pass a
+    fresh ``[]`` per call. The Mock here just records the reference — the
+    appender contract is exercised per-adapter in their own test files.
+    """
+    tts = _MockTTS()
+    marker: list[float] = []
+    frames = [
+        frame
+        async for frame in tts.synthesize("hi", first_audio_marker=marker)
+    ]
+    assert len(frames) == 1
+    # The mock recorded the reference identity; population is per-adapter.
+    assert tts.last_marker_ref is marker

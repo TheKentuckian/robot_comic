@@ -188,9 +188,19 @@ class TTSBackend(Protocol):
 
     Lifecycle:
     1. ``prepare()`` — initialise client / API session.
-    2. ``synthesize(text, tags)`` — produce an async stream of PCM frames.
+    2. ``synthesize(text, tags, first_audio_marker)`` — produce an async
+       stream of PCM frames.
        ``tags`` carries optional delivery hints (``fast``, ``annoyance``,
-       ``slow``, etc.) that some backends map to voice-settings deltas.
+       ``slow``, etc.) that some backends map to voice-settings deltas or
+       per-call delivery cues. Adapters that today parse hints out of the
+       text fall back to that path when ``tags`` is empty; non-empty
+       ``tags`` overrides text-parsing as the structured channel.
+       ``first_audio_marker`` (Phase 5a.2): when provided, the adapter
+       appends ``time.monotonic()`` to the list on the first PCM frame it
+       yields. Single-shot per call — adapters guard with a local flag so
+       repeated frames don't append. Enables the orchestrator to record
+       per-turn first-audio latency without subscribing to internal
+       events. ``None`` (the default) opts out of the channel.
     3. ``shutdown()`` — release HTTP / websocket clients.
 
     The orchestrator owns the output queue; the backend simply yields
@@ -206,6 +216,7 @@ class TTSBackend(Protocol):
         self,
         text: str,
         tags: tuple[str, ...] = (),
+        first_audio_marker: list[float] | None = None,
     ) -> AsyncIterator[AudioFrame]:
         """Stream synthesised PCM frames for *text*.
 
