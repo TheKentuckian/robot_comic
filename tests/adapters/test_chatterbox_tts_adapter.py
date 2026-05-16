@@ -17,6 +17,7 @@ Differences from :mod:`tests.adapters.test_elevenlabs_tts_adapter`:
 
 from __future__ import annotations
 import asyncio
+import logging
 from typing import Any
 
 import pytest
@@ -264,6 +265,115 @@ async def test_shutdown_with_no_open_http_is_safe() -> None:
     adapter = ChatterboxTTSAdapter(handler)  # type: ignore[arg-type]
     await adapter.shutdown()
     assert handler._http is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 5a.2 — first_audio_marker channel
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_appends_first_audio_marker_on_first_frame() -> None:
+    """Phase 5a.2: marker append on first yielded frame; single-shot per call."""
+    frames: list[Any] = [(24000, [1]), (24000, [2]), (24000, [3])]
+    handler = _StubChatterboxHandler(frames_to_push=frames)
+    adapter = ChatterboxTTSAdapter(handler)  # type: ignore[arg-type]
+
+    marker: list[float] = []
+    async for _ in adapter.synthesize("hi", first_audio_marker=marker):
+        pass
+
+    assert len(marker) == 1
+    assert isinstance(marker[0], float)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_does_not_touch_marker_when_none() -> None:
+    """``first_audio_marker=None`` (default) → no exception."""
+    handler = _StubChatterboxHandler(frames_to_push=[(24000, [0])])
+    adapter = ChatterboxTTSAdapter(handler)  # type: ignore[arg-type]
+    async for _ in adapter.synthesize("hi"):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_synthesize_does_not_append_marker_when_no_frames() -> None:
+    """No frames → marker stays empty (no spurious append)."""
+    handler = _StubChatterboxHandler(frames_to_push=[])
+    adapter = ChatterboxTTSAdapter(handler)  # type: ignore[arg-type]
+    marker: list[float] = []
+    async for _ in adapter.synthesize("hi", first_audio_marker=marker):
+        pass
+    assert marker == []
+
+
+@pytest.mark.asyncio
+async def test_synthesize_drops_non_tuple_items_does_not_count_as_first_frame() -> None:
+    """A leading ``AdditionalOutputs`` sentinel must NOT trigger the marker
+    append — only real audio frames count as "first audio out"."""
+
+    class _FakeAdditionalOutputs:
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self.payload = payload
+
+    handler = _StubChatterboxHandler(
+        frames_to_push=[
+            _FakeAdditionalOutputs({"role": "assistant", "content": "[TTS error]"}),
+            (24000, [1]),
+        ]
+    )
+    adapter = ChatterboxTTSAdapter(handler)  # type: ignore[arg-type]
+    marker: list[float] = []
+    out = [
+        frame
+        async for frame in adapter.synthesize("hi", first_audio_marker=marker)
+    ]
+    assert len(out) == 1
+    # Marker appended on the real audio frame, not the dropped sentinel.
+    assert len(marker) == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 5a.2 — non-empty tags log at DEBUG
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_logs_non_empty_tags_at_debug(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Phase 5a.2: when the orchestrator passes non-empty delivery tags, the
+    chatterbox adapter logs at DEBUG that it dropped them — the chatterbox
+    handler reads delivery from the active persona, not from caller tags.
+    A future refactor can wire structured tag forwarding into the legacy
+    handler; for now this log is the audit trail."""
+    handler = _StubChatterboxHandler(frames_to_push=[(24000, [0])])
+    adapter = ChatterboxTTSAdapter(handler)  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.DEBUG, logger="robot_comic.adapters.chatterbox_tts_adapter"):
+        async for _ in adapter.synthesize("hi", tags=("fast",)):
+            pass
+
+    # The log message mentions tags being dropped/forwarded gap.
+    matching = [r for r in caplog.records if "tag" in r.message.lower()]
+    assert matching, f"expected a DEBUG log mentioning tags; got {[r.message for r in caplog.records]}"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_empty_tags_does_not_log_debug(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When ``tags=()`` (the default) the chatterbox adapter stays quiet —
+    no log because there's nothing being dropped."""
+    handler = _StubChatterboxHandler(frames_to_push=[(24000, [0])])
+    adapter = ChatterboxTTSAdapter(handler)  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.DEBUG, logger="robot_comic.adapters.chatterbox_tts_adapter"):
+        async for _ in adapter.synthesize("hi"):
+            pass
+
+    matching = [r for r in caplog.records if "tag" in r.message.lower()]
+    assert matching == [], f"expected no tag-related log on empty tags; got {[r.message for r in caplog.records]}"
 
 
 # ---------------------------------------------------------------------------

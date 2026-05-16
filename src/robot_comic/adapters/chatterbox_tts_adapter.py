@@ -35,24 +35,35 @@ today.
 
 ## Known gaps
 
-- **No tag forwarding.** The chatterbox handler does not accept tags;
-  per-segment delivery is driven by ``chatterbox_tag_translator.translate``
-  using the active persona. The adapter accepts ``tags`` for Protocol
-  compliance and drops them silently.
+- **No tag forwarding into the chatterbox handler.** The chatterbox handler
+  does not accept tags; per-segment delivery is driven by
+  ``chatterbox_tag_translator.translate`` using the active persona. The
+  adapter accepts ``tags`` for Protocol compliance and drops them — Phase
+  5a.2 logs non-empty tags at DEBUG so future audits can spot when the
+  orchestrator starts routing structured cues through this triple. A
+  future PR may retrofit the legacy handler to read structured tags
+  alongside the persona-driven path.
 - **`AdditionalOutputs` items dropped.** When chatterbox can't synthesise
   (all retries failed), the legacy handler pushes a fastrtc
   ``AdditionalOutputs({"role": "assistant", "content": "[TTS error]"})``
   sentinel for UI surfacing. The Protocol has no metadata channel for
   these yet; the adapter drops them so they don't fail the
-  ``isinstance(item, tuple)`` unpack. Mirrors the parallel TODO in
-  :class:`ElevenLabsTTSAdapter` — Phase 4 will plumb both through
-  :class:`LLMResponse.metadata` / a future ``TTSBackend`` event channel.
-- **No first-audio marker.** Same TODO as :class:`ElevenLabsTTSAdapter`.
+  ``isinstance(item, tuple)`` unpack. Mirrors the parallel gap in
+  :class:`ElevenLabsTTSAdapter` — a future PR may plumb both through a
+  ``TTSBackend`` event channel.
+
+## First-audio marker (Phase 5a.2)
+
+The Protocol-level ``synthesize(first_audio_marker=...)`` channel is wired:
+on the first real audio frame (``(sample_rate, ndarray)`` tuple) the adapter
+appends ``time.monotonic()`` to the caller-supplied list. ``AdditionalOutputs``
+sentinels do not count — only PCM frames trigger the append.
 """
 
 from __future__ import annotations
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from robot_comic.backends import AudioFrame
@@ -86,6 +97,7 @@ class ChatterboxTTSAdapter:
         self,
         text: str,
         tags: tuple[str, ...] = (),
+        first_audio_marker: list[float] | None = None,
     ) -> AsyncIterator[AudioFrame]:
         """Stream PCM frames for *text* as :class:`AudioFrame` instances.
 
@@ -93,15 +105,29 @@ class ChatterboxTTSAdapter:
         the legacy push-to-queue code path becomes a yielding generator
         without any changes to ``_synthesize_and_enqueue`` itself.
 
-        ``tags`` is accepted for Protocol compliance and silently dropped —
-        the chatterbox handler derives per-segment delivery from the active
-        persona via :func:`chatterbox_tag_translator.translate`, not from
-        externally-supplied tags.
+        ``tags`` is accepted for Protocol compliance. The chatterbox handler
+        derives per-segment delivery from the active persona via
+        :func:`chatterbox_tag_translator.translate`, not from externally-supplied
+        tags, so the param is dropped. Phase 5a.2: a non-empty ``tags``
+        param is logged at DEBUG so future audits can spot when the
+        orchestrator starts routing structured tags through this triple
+        (the wire is open; the legacy handler just doesn't read from it).
+
+        Phase 5a.2: ``first_audio_marker`` (when non-None) receives a
+        single ``time.monotonic()`` append on the first real audio frame
+        yielded. ``AdditionalOutputs`` sentinels (dropped) do not count.
         """
-        del tags  # accepted for Protocol compliance; chatterbox ignores tags
+        if tags:
+            logger.debug(
+                "ChatterboxTTSAdapter: dropping delivery tags %r; legacy "
+                "handler reads from active persona via "
+                "chatterbox_tag_translator.translate",
+                tags,
+            )
         temp_queue: asyncio.Queue[Any] = asyncio.Queue()
         original_queue = self._handler.output_queue
         self._handler.output_queue = temp_queue
+        _marker_appended = False
 
         async def _stream_and_signal() -> None:
             try:
@@ -127,6 +153,9 @@ class ChatterboxTTSAdapter:
                 #    (see module docstring) — drop them silently.
                 if isinstance(item, tuple) and len(item) == 2:
                     sample_rate, frame = item
+                    if first_audio_marker is not None and not _marker_appended:
+                        first_audio_marker.append(time.monotonic())
+                        _marker_appended = True
                     yield AudioFrame(samples=frame, sample_rate=sample_rate)
                 # else: AdditionalOutputs-shaped sentinel — dropped.
             # Propagate any error from the streaming task.
