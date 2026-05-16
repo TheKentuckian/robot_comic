@@ -149,6 +149,62 @@ async def extract_punchline_via_llm(
         return {"punchline": last_sentence_of(assistant_text), "topic": ""}
 
 
+async def record_joke_history(
+    response_text: str,
+    *,
+    persona: str | None = None,
+) -> None:
+    """Capture a punchline + topic from *response_text* into joke history.
+
+    Lifecycle Hook #4 (#337): the composable pipeline (``ComposablePipeline``)
+    calls this after a final, non-empty assistant text round to keep the
+    avoid-repeat joke history fed without going through the legacy
+    ``_run_turn`` / ``GeminiTTSResponseHandler.response`` paths. Mirrors the
+    legacy capture sites (``llama_base.py:578-594`` and
+    ``gemini_tts.py:380-394``) but owns its own ``httpx`` client lifecycle so
+    the orchestrator doesn't have to.
+
+    Best-effort:
+
+    - Returns silently if the feature is disabled
+      (``config.JOKE_HISTORY_ENABLED=False``) or if *response_text* is
+      empty / whitespace.
+    - Swallows any exception from the extraction call or the file write
+      (logged at DEBUG). Joke history must never crash a turn.
+
+    Args:
+        response_text: The final assistant text emitted for the turn.
+        persona: Persona name to record alongside the punchline. When
+            ``None`` (default), falls back to
+            ``config.REACHY_MINI_CUSTOM_PROFILE`` or an empty string.
+
+    """
+    if not response_text or not response_text.strip():
+        return
+
+    from robot_comic.config import config  # avoid circular at module load
+
+    if not getattr(config, "JOKE_HISTORY_ENABLED", True):
+        return
+
+    resolved_persona = persona if persona is not None else (getattr(config, "REACHY_MINI_CUSTOM_PROFILE", "") or "")
+
+    try:
+        import httpx as _httpx
+
+        async with _httpx.AsyncClient() as http:
+            extracted = await extract_punchline_via_llm(response_text, http)
+        punchline = extracted.get("punchline") if extracted is not None else None
+        if punchline and extracted is not None:
+            JokeHistory(default_history_path()).add(
+                punchline,
+                topic=extracted.get("topic", "") or "",
+                persona=resolved_persona,
+            )
+    except Exception as exc:
+        logger.debug("joke_history capture failed: %s", exc)
+
+
 def _entry_weight(entry: dict[str, Any], now: datetime) -> float:
     """Compute the time-decay weight for a history entry.
 

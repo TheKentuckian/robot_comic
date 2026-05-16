@@ -378,6 +378,174 @@ async def test_empty_assistant_text_does_not_speak() -> None:
     await task
 
 
+# ---------------------------------------------------------------------------
+# Lifecycle Hook #4 — record_joke_history (#337)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_record_joke_history_called_for_non_empty_assistant_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The orchestrator must invoke ``record_joke_history`` after a final speak round.
+
+    Legacy parity: ``llama_base.py:578-594`` and ``gemini_tts.py:380-394``
+    capture the punchline + topic after the LLM produces the final
+    assistant text. The composable path bypasses both legacy sites; the
+    orchestrator must call ``record_joke_history`` itself.
+    """
+    from robot_comic import composable_pipeline as mod
+
+    captured: list[str] = []
+
+    async def _recorder(text: str) -> None:
+        captured.append(text)
+
+    monkeypatch.setattr(mod, "record_joke_history", _recorder)
+
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([LLMResponse(text="That's the joke!")])
+    tts = _RecordingTTS()
+    pipeline = mod.ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    await stt.on_completed("tell me one")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    assert captured == ["That's the joke!"]
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_record_joke_history_not_called_for_empty_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Whitespace-only assistant text must not trigger joke-history capture.
+
+    Mirrors the legacy ``if response_text and JOKE_HISTORY_ENABLED:`` guard
+    in ``llama_base.py:579``.
+    """
+    from robot_comic import composable_pipeline as mod
+
+    captured: list[str] = []
+
+    async def _recorder(text: str) -> None:
+        captured.append(text)
+
+    monkeypatch.setattr(mod, "record_joke_history", _recorder)
+
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([LLMResponse(text="   ")])  # whitespace-only
+    tts = _RecordingTTS()
+    pipeline = mod.ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    await stt.on_completed("hi")
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert captured == []
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_record_joke_history_not_called_on_tool_only_rounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tool-call-only LLM rounds must not record joke history.
+
+    Legacy ``_run_turn`` captures after the assistant text is final, NOT on
+    intermediate tool rounds. The orchestrator hook must respect that —
+    fire exactly once per turn, on the final speak round.
+    """
+    from robot_comic import composable_pipeline as mod
+
+    captured: list[str] = []
+
+    async def _recorder(text: str) -> None:
+        captured.append(text)
+
+    monkeypatch.setattr(mod, "record_joke_history", _recorder)
+
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM(
+        [
+            LLMResponse(tool_calls=(ToolCall(id="t-1", name="dance", args={"name": "happy"}),)),
+            LLMResponse(text="Done dancing!"),
+        ]
+    )
+    tts = _RecordingTTS()
+
+    async def _dispatch(call: ToolCall) -> str:
+        return f"ok:{call.name}"
+
+    pipeline = mod.ComposablePipeline(
+        stt=stt,
+        llm=llm,
+        tts=tts,
+        tool_dispatcher=_dispatch,
+        tools_spec=[{"name": "dance"}],
+    )
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    await stt.on_completed("dance for me")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    # Exactly one capture, with the final assistant text — not the tool round.
+    assert captured == ["Done dancing!"]
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_record_joke_history_exception_does_not_crash_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If record_joke_history somehow raises, the TTS still runs.
+
+    The helper itself swallows exceptions, but if a future change ever
+    leaks one, the orchestrator must not let it prevent speech.
+    """
+    from robot_comic import composable_pipeline as mod
+
+    async def _bad_recorder(text: str) -> None:
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(mod, "record_joke_history", _bad_recorder)
+
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([LLMResponse(text="Hello!")])
+    tts = _RecordingTTS()
+    pipeline = mod.ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    await stt.on_completed("hi")
+    # Yield several loop iterations so the turn either completes or fails.
+    for _ in range(20):
+        await asyncio.sleep(0)
+        if not tts.calls == []:
+            break
+
+    # TTS must have run even though the hook raised.
+    assert tts.calls == [("Hello!", ())]
+
+    await pipeline.shutdown()
+    await task
+
+
 @pytest.mark.asyncio
 async def test_tool_dispatch_exception_records_error_in_history() -> None:
     """A tool that raises gets a stringified-error result back to the LLM."""

@@ -8,9 +8,10 @@ held by reference — no Protocol churn.
 Phase 4a deliberately leaves these lifecycle hooks unwired; each is a
 follow-up PR between 4b and 4d:
 
-    - telemetry.record_llm_duration
-    - boot-timeline supporting events (#321)
-    - record_joke_history (llama_base.py:553-568)
+    - telemetry.record_llm_duration       — wired (Hook #2)
+    - boot-timeline supporting events (#321) — wired (Hook #3)
+    - record_joke_history (llama_base.py:578-594) — wired (Hook #4) at
+      ``ComposablePipeline._speak_assistant_text``
     - history_trim.trim_history_in_place
     - _speaking_until echo-guard timestamps (elevenlabs_tts.py:471-473)
 """
@@ -152,9 +153,14 @@ class ComposableConversationHandler(ConversationHandler):
 
     async def apply_personality(self, profile: str | None) -> str:
         """Switch personality, reset pipeline history, re-seed system prompt."""
-        # TODO(phase4-lifecycle): legacy handlers also clear joke history and
-        # per-session echo-guard state on persona switch. Compose those in when
-        # the corresponding hooks land in follow-up PRs.
+        # TODO(phase4-lifecycle): legacy handlers also clear per-session
+        # echo-guard state on persona switch. Compose that in when the
+        # echo-guard hook lands. Joke history is a cross-persona file
+        # (``~/.robot-comic/joke-history.json``) read in
+        # ``prompts.py:_append_joke_history`` — it intentionally persists
+        # across personality switches so each persona avoids the others'
+        # punchlines (legacy parity, see joke_history.format_for_prompt
+        # comment "Pulls entries from ALL personas (cross-persona dedup)").
         try:
             set_custom_profile(profile)
         except Exception as exc:
