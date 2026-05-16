@@ -576,3 +576,195 @@ async def test_tool_dispatch_exception_records_error_in_history() -> None:
 
     await pipeline.shutdown()
     await task
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle Hook #5 — trim_history_in_place (#337)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_trim_history_called_once_per_user_turn_before_llm_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The orchestrator must invoke ``trim_history_in_place`` once per user turn.
+
+    Legacy parity: all three legacy ``_dispatch_completed_transcript``
+    sites (``llama_base.py:506``, ``gemini_tts.py:365``,
+    ``elevenlabs_tts.py:565``) trim once per user turn before the LLM
+    loop. The composable path bypasses every one of those — the
+    orchestrator must trim itself.
+    """
+    from robot_comic import composable_pipeline as mod
+
+    call_log: list[str] = []
+
+    def _trim_recorder(history: list[dict[str, Any]], **kwargs: Any) -> int:
+        call_log.append("trim")
+        return 0
+
+    monkeypatch.setattr(mod, "trim_history_in_place", _trim_recorder)
+
+    class _LoggingLLM(_ScriptedLLM):
+        def __init__(self, responses: list[LLMResponse]) -> None:
+            super().__init__(responses)
+
+        async def chat(
+            self,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]] | None = None,
+        ) -> LLMResponse:
+            call_log.append("chat")
+            return await super().chat(messages, tools)
+
+    stt = _ProgrammableSTT()
+    llm = _LoggingLLM([LLMResponse(text="Hello!")])
+    tts = _RecordingTTS()
+    pipeline = mod.ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    await stt.on_completed("hi robot")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    # Exactly one trim, fired before the LLM chat() call.
+    assert call_log == ["trim", "chat"]
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_trim_history_uses_orchestrator_history_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The trim must operate on the orchestrator's own history list, by identity.
+
+    A passed-in copy would mean the cap doesn't shrink subsequent
+    requests. Identity check guards against an accidental ``list(...)``
+    or slice at the call site.
+    """
+    from robot_comic import composable_pipeline as mod
+
+    seen: list[list[dict[str, Any]]] = []
+
+    def _trim_recorder(history: list[dict[str, Any]], **kwargs: Any) -> int:
+        seen.append(history)
+        return 0
+
+    monkeypatch.setattr(mod, "trim_history_in_place", _trim_recorder)
+
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM([LLMResponse(text="ok")])
+    tts = _RecordingTTS()
+    pipeline = mod.ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    await stt.on_completed("test")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    assert len(seen) == 1
+    # Identity, not equality — the trim must mutate the orchestrator's list
+    # in place. After the LLM call the orchestrator appends the assistant
+    # turn, so equality wouldn't hold anyway, but ``is`` proves the contract.
+    assert seen[0] is pipeline._conversation_history
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_trim_history_called_once_per_turn_not_per_tool_round(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tool-call rounds inside a single user turn must NOT re-trim.
+
+    Legacy ``_dispatch_completed_transcript`` trims once before the LLM
+    loop and never re-trims inside it. The orchestrator must respect
+    that cadence — fire exactly once per user turn even when several
+    LLM rounds run.
+    """
+    from robot_comic import composable_pipeline as mod
+
+    trim_calls: list[int] = []
+
+    def _trim_recorder(history: list[dict[str, Any]], **kwargs: Any) -> int:
+        trim_calls.append(len(history))
+        return 0
+
+    monkeypatch.setattr(mod, "trim_history_in_place", _trim_recorder)
+
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM(
+        [
+            LLMResponse(tool_calls=(ToolCall(id="t-1", name="dance", args={"name": "happy"}),)),
+            LLMResponse(text="Done dancing!"),
+        ]
+    )
+    tts = _RecordingTTS()
+
+    async def _dispatch(call: ToolCall) -> str:
+        return f"ok:{call.name}"
+
+    pipeline = mod.ComposablePipeline(
+        stt=stt,
+        llm=llm,
+        tts=tts,
+        tool_dispatcher=_dispatch,
+        tools_spec=[{"name": "dance"}],
+    )
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    await stt.on_completed("dance for me")
+    await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    # Two LLM rounds, but exactly ONE trim call.
+    assert len(trim_calls) == 1
+    assert len(llm.calls) == 2
+
+    await pipeline.shutdown()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_trim_history_cap_respected_across_user_turns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: with ``REACHY_MINI_MAX_HISTORY_TURNS=2`` history shrinks to 2 user turns.
+
+    Exercises the real ``trim_history_in_place`` helper (no monkeypatch
+    on the trim itself) to prove the orchestrator → helper wiring
+    delivers the bound legacy already provides.
+    """
+    monkeypatch.setenv("REACHY_MINI_MAX_HISTORY_TURNS", "2")
+
+    stt = _ProgrammableSTT()
+    llm = _ScriptedLLM(
+        [
+            LLMResponse(text="reply 1"),
+            LLMResponse(text="reply 2"),
+            LLMResponse(text="reply 3"),
+        ]
+    )
+    tts = _RecordingTTS()
+    pipeline = ComposablePipeline(stt=stt, llm=llm, tts=tts)
+
+    task = asyncio.create_task(pipeline.start_up())
+    await _wait_for_callback(stt)
+
+    for transcript in ("turn one", "turn two", "turn three"):
+        await stt.on_completed(transcript)
+        await asyncio.wait_for(pipeline.output_queue.get(), timeout=1.0)
+
+    user_msgs = [m for m in pipeline.conversation_history if m["role"] == "user"]
+    assert len(user_msgs) == 2
+    assert user_msgs[0]["content"] == "turn two"
+    assert user_msgs[1]["content"] == "turn three"
+
+    await pipeline.shutdown()
+    await task
