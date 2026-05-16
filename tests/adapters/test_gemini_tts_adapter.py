@@ -74,26 +74,22 @@ class _StubGeminiTTSHandler:
 
 
 # ---------------------------------------------------------------------------
-# prepare()
+# synthesize() — adapter-specific: per-sentence chunking, tag handling,
+# silence injection, first-greeting telemetry.
 # ---------------------------------------------------------------------------
+#
+# Shared "prepare invokes handler", "synthesize yields AudioFrames",
+# "synthesize('') yields nothing", and Protocol-conformance assertions now
+# live in ``tests/adapters/test_tts_backend_contract.py``. The tests below
+# pin behaviour that is *specific* to the Gemini adapter (per-sentence
+# chunking sanity, [short pause] silence, tag stripping, delivery-cue
+# suffix in system_instruction, first-greeting telemetry emit, no-op
+# shutdown).
 
 
 @pytest.mark.asyncio
-async def test_prepare_calls_handler_prepare() -> None:
-    handler = _StubGeminiTTSHandler()
-    adapter = GeminiTTSAdapter(handler)  # type: ignore[arg-type]
-    await adapter.prepare()
-    assert handler.prepare_called is True
-
-
-# ---------------------------------------------------------------------------
-# synthesize() — happy paths
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_synthesize_yields_audio_frames_for_one_sentence() -> None:
-    """One sentence → one TTS call → N chunks → N AudioFrames at 24 kHz."""
+async def test_synthesize_chunks_4800_sample_pcm_into_two_frames() -> None:
+    """One sentence → one TTS call → ceil(N/2400) chunks at 24 kHz."""
     # 4800 samples = 200 ms; with _CHUNK_SAMPLES=2400 → 2 chunks.
     pcm = _pcm_bytes(4800, fill=1)
     handler = _StubGeminiTTSHandler(tts_results=[pcm])
@@ -208,12 +204,13 @@ async def test_synthesize_skips_sentence_when_tts_returns_none() -> None:
 
 
 @pytest.mark.asyncio
-async def test_synthesize_with_empty_text_yields_nothing() -> None:
+async def test_synthesize_with_empty_text_makes_no_tts_calls() -> None:
+    """Empty text → no calls to ``_call_tts_with_retry`` (Gemini-specific;
+    the queue-push adapters short-circuit at the handler level instead)."""
     handler = _StubGeminiTTSHandler()
     adapter = GeminiTTSAdapter(handler)  # type: ignore[arg-type]
     out = [frame async for frame in adapter.synthesize("")]
     assert out == []
-    # Empty text → no TTS calls.
     assert handler.tts_calls == []
 
 
@@ -322,17 +319,8 @@ async def test_shutdown_is_noop() -> None:
     assert handler.prepare_called is False
 
 
-# ---------------------------------------------------------------------------
-# Protocol conformance
-# ---------------------------------------------------------------------------
-
-
-def test_adapter_satisfies_tts_backend_protocol() -> None:
-    """``GeminiTTSAdapter`` passes ``isinstance(TTSBackend)``."""
-    from robot_comic.backends import TTSBackend
-
-    adapter = GeminiTTSAdapter(_StubGeminiTTSHandler())  # type: ignore[arg-type]
-    assert isinstance(adapter, TTSBackend)
+# Protocol conformance is exercised by the parametric contract suite at
+# ``tests/adapters/test_tts_backend_contract.py``.
 
 
 def test_real_pcm_to_frames_static_method_chunking() -> None:

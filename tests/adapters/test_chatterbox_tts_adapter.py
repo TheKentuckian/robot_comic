@@ -57,40 +57,15 @@ class _StubChatterboxHandler:
 
 
 # ---------------------------------------------------------------------------
-# prepare()
+# synthesize() — adapter-specific: text forwarding (tags dropped)
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_prepare_calls_handler_prepare() -> None:
-    handler = _StubChatterboxHandler()
-    adapter = ChatterboxTTSAdapter(handler)  # type: ignore[arg-type]
-    await adapter.prepare()
-    assert handler.prepare_called is True
-
-
-# ---------------------------------------------------------------------------
-# synthesize() — happy path
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_synthesize_yields_one_audio_frame_per_pushed_item() -> None:
-    """Each (sample_rate, ndarray) tuple → one AudioFrame."""
-    frames: list[Any] = [
-        (24000, [1, 2, 3]),
-        (24000, [4, 5, 6]),
-        (24000, [7, 8, 9]),
-    ]
-    handler = _StubChatterboxHandler(frames_to_push=frames)
-    adapter = ChatterboxTTSAdapter(handler)  # type: ignore[arg-type]
-    out = [frame async for frame in adapter.synthesize("hi")]
-
-    assert len(out) == 3
-    for i, frame in enumerate(out):
-        assert isinstance(frame, AudioFrame)
-        assert frame.sample_rate == 24000
-        assert frame.samples == frames[i][1]
+#
+# Shared "prepare invokes handler", "synthesize yields AudioFrames", and
+# Protocol-conformance assertions now live in
+# ``tests/adapters/test_tts_backend_contract.py``. The tests below pin
+# behaviour that is *specific* to the Chatterbox adapter (text forwarding,
+# tags-dropped semantics, AdditionalOutputs drop, queue isolation,
+# exception propagation, _http shutdown).
 
 
 @pytest.mark.asyncio
@@ -138,16 +113,9 @@ async def test_synthesize_restores_original_queue_after_exception() -> None:
 
 
 # ---------------------------------------------------------------------------
-# synthesize() — empty / error / non-tuple paths
+# synthesize() — error / non-tuple paths (empty-frames case lives in
+# the contract suite)
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_synthesize_with_no_frames_yields_nothing() -> None:
-    handler = _StubChatterboxHandler(frames_to_push=[])
-    adapter = ChatterboxTTSAdapter(handler)  # type: ignore[arg-type]
-    out = [frame async for frame in adapter.synthesize("hi")]
-    assert out == []
 
 
 @pytest.mark.asyncio
@@ -266,14 +234,5 @@ async def test_shutdown_with_no_open_http_is_safe() -> None:
     assert handler._http is None
 
 
-# ---------------------------------------------------------------------------
-# Protocol conformance
-# ---------------------------------------------------------------------------
-
-
-def test_adapter_satisfies_tts_backend_protocol() -> None:
-    """``ChatterboxTTSAdapter`` passes ``isinstance(TTSBackend)``."""
-    from robot_comic.backends import TTSBackend
-
-    adapter = ChatterboxTTSAdapter(_StubChatterboxHandler())  # type: ignore[arg-type]
-    assert isinstance(adapter, TTSBackend)
+# Protocol conformance is exercised by the parametric contract suite at
+# ``tests/adapters/test_tts_backend_contract.py``.
