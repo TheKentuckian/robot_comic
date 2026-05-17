@@ -27,8 +27,17 @@ class CameraVisionInitializationError(Exception):
 def get_requested_head_tracker(args: argparse.Namespace) -> str | None:
     """Return the requested head-tracking backend from CLI args or environment.
 
-    Priority: CLI flag > REACHY_MINI_HEAD_TRACKER env var > default (mediapipe).
-    Set REACHY_MINI_HEAD_TRACKER=off to disable head tracking without a CLI flag.
+    Priority: CLI flag > REACHY_MINI_HEAD_TRACKER env var > default (off).
+
+    The tracker is **disabled by default** (#308 task 4) to prevent cowling
+    impacts on units where the pitch-envelope and velocity-clamp safety work
+    has not been verified in hardware. Operators who want tracking must opt in
+    explicitly::
+
+        REACHY_MINI_HEAD_TRACKER=mediapipe   # in-process MediaPipe tracker
+        REACHY_MINI_HEAD_TRACKER=yolo         # YOLO subprocess tracker
+
+    Set REACHY_MINI_HEAD_TRACKER=off (or leave unset) to keep tracking disabled.
     """
     cli_value = getattr(args, "head_tracker", None)
     if cli_value is not None:
@@ -36,7 +45,7 @@ def get_requested_head_tracker(args: argparse.Namespace) -> str | None:
 
     raw_env = os.getenv(HEAD_TRACKER_ENV)
     if raw_env is None:
-        return "mediapipe"  # default: mediapipe on when no env override
+        return None  # default: off — operator must opt in via env or CLI (#308 task 4)
 
     env_value = raw_env.strip().lower()
     if env_value in HEAD_TRACKER_DISABLED_VALUES:
@@ -112,6 +121,11 @@ def initialize_camera_and_vision(
     vision_processor: Optional["VisionProcessor"] = None
 
     if not args.no_camera:
+        # Log the active tracker pitch envelope so operators can verify limits (#308 task 3).
+        from robot_comic.motion_safety import log_tracker_pitch_envelope  # noqa: PLC0415
+
+        log_tracker_pitch_envelope()
+
         requested_head_tracker = get_requested_head_tracker(args)
         if requested_head_tracker is not None:
             try:

@@ -47,6 +47,31 @@ when set, so operators can tune each axis independently:
   REACHY_MINI_HEAD_PITCH_MAX_VEL_RAD_S   (default = HEAD_MAX_VEL_RAD_S)
   REACHY_MINI_HEAD_YAW_MAX_VEL_RAD_S     (default = HEAD_MAX_VEL_RAD_S)
   REACHY_MINI_HEAD_ROLL_MAX_VEL_RAD_S    (default = HEAD_MAX_VEL_RAD_S)
+
+Continuous-tracker pitch envelope (#308 task 3)
+-----------------------------------------------
+The continuous head tracker runs on every camera frame and can drive the
+composed head pose into IK-collision territory when the operator sits below
+the camera. A dedicated tracker pitch envelope (tighter than the global
+envelope) is therefore applied to the tracker OFFSET before it joins the
+secondary-move composition. The global clamp then catches anything else.
+
+Radian-based knobs (preferred — map directly to joint values without unit
+conversion on the operator side):
+
+  REACHY_MINI_HEAD_TRACK_PITCH_MIN_RAD  (default −0.3 rad ≈ −17°, look-up limit)
+  REACHY_MINI_HEAD_TRACK_PITCH_MAX_RAD  (default +0.3 rad ≈ +17°, look-down limit)
+
+Degree-based knobs (legacy — still accepted; radian knobs take precedence when set):
+
+  REACHY_MINI_HEAD_TRACKER_PITCH_MIN_DEG  (default −17.2°, mirrors radian default)
+  REACHY_MINI_HEAD_TRACKER_PITCH_MAX_DEG  (default +17.2°, mirrors radian default)
+
+WARNING: widening either radian knob beyond ±0.524/+0.436 rad (the global
+pitch envelope) will not cause cowling damage on its own because the global
+clamp applies after composition, but it reduces the safety margin available
+for breathing / wobble additive offsets. The resolved values are logged at
+INFO on startup so operators can verify the active envelope.
 """
 
 from __future__ import annotations
@@ -102,6 +127,27 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_rad(name: str, default_rad: float) -> float:
+    """Read an angle env var in radians; return the value in radians.
+
+    Used for the radian-native tracker-pitch knobs so operators do not have to
+    convert when writing joint-space values into ``.env``.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default_rad
+    try:
+        return float(raw.strip())
+    except ValueError:
+        logger.warning(
+            "motion_safety: invalid value %r for %s, using default %.4f rad",
+            raw,
+            name,
+            default_rad,
+        )
+        return default_rad
+
+
 # ---------------------------------------------------------------------------
 # Safe-envelope constants (read once at import time; can be overridden via env)
 # ---------------------------------------------------------------------------
@@ -125,19 +171,70 @@ HEAD_PITCH_MAX_VEL_RAD_S: float = _env_float("REACHY_MINI_HEAD_PITCH_MAX_VEL_RAD
 HEAD_YAW_MAX_VEL_RAD_S: float = _env_float("REACHY_MINI_HEAD_YAW_MAX_VEL_RAD_S", HEAD_MAX_VEL_RAD_S)
 HEAD_ROLL_MAX_VEL_RAD_S: float = _env_float("REACHY_MINI_HEAD_ROLL_MAX_VEL_RAD_S", HEAD_MAX_VEL_RAD_S)
 
-# Continuous-tracker safe envelope (#308 hypothesis 3): the head tracker can
-# push the composed pose to the edge of the global envelope on every frame;
-# composition with breathing / wobbler can then tip over into IK-invalid
-# territory and the daemon logs "Collision detected or head pose not
-# achievable!". Constraining the tracker OFFSET before composition cuts those
-# warnings off at the source. Defaults match the global envelope so this is a
-# no-op until operators tighten per-unit via env.
-HEAD_TRACKER_PITCH_MIN_RAD: float = _env_deg("REACHY_MINI_HEAD_TRACKER_PITCH_MIN_DEG", -30.0)
-HEAD_TRACKER_PITCH_MAX_RAD: float = _env_deg("REACHY_MINI_HEAD_TRACKER_PITCH_MAX_DEG", 25.0)
+# ---------------------------------------------------------------------------
+# Continuous-tracker safe envelope (#308 task 3)
+# ---------------------------------------------------------------------------
+# The head tracker runs on every camera frame and drives a continuous secondary
+# offset. That offset, after composition with breathing / wobble, can tip the
+# daemon into "Collision detected or head pose not achievable!" territory when
+# the operator sits below the camera. Constraining the tracker OFFSET before
+# composition cuts those warnings off at the source.
+#
+# Pitch defaults are deliberately tighter than the global envelope (±0.3 rad ≈
+# ±17°, vs global −30/+25°) to leave headroom for additive secondary moves and
+# match observed cowling clearance at face-height operating distances.
+#
+# Radian knobs (REACHY_MINI_HEAD_TRACK_PITCH_MIN_RAD / MAX_RAD) are the
+# primary interface (#308 task 3).  Degree knobs remain for back-compat; the
+# radian knob takes precedence when set.
+_TRACKER_PITCH_MIN_RAD_DEFAULT: float = -0.3  # ≈ −17.2° — cowling-safe look-up limit
+_TRACKER_PITCH_MAX_RAD_DEFAULT: float = 0.3  # ≈ +17.2° — cowling-safe look-down limit
+
+# Radian-native knobs (preferred; set directly in joint-space units).
+_tracker_pitch_min_from_rad: float = _env_rad("REACHY_MINI_HEAD_TRACK_PITCH_MIN_RAD", _TRACKER_PITCH_MIN_RAD_DEFAULT)
+_tracker_pitch_max_from_rad: float = _env_rad("REACHY_MINI_HEAD_TRACK_PITCH_MAX_RAD", _TRACKER_PITCH_MAX_RAD_DEFAULT)
+
+# Degree knobs (legacy; only used as fallback when the radian knob is absent).
+_tracker_pitch_min_from_deg: float = _env_deg(
+    "REACHY_MINI_HEAD_TRACKER_PITCH_MIN_DEG", math.degrees(_TRACKER_PITCH_MIN_RAD_DEFAULT)
+)
+_tracker_pitch_max_from_deg: float = _env_deg(
+    "REACHY_MINI_HEAD_TRACKER_PITCH_MAX_DEG", math.degrees(_TRACKER_PITCH_MAX_RAD_DEFAULT)
+)
+
+# Radian knob wins when the env var is explicitly set (i.e. non-default).
+HEAD_TRACKER_PITCH_MIN_RAD: float = (
+    _tracker_pitch_min_from_rad
+    if os.getenv("REACHY_MINI_HEAD_TRACK_PITCH_MIN_RAD") is not None
+    else _tracker_pitch_min_from_deg
+)
+HEAD_TRACKER_PITCH_MAX_RAD: float = (
+    _tracker_pitch_max_from_rad
+    if os.getenv("REACHY_MINI_HEAD_TRACK_PITCH_MAX_RAD") is not None
+    else _tracker_pitch_max_from_deg
+)
+
 HEAD_TRACKER_YAW_MIN_RAD: float = _env_deg("REACHY_MINI_HEAD_TRACKER_YAW_MIN_DEG", -45.0)
 HEAD_TRACKER_YAW_MAX_RAD: float = _env_deg("REACHY_MINI_HEAD_TRACKER_YAW_MAX_DEG", 45.0)
 HEAD_TRACKER_ROLL_MIN_RAD: float = _env_deg("REACHY_MINI_HEAD_TRACKER_ROLL_MIN_DEG", -20.0)
 HEAD_TRACKER_ROLL_MAX_RAD: float = _env_deg("REACHY_MINI_HEAD_TRACKER_ROLL_MAX_DEG", 20.0)
+
+
+def log_tracker_pitch_envelope() -> None:
+    """Emit an INFO line with the resolved tracker pitch envelope.
+
+    Call this once at startup (e.g. from ``initialize_camera_and_vision``) so
+    operators can confirm the active limits before enabling the tracker.
+    """
+    logger.info(
+        "motion_safety: tracker pitch envelope [%.4f, %.4f] rad ([%.1f, %.1f] deg) "
+        "— set REACHY_MINI_HEAD_TRACK_PITCH_MIN_RAD / MAX_RAD to adjust",
+        HEAD_TRACKER_PITCH_MIN_RAD,
+        HEAD_TRACKER_PITCH_MAX_RAD,
+        math.degrees(HEAD_TRACKER_PITCH_MIN_RAD),
+        math.degrees(HEAD_TRACKER_PITCH_MAX_RAD),
+    )
+
 
 # Track which axes have been clamped so we only emit one DEBUG per session.
 _clamped_axes_seen: Set[str] = set()
