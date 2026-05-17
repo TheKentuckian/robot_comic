@@ -429,6 +429,16 @@ class ComposablePipeline:
         # persona's similarity filter starts clean.
         self._recent_assistant_texts.clear()
         self._conversation_history.append({"role": "system", "content": get_session_instructions()})
+        # Fire persona-switch / persona-selected lifecycle audio.
+        # persona_switch (global bridge) fires first, then persona_selected
+        # (per-persona intro).  Both are fire-and-forget; failure is non-fatal.
+        try:
+            from robot_comic.static_prompts import play_static_prompt  # noqa: PLC0415
+
+            play_static_prompt("persona_switch")
+            play_static_prompt("persona_selected", persona=profile)
+        except Exception as _exc:
+            logger.debug("Persona-switch audio dispatch failed (non-fatal): %s", _exc)
         return f"Applied personality {profile!r}. Conversation history reset."
 
     # ---------------------------------------------------------------------

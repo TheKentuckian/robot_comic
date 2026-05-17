@@ -287,6 +287,15 @@ class PauseController:
                 self._on_pause_state_changed(True)
             except Exception as e:
                 logger.error("on_pause_state_changed(True) raised: %s", e)
+        # Fire the pause lifecycle clip (per-persona WAV with global fallback).
+        try:
+            from robot_comic import config as _cfg  # noqa: PLC0415
+            from robot_comic.static_prompts import play_static_prompt  # noqa: PLC0415
+
+            _persona = getattr(_cfg, "REACHY_MINI_CUSTOM_PROFILE", None) or None
+            play_static_prompt("pause", persona=_persona)
+        except Exception as _exc:
+            logger.debug("Pause audio dispatch failed (non-fatal): %s", _exc)
         logger.info("Paused. Say 'continue', '%s shutdown', or 'switch comic'.", _PREFIX)
 
     def _enter_active(self, matched_phrase: str) -> None:
@@ -298,6 +307,15 @@ class PauseController:
                 self._on_pause_state_changed(False)
             except Exception as e:
                 logger.error("on_pause_state_changed(False) raised: %s", e)
+        # Fire the resume lifecycle clip (per-persona WAV with global fallback).
+        try:
+            from robot_comic import config as _cfg  # noqa: PLC0415
+            from robot_comic.static_prompts import play_static_prompt  # noqa: PLC0415
+
+            _persona = getattr(_cfg, "REACHY_MINI_CUSTOM_PROFILE", None) or None
+            play_static_prompt("resume", persona=_persona)
+        except Exception as _exc:
+            logger.debug("Resume audio dispatch failed (non-fatal): %s", _exc)
 
     def _enter_shutdown(self, matched_phrase: str) -> None:
         with self._lock:
