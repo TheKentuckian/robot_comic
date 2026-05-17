@@ -82,6 +82,14 @@ def mount_personality_routes(
     @app.get("/personalities")
     def _list() -> dict:  # type: ignore
         choices = [DEFAULT_OPTION, *list_personalities()]
+        # Fire the picker lifecycle clip when the operator opens the persona
+        # picker.  Fire-and-forget; failure must never affect the JSON response.
+        try:
+            from robot_comic.static_prompts import play_static_prompt  # noqa: PLC0415
+
+            play_static_prompt("picker")
+        except Exception as _exc:
+            logger.debug("Picker audio dispatch failed (non-fatal): %s", _exc)
         return {
             "choices": choices,
             "current": _current_choice(),

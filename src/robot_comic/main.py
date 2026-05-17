@@ -619,6 +619,17 @@ def run(
         except ValueError:
             name = str(signum)
         logger.info("Received %s; requesting graceful shutdown", name)
+        # Fire the shutdown lifecycle clip (per-persona WAV if available,
+        # global fallback otherwise).  Must be dispatched *before* setting the
+        # stop event so the WAV is audible while motors are still homing.
+        try:
+            from robot_comic import config as _cfg  # noqa: PLC0415
+            from robot_comic.static_prompts import play_static_prompt  # noqa: PLC0415
+
+            _persona = getattr(_cfg, "REACHY_MINI_CUSTOM_PROFILE", None) or None
+            play_static_prompt("shutdown", persona=_persona)
+        except Exception as _exc:
+            logger.debug("Shutdown audio dispatch failed (non-fatal): %s", _exc)
         if app_stop_event is not None:
             app_stop_event.set()
         else:
