@@ -81,6 +81,12 @@ class ToolDependencies:
     # was actually spoken by the user — see ``tools.name_validation`` and
     # issue #287.
     recent_user_transcripts: List[str] = field(default_factory=list)
+    # API vision client for tools that need to make synchronous vision API calls
+    # mid-execution (e.g. multi-step face-detect sweeps without breaking out to
+    # the conversation loop).  Populated by main.py when LLM_BACKEND=gemini so
+    # tools receive a ready-to-use ``genai.Client``; ``None`` otherwise.
+    # Issue #441.
+    api_vision_client: Any | None = None
 
 
 # Tool base class

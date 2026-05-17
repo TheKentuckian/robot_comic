@@ -158,6 +158,40 @@ def main() -> None:
 ADMIN_RESTART_EXIT_CODE: int = 75
 
 
+def _build_api_vision_client(cfg: Any) -> Any:
+    """Construct a ``genai.Client`` for the tool vision layer, or return ``None``.
+
+    Called during startup to populate ``ToolDependencies.api_vision_client``
+    (issue #441).  Returns a live ``genai.Client`` when ``LLM_BACKEND`` is
+    ``"gemini"`` and a Gemini API key is available; returns ``None`` otherwise
+    so the tool layer stays inert on non-Gemini pipelines.
+
+    The client is constructed eagerly (not lazily) so startup failures surface
+    immediately rather than mid-tool-call.  Import of ``google.genai`` is
+    deferred to this function to avoid the ~5.5 s cold-import cost on paths
+    that never use Gemini.
+
+    Args:
+        cfg: The ``config`` singleton (or any object with ``LLM_BACKEND`` and
+             ``GEMINI_API_KEY`` attributes) — passed explicitly so the function
+             is straightforward to unit-test with a stub.
+
+    Returns:
+        A ``genai.Client`` instance, or ``None``.
+
+    """
+    from robot_comic.config import LLM_BACKEND_GEMINI
+
+    if getattr(cfg, "LLM_BACKEND", None) != LLM_BACKEND_GEMINI:
+        return None
+    api_key = getattr(cfg, "GEMINI_API_KEY", None)
+    if not api_key:
+        return None
+    from google import genai  # deferred: google.genai costs ~5.5 s at boot
+
+    return genai.Client(api_key=api_key)
+
+
 def run(
     args: argparse.Namespace,
     robot: ReachyMini = None,
@@ -409,6 +443,7 @@ def run(
         instance_path=Path(instance_path) if instance_path is not None else None,
         face_db=face_db_instance,
         face_embedder=face_embedder_instance,
+        api_vision_client=_build_api_vision_client(config),
     )
     log_checkpoint("tool deps ready", logger)
 
