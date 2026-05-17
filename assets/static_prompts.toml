@@ -1,0 +1,356 @@
+# static_prompts.toml — Declarative manifest for all lifecycle static audio clips.
+#
+# Schema per entry:
+#   category    = string — logical trigger category (startup, picker, persona_selected,
+#                 persona_switch, pause, resume, shutdown, error)
+#   scope       = "global" | "per_persona"
+#   text        = the exact text to synthesize
+#   output_path = repo-relative path for the generated WAV (never committed; see .gitignore)
+#   generator   = "elevenlabs" | "xtts"  (default elevenlabs; xtts requires #438)
+#   persona     = required when scope = "per_persona" — matches profiles/<persona>/
+#
+# Language: en (English-only for now; mark as TODO when multi-language support lands)
+# TODO(i18n): add lang = "en" field once we grow into non-English personas.
+#
+# Regeneration: run  scripts/regenerate-static-prompts.py  to create missing clips.
+# That script skips clips whose output_path already exists (idempotent).
+# Do NOT commit any .wav files — see .gitignore patterns "assets/*/*.wav".
+#
+# ElevenLabs voice IDs are read from the persona's elevenlabs.txt / elevenlabs.local.txt
+# at generation time.  The regenerator resolves them; they are NOT stored here.
+
+# ---------------------------------------------------------------------------
+# startup — played once on successful handler ready (after autostart)
+# ---------------------------------------------------------------------------
+# Small pool: one variant is chosen at random by the playback helper.
+
+[[clips]]
+category    = "startup"
+scope       = "global"
+text        = "Reachy Mini, online."
+output_path = "assets/startup/online.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "startup"
+scope       = "global"
+text        = "Robot comic, booting up."
+output_path = "assets/startup/booting_up.wav"
+generator   = "elevenlabs"
+
+# ---------------------------------------------------------------------------
+# picker — played when the admin UI persona picker page is opened
+# ---------------------------------------------------------------------------
+
+[[clips]]
+category    = "picker"
+scope       = "global"
+text        = "Pick your comic."
+output_path = "assets/picker/pick_your_comic.wav"
+generator   = "elevenlabs"
+
+# ---------------------------------------------------------------------------
+# persona_selected — played when operator picks a comic from the picker
+# (per-persona; extends the existing welcome_name.wav convention)
+# ---------------------------------------------------------------------------
+
+[[clips]]
+category    = "persona_selected"
+scope       = "per_persona"
+persona     = "don_rickles"
+text        = "Don Rickles, on stage."
+output_path = "profiles/don_rickles/persona_selected.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "persona_selected"
+scope       = "per_persona"
+persona     = "bill_hicks"
+text        = "Bill Hicks, on stage."
+output_path = "profiles/bill_hicks/persona_selected.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "persona_selected"
+scope       = "per_persona"
+persona     = "george_carlin"
+text        = "George Carlin, on stage."
+output_path = "profiles/george_carlin/persona_selected.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "persona_selected"
+scope       = "per_persona"
+persona     = "dave_chappelle"
+text        = "Dave Chappelle, on stage."
+output_path = "profiles/dave_chappelle/persona_selected.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "persona_selected"
+scope       = "per_persona"
+persona     = "andrew_dice_clay"
+text        = "Andrew Dice Clay, on stage."
+output_path = "profiles/andrew_dice_clay/persona_selected.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "persona_selected"
+scope       = "per_persona"
+persona     = "robin_williams"
+text        = "Robin Williams, on stage."
+output_path = "profiles/robin_williams/persona_selected.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "persona_selected"
+scope       = "per_persona"
+persona     = "rodney_dangerfield"
+text        = "Rodney Dangerfield, on stage."
+output_path = "profiles/rodney_dangerfield/persona_selected.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "persona_selected"
+scope       = "per_persona"
+persona     = "richard_pryor"
+text        = "Richard Pryor, on stage."
+output_path = "profiles/richard_pryor/persona_selected.wav"
+generator   = "elevenlabs"
+
+# ---------------------------------------------------------------------------
+# persona_switch — played when operator switches personas mid-session
+# Global bridge clip; followed by the new persona's persona_selected clip.
+# ---------------------------------------------------------------------------
+
+[[clips]]
+category    = "persona_switch"
+scope       = "global"
+text        = "Switching comics. One moment."
+output_path = "assets/persona_switch/switching.wav"
+generator   = "elevenlabs"
+
+# ---------------------------------------------------------------------------
+# pause — played when the operator pauses the session (per-persona)
+# ---------------------------------------------------------------------------
+
+[[clips]]
+category    = "pause"
+scope       = "per_persona"
+persona     = "don_rickles"
+text        = "Standing by. Don't go anywhere."
+output_path = "profiles/don_rickles/pause.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "pause"
+scope       = "per_persona"
+persona     = "bill_hicks"
+text        = "On break. Think about something."
+output_path = "profiles/bill_hicks/pause.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "pause"
+scope       = "per_persona"
+persona     = "george_carlin"
+text        = "On break. I'll be back."
+output_path = "profiles/george_carlin/pause.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "pause"
+scope       = "per_persona"
+persona     = "dave_chappelle"
+text        = "Standing by."
+output_path = "profiles/dave_chappelle/pause.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "pause"
+scope       = "per_persona"
+persona     = "andrew_dice_clay"
+text        = "On break. Oh!"
+output_path = "profiles/andrew_dice_clay/pause.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "pause"
+scope       = "per_persona"
+persona     = "robin_williams"
+text        = "Standing by."
+output_path = "profiles/robin_williams/pause.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "pause"
+scope       = "per_persona"
+persona     = "rodney_dangerfield"
+text        = "On break. No respect, I tell ya."
+output_path = "profiles/rodney_dangerfield/pause.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "pause"
+scope       = "per_persona"
+persona     = "richard_pryor"
+text        = "On break."
+output_path = "profiles/richard_pryor/pause.wav"
+generator   = "elevenlabs"
+
+# ---------------------------------------------------------------------------
+# resume — played when the operator unpauses (per-persona)
+# ---------------------------------------------------------------------------
+
+[[clips]]
+category    = "resume"
+scope       = "per_persona"
+persona     = "don_rickles"
+text        = "Right, where were we? Let's go."
+output_path = "profiles/don_rickles/resume.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "resume"
+scope       = "per_persona"
+persona     = "bill_hicks"
+text        = "Where were we? Right."
+output_path = "profiles/bill_hicks/resume.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "resume"
+scope       = "per_persona"
+persona     = "george_carlin"
+text        = "Alright, where were we."
+output_path = "profiles/george_carlin/resume.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "resume"
+scope       = "per_persona"
+persona     = "dave_chappelle"
+text        = "Where were we? Let's go."
+output_path = "profiles/dave_chappelle/resume.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "resume"
+scope       = "per_persona"
+persona     = "andrew_dice_clay"
+text        = "Oh! Where were we."
+output_path = "profiles/andrew_dice_clay/resume.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "resume"
+scope       = "per_persona"
+persona     = "robin_williams"
+text        = "Back again! Where were we."
+output_path = "profiles/robin_williams/resume.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "resume"
+scope       = "per_persona"
+persona     = "rodney_dangerfield"
+text        = "Alright, alright. Where were we."
+output_path = "profiles/rodney_dangerfield/resume.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "resume"
+scope       = "per_persona"
+persona     = "richard_pryor"
+text        = "Right, where were we."
+output_path = "profiles/richard_pryor/resume.wav"
+generator   = "elevenlabs"
+
+# ---------------------------------------------------------------------------
+# shutdown — played when app receives SIGTERM or operator presses sleep
+# (per-persona)
+# ---------------------------------------------------------------------------
+
+[[clips]]
+category    = "shutdown"
+scope       = "per_persona"
+persona     = "don_rickles"
+text        = "Lights out. Show's over."
+output_path = "profiles/don_rickles/shutdown.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "shutdown"
+scope       = "per_persona"
+persona     = "bill_hicks"
+text        = "Show's over. Good night."
+output_path = "profiles/bill_hicks/shutdown.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "shutdown"
+scope       = "per_persona"
+persona     = "george_carlin"
+text        = "Show's over folks."
+output_path = "profiles/george_carlin/shutdown.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "shutdown"
+scope       = "per_persona"
+persona     = "dave_chappelle"
+text        = "Lights out. I'm gone."
+output_path = "profiles/dave_chappelle/shutdown.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "shutdown"
+scope       = "per_persona"
+persona     = "andrew_dice_clay"
+text        = "Show's over. Oh!"
+output_path = "profiles/andrew_dice_clay/shutdown.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "shutdown"
+scope       = "per_persona"
+persona     = "robin_williams"
+text        = "Good night everybody."
+output_path = "profiles/robin_williams/shutdown.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "shutdown"
+scope       = "per_persona"
+persona     = "rodney_dangerfield"
+text        = "Show's over. No respect."
+output_path = "profiles/rodney_dangerfield/shutdown.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "shutdown"
+scope       = "per_persona"
+persona     = "richard_pryor"
+text        = "Good night. Show's over."
+output_path = "profiles/richard_pryor/shutdown.wav"
+generator   = "elevenlabs"
+
+# ---------------------------------------------------------------------------
+# error — played when LLM / TTS is unavailable (global; small pool)
+# IMPORTANT: this clip MUST be playable via the local WAV chokepoint only.
+# It must NOT depend on the LLM or TTS that is failing.
+# ---------------------------------------------------------------------------
+
+[[clips]]
+category    = "error"
+scope       = "global"
+text        = "Hold on, the brain's catching up."
+output_path = "assets/error/brain_catching_up.wav"
+generator   = "elevenlabs"
+
+[[clips]]
+category    = "error"
+scope       = "global"
+text        = "One moment, something went sideways."
+output_path = "assets/error/something_sideways.wav"
+generator   = "elevenlabs"
