@@ -848,6 +848,49 @@ class LocalStream:
         def _battery() -> JSONResponse:
             return JSONResponse(_read_battery(self._robot))
 
+        # POST /api/debug/dump-camera-frame -> write latest camera frame to disk
+        # as PNG so operators can inspect what the camera actually sees (#269).
+        # No authentication beyond what the other admin routes require.
+        @self._settings_app.post("/api/debug/dump-camera-frame")
+        def _dump_camera_frame() -> JSONResponse:
+            camera_worker = None
+            if self.handler is not None:
+                deps = getattr(self.handler, "deps", None)
+                if deps is not None:
+                    camera_worker = getattr(deps, "camera_worker", None)
+
+            if camera_worker is None:
+                return JSONResponse(
+                    {"ok": False, "error": "camera_worker_unavailable"},
+                    status_code=503,
+                )
+
+            frame = camera_worker.get_latest_frame()
+            if frame is None:
+                return JSONResponse(
+                    {"ok": False, "error": "no_frame_available"},
+                    status_code=503,
+                )
+
+            try:
+                import time as _time
+
+                from robot_comic.camera_frame_encoding import encode_bgr_frame_as_png
+
+                ts = int(_time.time())
+                out_dir = Path("logs") / "debug"
+                out_dir.mkdir(parents=True, exist_ok=True)
+                out_path = out_dir / f"camera_frame_{ts}.png"
+                out_path.write_bytes(encode_bgr_frame_as_png(frame))
+                logger.info("debug: camera frame dumped to %s", out_path)
+                return JSONResponse({"ok": True, "path": str(out_path)})
+            except Exception as exc:
+                logger.warning("debug: failed to dump camera frame: %s", exc)
+                return JSONResponse(
+                    {"ok": False, "error": str(exc)},
+                    status_code=500,
+                )
+
         # POST /openai_api_key -> set/persist key
         @self._settings_app.post("/openai_api_key")
         def _set_key(payload: ApiKeyPayload) -> JSONResponse:

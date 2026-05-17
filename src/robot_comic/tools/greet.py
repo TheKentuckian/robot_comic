@@ -98,7 +98,15 @@ def _detect_face(frame: Any) -> bool:
     if not _check_mp_available() or _mp_face_detection is None:
         return False
     rgb = frame[..., ::-1].copy()
-    with _mp_face_detection.FaceDetection(min_detection_confidence=_face_detection_confidence()) as detector:
+    # model_selection=0 is the MediaPipe short-range model (optimised for
+    # faces ≤2 m from the camera).  The Reachy Mini's typical operator
+    # distance is ~50 cm, well within that envelope.  model_selection=1
+    # (full-range, ≤5 m) has lower precision at short range and is not
+    # appropriate for this use case (#269).
+    with _mp_face_detection.FaceDetection(
+        model_selection=0,
+        min_detection_confidence=_face_detection_confidence(),
+    ) as detector:
         results = detector.process(rgb)
         return bool(results.detections)
 
@@ -113,7 +121,12 @@ def _detect_face_with_scores(frame: Any) -> Tuple[bool, List[float]]:
     if not _check_mp_available() or _mp_face_detection is None:
         return False, []
     rgb = frame[..., ::-1].copy()
-    with _mp_face_detection.FaceDetection(min_detection_confidence=_face_detection_confidence()) as detector:
+    # model_selection=0: short-range model (≤2 m); correct for Reachy Mini
+    # near-field use (~50 cm). See _detect_face for full rationale (#269).
+    with _mp_face_detection.FaceDetection(
+        model_selection=0,
+        min_detection_confidence=_face_detection_confidence(),
+    ) as detector:
         results = detector.process(rgb)
         detections = results.detections or []
         scores: List[float] = []
