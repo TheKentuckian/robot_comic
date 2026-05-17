@@ -51,9 +51,8 @@ on stream end.
 """
 
 from __future__ import annotations
-
-import logging
 import time
+import logging
 from typing import Any, AsyncIterator
 
 import httpx
@@ -212,14 +211,12 @@ class XttsTTSAdapter:
             if isinstance(payload, list):
                 return [str(v) for v in payload]
             logger.warning(
-                "XttsTTSAdapter: /speakers returned non-list payload %r; "
-                "falling back to [current_voice]",
+                "XttsTTSAdapter: /speakers returned non-list payload %r; falling back to [current_voice]",
                 payload,
             )
         except Exception as exc:
             logger.warning(
-                "XttsTTSAdapter: GET /speakers failed (%s); falling back to "
-                "[current_voice]=%r",
+                "XttsTTSAdapter: GET /speakers failed (%s); falling back to [current_voice]=%r",
                 exc,
                 self._current_voice,
             )

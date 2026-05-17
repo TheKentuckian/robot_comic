@@ -19,7 +19,6 @@ Coverage:
 """
 
 from __future__ import annotations
-
 import logging
 from typing import Any
 
@@ -27,8 +26,8 @@ import httpx
 import numpy as np
 import pytest
 
-from robot_comic.adapters.xtts_tts_adapter import XttsTTSAdapter
 from robot_comic.backends import AudioFrame, TTSBackend
+from robot_comic.adapters.xtts_tts_adapter import XttsTTSAdapter
 
 
 # ---------------------------------------------------------------------------
@@ -166,9 +165,7 @@ async def test_synthesize_flushes_partial_remainder_as_final_frame() -> None:
 async def test_synthesize_posts_to_tts_stream_with_speaker_and_language() -> None:
     response = _FakeStreamResponse([_silent_pcm_bytes(2400)])
     client = _FakeAsyncClient(stream_response=response)
-    adapter = XttsTTSAdapter(
-        base_url="http://x:1", default_speaker="rickles", language="en", _client=client
-    )
+    adapter = XttsTTSAdapter(base_url="http://x:1", default_speaker="rickles", language="en", _client=client)
 
     async for _ in adapter.synthesize("hello world"):
         pass
@@ -201,9 +198,7 @@ async def test_synthesize_uses_current_voice_after_change_voice() -> None:
 
 @pytest.mark.asyncio
 async def test_first_audio_marker_appended_once_on_first_frame() -> None:
-    response = _FakeStreamResponse(
-        [_silent_pcm_bytes(2400), _silent_pcm_bytes(2400), _silent_pcm_bytes(2400)]
-    )
+    response = _FakeStreamResponse([_silent_pcm_bytes(2400), _silent_pcm_bytes(2400), _silent_pcm_bytes(2400)])
     client = _FakeAsyncClient(stream_response=response)
     adapter = XttsTTSAdapter(base_url="http://x:1", default_speaker="rickles", _client=client)
 
