@@ -946,6 +946,15 @@ class Config:
     GEMINI_LIVE_VAD_START_SENSITIVITY = os.getenv("GEMINI_LIVE_VAD_START_SENSITIVITY", "LOW").upper()
     GEMINI_LIVE_VAD_END_SENSITIVITY = os.getenv("GEMINI_LIVE_VAD_END_SENSITIVITY", "LOW").upper()
     MOVEMENT_SPEED_FACTOR = _env_float_clamped("MOVEMENT_SPEED_FACTOR", default=0.3, lo=0.1, hi=2.0)
+    # MediaPipe face-detection confidence threshold (#269). Default 0.3 is lower
+    # than MediaPipe's own 0.5 default to compensate for the Reachy Mini camera
+    # lens / lighting envelope where 0.5 was missing square-on faces at ~50 cm.
+    # greet.py reads this via its own _face_detection_confidence() helper so
+    # per-call resolution stays cheap; this config attribute is exposed for
+    # operator inspection and future callers that reach config directly.
+    FACE_DETECTION_CONFIDENCE = _env_float_clamped(
+        "REACHY_MINI_FACE_DETECTION_CONFIDENCE", default=0.3, lo=0.0, hi=1.0
+    )
     IDLE_ANIMATION_ENABLED = _env_flag("IDLE_ANIMATION_ENABLED", default=False)
     MOONSHINE_HEARTBEAT = _env_flag("MOONSHINE_HEARTBEAT", default=False)
     AUDIO_CAPTURE_PATH = _resolve_audio_capture_path()
@@ -1202,6 +1211,9 @@ def refresh_runtime_config_from_env() -> None:
     config.GEMINI_LIVE_VAD_START_SENSITIVITY = os.getenv("GEMINI_LIVE_VAD_START_SENSITIVITY", "LOW").upper()
     config.GEMINI_LIVE_VAD_END_SENSITIVITY = os.getenv("GEMINI_LIVE_VAD_END_SENSITIVITY", "LOW").upper()
     config.MOVEMENT_SPEED_FACTOR = _env_float_clamped("MOVEMENT_SPEED_FACTOR", default=0.3, lo=0.1, hi=2.0)
+    config.FACE_DETECTION_CONFIDENCE = _env_float_clamped(
+        "REACHY_MINI_FACE_DETECTION_CONFIDENCE", default=0.3, lo=0.0, hi=1.0
+    )
     config.IDLE_ANIMATION_ENABLED = _env_flag("IDLE_ANIMATION_ENABLED", default=False)
     config.MOONSHINE_HEARTBEAT = _env_flag("MOONSHINE_HEARTBEAT", default=False)
     config.AUDIO_CAPTURE_PATH = _resolve_audio_capture_path()
